@@ -3,7 +3,6 @@ import { classify } from '../lib/ollama-client.js';
 import { createInboxItem, createBrainNode } from '../lib/store.js';
 import { logAudit } from '../lib/audit.js';
 import { config } from '../lib/config.js';
-import * as db from '../lib/db.js';
 
 interface RawMessage {
   rawText: string;
@@ -25,7 +24,6 @@ async function processMessage(raw: RawMessage): Promise<void> {
     classification = await classify(raw.rawText);
   } catch (err) {
     console.error('[Inbox] Classification failed:', (err as Error).message);
-    // Store as unclassified with review status
     const inboxId = await createInboxItem(raw.rawText, raw.source, null, {
       senderId: raw.senderId,
       messageId: raw.messageId,
@@ -39,7 +37,6 @@ async function processMessage(raw: RawMessage): Promise<void> {
       durationMs: Date.now() - start,
     }, traceId);
 
-    // Still notify user
     await publish(config.subjects.whatsappOutbound, {
       chatId: raw.senderId,
       text: `Captured but classification failed. Added to review queue. ID: ${inboxId.substring(0, 8)}`,
@@ -47,7 +44,6 @@ async function processMessage(raw: RawMessage): Promise<void> {
     return;
   }
 
-  // Override priority if urgent
   if (raw.urgent) {
     classification.priority = 'urgent';
   }
@@ -62,7 +58,6 @@ async function processMessage(raw: RawMessage): Promise<void> {
     `[${durationMs}ms]`,
   );
 
-  // Store inbox item
   const inboxId = await createInboxItem(
     raw.rawText,
     raw.source,
@@ -70,13 +65,11 @@ async function processMessage(raw: RawMessage): Promise<void> {
     { senderId: raw.senderId, messageId: raw.messageId },
   );
 
-  // If high confidence, also create a brain node
   let brainNodeId: string | null = null;
   if (isHighConfidence) {
     brainNodeId = await createBrainNode(inboxId, raw.rawText, classification);
   }
 
-  // Audit the classification
   await logAudit({
     agentName: 'classifier',
     actionType: 'classify',
@@ -94,7 +87,6 @@ async function processMessage(raw: RawMessage): Promise<void> {
     },
   }, traceId);
 
-  // Publish result for WhatsApp responder
   const subject = isHighConfidence
     ? config.subjects.inboxClassified
     : config.subjects.inboxReview;
@@ -108,10 +100,9 @@ async function processMessage(raw: RawMessage): Promise<void> {
   });
 }
 
-async function main(): Promise<void> {
+export async function startInboxProcessor(): Promise<void> {
   console.log('[Inbox Processor] Starting...');
 
-  // Ensure streams exist
   await ensureStream('INBOX', [
     config.subjects.inboxRaw,
     config.subjects.inboxClassified,
@@ -121,7 +112,6 @@ async function main(): Promise<void> {
   const nc = await getNatsConnection();
   const js = nc.jetstream();
 
-  // Create a durable consumer for inbox.raw
   const jsm = await nc.jetstreamManager();
   try {
     await jsm.consumers.add('INBOX', {
@@ -133,7 +123,6 @@ async function main(): Promise<void> {
     });
     console.log('[Inbox Processor] Consumer created/verified');
   } catch (err) {
-    // Consumer might already exist
     console.log('[Inbox Processor] Consumer already exists or created');
   }
 
@@ -141,7 +130,6 @@ async function main(): Promise<void> {
 
   console.log(`[Inbox Processor] Listening on ${config.subjects.inboxRaw}`);
 
-  // Process messages
   let running = true;
   const stop = () => { running = false; };
   process.once('SIGINT', stop);
@@ -167,36 +155,15 @@ async function main(): Promise<void> {
       }
     } catch (err) {
       const errMsg = (err as Error).message || '';
-      // Timeout is expected when no messages
       if (errMsg.includes('timeout') || errMsg.includes('TIMEOUT')) {
         continue;
       }
-      // Connection draining means we should exit
       if (errMsg.includes('DRAINING') || errMsg.includes('draining') || errMsg.includes('CLOSED')) {
         console.log('[Inbox Processor] Connection lost, exiting');
         break;
       }
       console.error('[Inbox Processor] Fetch error:', errMsg);
-      // Back off on unexpected errors
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
 }
-
-// Graceful shutdown
-const shutdown = async () => {
-  console.log('[Inbox Processor] Shutting down...');
-  const { shutdown: natsShutdown } = await import('../lib/nats-client.js');
-  await natsShutdown();
-  const { shutdown: dbShutdown } = await import('../lib/db.js');
-  await dbShutdown();
-  process.exit(0);
-};
-
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-main().catch((err) => {
-  console.error('[Inbox Processor] Fatal error:', err);
-  process.exit(1);
-});

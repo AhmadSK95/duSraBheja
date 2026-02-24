@@ -10,18 +10,38 @@ import * as db from '../lib/db.js';
 let whatsappClient: InstanceType<typeof Client> | null = null;
 // The user's own chat ID (messages to yourself). Set on first ready.
 let myChatId: string | null = null;
+// Track recently sent bot messages to avoid re-processing our own replies
+const recentBotMessages = new Set<string>();
 
 function createClient(): InstanceType<typeof Client> {
   return new Client({
     authStrategy: new LocalAuth({ dataPath: '.wwebjs_auth' }),
     puppeteer: {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--single-process',
+        '--js-flags=--max-old-space-size=128',
+      ],
     },
   });
 }
 
 async function handleIncomingMessage(message: any): Promise<void> {
+  // message_create fires for ALL messages (sent + received).
+  // Only process messages we sent ourselves (fromMe) in self-chat.
+  if (!message.fromMe) return;
+
   // Skip group messages and status broadcasts
   if (message.from.endsWith('@g.us') || message.from === 'status@broadcast') {
     return;
@@ -34,6 +54,12 @@ async function handleIncomingMessage(message: any): Promise<void> {
 
   const rawText = message.body?.trim();
   if (!rawText) return;
+
+  // Skip messages the bot itself sent (prevent feedback loop)
+  if (recentBotMessages.has(rawText)) {
+    recentBotMessages.delete(rawText);
+    return;
+  }
 
   const senderId = message.from;
   const timestamp = new Date(message.timestamp * 1000).toISOString();
@@ -90,6 +116,13 @@ function parseCommand(text: string): Command | null {
   return null;
 }
 
+// Helper: send a message and track it so we don't re-process it
+async function sendBotMessage(chat: any, text: string): Promise<void> {
+  recentBotMessages.add(text);
+  setTimeout(() => recentBotMessages.delete(text), 10000);
+  await chat.sendMessage(text);
+}
+
 async function handleCommand(cmd: Command, message: any): Promise<void> {
   const chat = await message.getChat();
 
@@ -114,7 +147,7 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
       if (reviewCount > 0) {
         summary += `\nPending review: ${reviewCount}`;
       }
-      await chat.sendMessage(summary);
+      await sendBotMessage(chat, summary);
       break;
     }
 
@@ -124,7 +157,7 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
          WHERE status = 'review' ORDER BY created_at DESC LIMIT 5`,
       );
       if (items.rows.length === 0) {
-        await chat.sendMessage('No items pending review.');
+        await sendBotMessage(chat, 'No items pending review.');
         return;
       }
       let msg = '*Review Queue*\n\n';
@@ -134,28 +167,27 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
         msg += `   Guess: ${r.classified_as} (${(r.confidence * 100).toFixed(0)}%)\n`;
         msg += `   Fix: fix ${shortId} <category>\n\n`;
       });
-      await chat.sendMessage(msg);
+      await sendBotMessage(chat, msg);
       break;
     }
 
     case 'fix': {
       const [shortId, newCategory] = cmd.args;
       if (!shortId || !newCategory) {
-        await chat.sendMessage('Usage: fix <id> <category>\nCategories: idea, task, note, question, link');
+        await sendBotMessage(chat, 'Usage: fix <id> <category>\nCategories: idea, task, note, question, link');
         return;
       }
       const validCategories = ['idea', 'task', 'note', 'question', 'link'];
       if (!validCategories.includes(newCategory)) {
-        await chat.sendMessage(`Invalid category. Use: ${validCategories.join(', ')}`);
+        await sendBotMessage(chat, `Invalid category. Use: ${validCategories.join(', ')}`);
         return;
       }
-      // Find the item by short ID prefix
       const found = await db.query(
         `SELECT id, classified_as FROM inbox_items WHERE id::text LIKE $1 LIMIT 1`,
         [`${shortId}%`],
       );
       if (found.rows.length === 0) {
-        await chat.sendMessage(`Item ${shortId} not found.`);
+        await sendBotMessage(chat, `Item ${shortId} not found.`);
         return;
       }
       const { applyCorrection } = await import('../lib/store.js');
@@ -165,14 +197,14 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
         actionType: 'correction',
         inputSummary: `${shortId}: ${found.rows[0].classified_as} → ${newCategory}`,
       });
-      await chat.sendMessage(`Fixed. ${shortId} → ${newCategory}`);
+      await sendBotMessage(chat, `Fixed. ${shortId} → ${newCategory}`);
       break;
     }
 
     case 'search': {
       const searchText = cmd.args.join(' ');
       if (!searchText) {
-        await chat.sendMessage('Usage: search <query>');
+        await sendBotMessage(chat, 'Usage: search <query>');
         return;
       }
       const results = await db.query(
@@ -182,19 +214,19 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
         [`%${searchText}%`],
       );
       if (results.rows.length === 0) {
-        await chat.sendMessage(`No results for "${searchText}"`);
+        await sendBotMessage(chat, `No results for "${searchText}"`);
         return;
       }
       let msg = `*Search: ${searchText}*\n\n`;
       results.rows.forEach((r: any, i: number) => {
         msg += `${i + 1}. [${r.node_type}] ${r.title} (${r.priority})\n`;
       });
-      await chat.sendMessage(msg);
+      await sendBotMessage(chat, msg);
       break;
     }
 
     case 'help': {
-      await chat.sendMessage(
+      await sendBotMessage(chat,
         '*duSraBheja Commands*\n\n' +
         '? — Today\'s brain summary\n' +
         '+ <text> — Quick add (same as sending normally)\n' +
@@ -210,7 +242,6 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
     }
 
     case 'urgent': {
-      // Treat as high-priority capture
       await publish(config.subjects.inboxRaw, {
         rawText: cmd.args.join(' '),
         source: 'whatsapp',
@@ -225,13 +256,13 @@ async function handleCommand(cmd: Command, message: any): Promise<void> {
     case 'status': {
       const serviceStatus = [];
       try { await db.query('SELECT 1'); serviceStatus.push('DB: up'); } catch { serviceStatus.push('DB: down'); }
-      serviceStatus.push('WhatsApp: up'); // We're running
-      await chat.sendMessage(`*System Status*\n${serviceStatus.join('\n')}`);
+      serviceStatus.push('WhatsApp: up');
+      await sendBotMessage(chat, `*System Status*\n${serviceStatus.join('\n')}`);
       break;
     }
 
     default:
-      await chat.sendMessage(`Unknown command: ${cmd.name}. Send "help" for available commands.`);
+      await sendBotMessage(chat, `Unknown command: ${cmd.name}. Send "help" for available commands.`);
   }
 }
 
@@ -248,6 +279,8 @@ async function startOutboundListener(): Promise<void> {
       const { chatId, text } = data;
 
       if (whatsappClient && chatId && text) {
+        recentBotMessages.add(text);
+        setTimeout(() => recentBotMessages.delete(text), 10000);
         await whatsappClient.sendMessage(chatId, text);
         console.log(`[WhatsApp] Sent reply to ${chatId}: ${text.substring(0, 60)}...`);
       }
@@ -257,10 +290,9 @@ async function startOutboundListener(): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
+export async function startGateway(): Promise<void> {
   console.log('[WhatsApp] Starting gateway...');
 
-  // Ensure NATS streams exist
   await ensureStream('INBOX', [
     config.subjects.inboxRaw,
     config.subjects.inboxClassified,
@@ -297,26 +329,7 @@ async function main(): Promise<void> {
     console.warn('[WhatsApp] Disconnected:', reason);
   });
 
-  client.on('message', handleIncomingMessage);
+  client.on('message_create', handleIncomingMessage);
 
   await client.initialize();
-
-  // Graceful shutdown
-  const shutdown = async () => {
-    console.log('[WhatsApp] Shutting down...');
-    await client.destroy();
-    const { shutdown: natsShutdown } = await import('../lib/nats-client.js');
-    await natsShutdown();
-    const { shutdown: dbShutdown } = await import('../lib/db.js');
-    await dbShutdown();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
 }
-
-main().catch((err) => {
-  console.error('[WhatsApp] Fatal error:', err);
-  process.exit(1);
-});

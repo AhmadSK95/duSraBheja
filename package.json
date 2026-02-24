@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsc && node --max-old-space-size=256 dist/index.js",
+    "start": "node --max-old-space-size=256 dist/index.js",
     "gateway": "tsx src/gateway/whatsapp.ts",
     "worker:inbox": "tsx src/workers/inbox-processor.ts",
     "worker:temporal": "tsx src/workers/temporal-worker.ts",

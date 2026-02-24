@@ -1,14 +1,6 @@
 #!/bin/bash
-# duSraBheja — Start all services
-# Runs the gateway, inbox processor, and responder
-
+# duSraBheja — Start (compiled, single-process)
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@16/bin:$PATH"
 cd /Users/moenuddeenahmadshaik/Desktop/duSraBheja
-
-LOG_DIR="$HOME/Desktop/duSraBheja/logs"
-mkdir -p "$LOG_DIR"
-
-echo "[$(date)] Starting duSraBheja..." >> "$LOG_DIR/main.log"
-
-# Start the main process
-exec npx tsx src/index.ts >> "$LOG_DIR/main.log" 2>&1
+mkdir -p logs
+exec node --max-old-space-size=256 dist/index.js >> logs/main.log 2>&1

@@ -1,51 +1,35 @@
-import { spawn, ChildProcess } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const processes: ChildProcess[] = [];
-
-function startWorker(name: string, script: string): ChildProcess {
-  console.log(`[Main] Starting ${name}...`);
-  const proc = spawn('npx', ['tsx', script], {
-    cwd: path.resolve(__dirname, '..'),
-    stdio: 'inherit',
-    env: { ...process.env },
-  });
-
-  proc.on('exit', (code) => {
-    console.log(`[Main] ${name} exited with code ${code}`);
-  });
-
-  processes.push(proc);
-  return proc;
-}
+import { startGateway } from './gateway/whatsapp.js';
+import { startInboxProcessor } from './workers/inbox-processor.js';
+import { startResponder } from './workers/responder.js';
+import { shutdown as natsShutdown } from './lib/nats-client.js';
+import { shutdown as dbShutdown } from './lib/db.js';
 
 async function main(): Promise<void> {
   console.log('');
   console.log('═══════════════════════════════════════════');
   console.log('  duSraBheja — Solo AI Command Center');
-  console.log('  Starting Phase 1 Core Loop...');
   console.log('═══════════════════════════════════════════');
   console.log('');
 
-  // Start workers in order
-  startWorker('WhatsApp Gateway', 'src/gateway/whatsapp.ts');
+  // Start responder first (lightweight, just NATS subscriptions)
+  await startResponder();
 
-  // Small delay to let WhatsApp connect first
-  await new Promise((r) => setTimeout(r, 2000));
+  // Start inbox processor (NATS consumer loop)
+  startInboxProcessor().catch((err) => {
+    console.error('[Main] Inbox Processor error:', err);
+  });
 
-  startWorker('Inbox Processor', 'src/workers/inbox-processor.ts');
-  startWorker('Responder', 'src/workers/responder.ts');
+  // Start WhatsApp gateway (heaviest — launches Chromium)
+  await startGateway();
 
-  console.log('[Main] All workers started. Ctrl+C to stop.');
+  console.log('[Main] All services running in single process.');
 }
 
-const shutdown = () => {
-  console.log('\n[Main] Shutting down all workers...');
-  processes.forEach((p) => p.kill('SIGTERM'));
-  setTimeout(() => process.exit(0), 3000);
+const shutdown = async () => {
+  console.log('\n[Main] Shutting down...');
+  await natsShutdown();
+  await dbShutdown();
+  process.exit(0);
 };
 
 process.on('SIGINT', shutdown);

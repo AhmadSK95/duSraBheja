@@ -38,7 +38,7 @@ function formatConfirmation(event: ClassifiedEvent): string {
   }
 }
 
-async function main(): Promise<void> {
+export async function startResponder(): Promise<void> {
   console.log('[Responder] Starting...');
 
   await ensureStream('INBOX', [
@@ -50,7 +50,6 @@ async function main(): Promise<void> {
 
   const nc = await getNatsConnection();
 
-  // Subscribe to both classified and review subjects
   const subjects = [config.subjects.inboxClassified, config.subjects.inboxReview];
 
   for (const subject of subjects) {
@@ -78,18 +77,3 @@ async function main(): Promise<void> {
 
   console.log('[Responder] Ready');
 }
-
-const shutdown = async () => {
-  console.log('[Responder] Shutting down...');
-  const { shutdown: natsShutdown } = await import('../lib/nats-client.js');
-  await natsShutdown();
-  process.exit(0);
-};
-
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-main().catch((err) => {
-  console.error('[Responder] Fatal error:', err);
-  process.exit(1);
-});
