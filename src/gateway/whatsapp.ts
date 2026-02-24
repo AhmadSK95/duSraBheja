@@ -8,6 +8,8 @@ import * as db from '../lib/db.js';
 
 // Track the WhatsApp client globally for outbound messaging
 let whatsappClient: InstanceType<typeof Client> | null = null;
+// The user's own chat ID (messages to yourself). Set on first ready.
+let myChatId: string | null = null;
 
 function createClient(): InstanceType<typeof Client> {
   return new Client({
@@ -22,6 +24,11 @@ function createClient(): InstanceType<typeof Client> {
 async function handleIncomingMessage(message: any): Promise<void> {
   // Skip group messages and status broadcasts
   if (message.from.endsWith('@g.us') || message.from === 'status@broadcast') {
+    return;
+  }
+
+  // FILTER: Only process messages from your own self-chat (you → you)
+  if (myChatId && message.from !== myChatId) {
     return;
   }
 
@@ -269,8 +276,12 @@ async function main(): Promise<void> {
     qrcode.generate(qr, { small: true });
   });
 
-  client.on('ready', () => {
-    console.log('[WhatsApp] Client ready and connected');
+  client.on('ready', async () => {
+    const info = client.info;
+    myChatId = info?.wid?._serialized || null;
+    console.log(`[WhatsApp] Client ready and connected`);
+    console.log(`[WhatsApp] Bot active ONLY in self-chat: ${myChatId}`);
+    console.log(`[WhatsApp] All other chats are ignored.`);
     startOutboundListener();
   });
 

@@ -142,7 +142,16 @@ async function main(): Promise<void> {
   console.log(`[Inbox Processor] Listening on ${config.subjects.inboxRaw}`);
 
   // Process messages
-  while (true) {
+  let running = true;
+  const stop = () => { running = false; };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  while (running) {
+    if (nc.isClosed() || (nc as any).isDraining?.()) {
+      console.log('[Inbox Processor] Connection draining/closed, exiting loop');
+      break;
+    }
     try {
       const messages = await consumer.fetch({ max_messages: 1, expires: 5000 });
 
@@ -157,10 +166,19 @@ async function main(): Promise<void> {
         }
       }
     } catch (err) {
+      const errMsg = (err as Error).message || '';
       // Timeout is expected when no messages
-      if (!(err as Error).message?.includes('timeout')) {
-        console.error('[Inbox Processor] Fetch error:', (err as Error).message);
+      if (errMsg.includes('timeout') || errMsg.includes('TIMEOUT')) {
+        continue;
       }
+      // Connection draining means we should exit
+      if (errMsg.includes('DRAINING') || errMsg.includes('draining') || errMsg.includes('CLOSED')) {
+        console.log('[Inbox Processor] Connection lost, exiting');
+        break;
+      }
+      console.error('[Inbox Processor] Fetch error:', errMsg);
+      // Back off on unexpected errors
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 }
