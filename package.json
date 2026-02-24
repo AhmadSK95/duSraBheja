@@ -1,0 +1,42 @@
+{
+  "name": "dusrabheja",
+  "version": "0.1.0",
+  "description": "Solo AI Command Center — Second Brain + Multi-Agent Swarm",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "gateway": "tsx src/gateway/whatsapp.ts",
+    "worker:inbox": "tsx src/workers/inbox-processor.ts",
+    "worker:temporal": "tsx src/workers/temporal-worker.ts",
+    "health": "bash scripts/health-check.sh",
+    "test:pipeline": "tsx scripts/test-pipeline.ts",
+    "worker:responder": "tsx src/workers/responder.ts",
+    "schedule:daily": "tsx src/workers/schedule-daily-summary.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.15.0",
+    "@temporalio/client": "^1.15.0",
+    "@temporalio/worker": "^1.15.0",
+    "@temporalio/workflow": "^1.15.0",
+    "dotenv": "^17.3.1",
+    "nats": "^2.29.3",
+    "ollama": "^0.6.3",
+    "pg": "^8.18.0",
+    "qrcode-terminal": "^0.12.0",
+    "uuid": "^13.0.0",
+    "whatsapp-web.js": "^1.34.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/pg": "^8.16.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
