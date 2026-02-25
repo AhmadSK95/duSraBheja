@@ -13,15 +13,19 @@ interface ClassifiedEvent {
     summary: string;
   };
   isHighConfidence: boolean;
+  projectName: string | null;
 }
 
 function formatConfirmation(event: ClassifiedEvent): string {
-  const { classification, inboxId, isHighConfidence } = event;
+  const { classification, inboxId, isHighConfidence, projectName } = event;
   const shortId = inboxId.substring(0, 8);
   const conf = (classification.confidence * 100).toFixed(0);
 
   if (isHighConfidence) {
     let msg = `Captured. *${classification.category}* (${conf}%)`;
+    if (projectName) {
+      msg += ` → ${projectName}`;
+    }
     if (classification.priority !== 'medium') {
       msg += ` | Priority: ${classification.priority}`;
     }

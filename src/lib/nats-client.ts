@@ -22,7 +22,7 @@ export async function getJetStream(): Promise<JetStreamClient> {
   return js;
 }
 
-export async function ensureStream(name: string, subjects: string[]): Promise<void> {
+export async function ensureStream(name: string, subjects: string[], maxBytesMB = 200): Promise<void> {
   const conn = await getNatsConnection();
   const jsm: JetStreamManager = await conn.jetstreamManager();
   try {
@@ -34,10 +34,10 @@ export async function ensureStream(name: string, subjects: string[]): Promise<vo
       subjects,
       retention: 'limits' as any,
       max_msgs: 100000,
-      max_bytes: 500 * 1024 * 1024, // 500MB
+      max_bytes: maxBytesMB * 1024 * 1024,
       max_age: 30 * 24 * 60 * 60 * 1_000_000_000, // 30 days in nanos
     });
-    console.log(`[NATS] Stream '${name}' created with subjects: ${subjects.join(', ')}`);
+    console.log(`[NATS] Stream '${name}' created with subjects: ${subjects.join(', ')} (${maxBytesMB}MB)`);
   }
 }
 

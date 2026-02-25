@@ -1,8 +1,14 @@
 import { getNatsConnection, ensureStream, decode, publish } from '../lib/nats-client.js';
-import { classify } from '../lib/ollama-client.js';
+import { classify, classifyWithProjects } from '../lib/ollama-client.js';
 import { createInboxItem, createBrainNode } from '../lib/store.js';
 import { logAudit } from '../lib/audit.js';
 import { config } from '../lib/config.js';
+import {
+  getActiveProjectNames,
+  getProjectByName,
+  findSimilarNodes,
+  createEdge,
+} from '../lib/project-store.js';
 
 interface RawMessage {
   rawText: string;
@@ -13,15 +19,67 @@ interface RawMessage {
   urgent?: boolean;
 }
 
+// ─── Project name cache (5-min TTL) ─────────────────────────────────
+
+let cachedProjectNames: string[] = [];
+let cacheExpiry = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getProjectNamesWithCache(): Promise<string[]> {
+  if (Date.now() < cacheExpiry) return cachedProjectNames;
+  try {
+    cachedProjectNames = await getActiveProjectNames();
+    cacheExpiry = Date.now() + CACHE_TTL_MS;
+  } catch (err) {
+    console.warn('[Inbox] Failed to refresh project cache:', (err as Error).message);
+  }
+  return cachedProjectNames;
+}
+
+// ─── Auto-link similar brain nodes ──────────────────────────────────
+
+const SIMILARITY_THRESHOLD = 0.75;
+
+async function autoLinkSimilarNodes(
+  brainNodeId: string,
+  embedding: number[] | null,
+): Promise<number> {
+  if (!embedding) return 0;
+  try {
+    const similar = await findSimilarNodes(embedding, 5, brainNodeId);
+    let linked = 0;
+    for (const node of similar) {
+      if (node.similarity >= SIMILARITY_THRESHOLD) {
+        await createEdge(brainNodeId, node.id, 'related_to', node.similarity);
+        linked++;
+      }
+    }
+    if (linked > 0) {
+      console.log(`[Inbox] Auto-linked ${linked} similar node(s) for ${brainNodeId.substring(0, 8)}`);
+    }
+    return linked;
+  } catch (err) {
+    console.warn('[Inbox] Auto-link failed:', (err as Error).message);
+    return 0;
+  }
+}
+
+// ─── Process message ─────────────────────────────────────────────────
+
 async function processMessage(raw: RawMessage): Promise<void> {
   const start = Date.now();
   const traceId = crypto.randomUUID();
 
   console.log(`[Inbox] Processing: "${raw.rawText.substring(0, 60)}..."`);
 
+  // Get active project names for context-aware classification
+  const projectNames = await getProjectNamesWithCache();
+
   let classification;
   try {
-    classification = await classify(raw.rawText);
+    classification = projectNames.length > 0
+      ? await classifyWithProjects(raw.rawText, projectNames)
+      : await classify(raw.rawText);
   } catch (err) {
     console.error('[Inbox] Classification failed:', (err as Error).message);
     const inboxId = await createInboxItem(raw.rawText, raw.source, null, {
@@ -51,11 +109,23 @@ async function processMessage(raw: RawMessage): Promise<void> {
   const durationMs = Date.now() - start;
   const isHighConfidence = classification.confidence >= config.confidenceThreshold;
 
+  // Resolve project assignment
+  let projectId: string | undefined;
+  let projectName: string | null = null;
+  if (classification.suggestedProject) {
+    const project = await getProjectByName(classification.suggestedProject);
+    if (project) {
+      projectId = project.id;
+      projectName = project.name;
+    }
+  }
+
   console.log(
     `[Inbox] Classified as: ${classification.category} ` +
     `(confidence: ${(classification.confidence * 100).toFixed(0)}%, ` +
-    `threshold: ${isHighConfidence ? 'PASS' : 'REVIEW'}) ` +
-    `[${durationMs}ms]`,
+    `threshold: ${isHighConfidence ? 'PASS' : 'REVIEW'})` +
+    (projectName ? ` [project: ${projectName}]` : '') +
+    ` [${durationMs}ms]`,
   );
 
   const inboxId = await createInboxItem(
@@ -63,11 +133,18 @@ async function processMessage(raw: RawMessage): Promise<void> {
     raw.source,
     classification,
     { senderId: raw.senderId, messageId: raw.messageId },
+    projectId,
   );
 
   let brainNodeId: string | null = null;
+  let embedding: number[] | null = null;
   if (isHighConfidence) {
-    brainNodeId = await createBrainNode(inboxId, raw.rawText, classification);
+    const result = await createBrainNode(inboxId, raw.rawText, classification, projectId);
+    brainNodeId = result.id;
+    embedding = result.embedding;
+
+    // Auto-link similar brain nodes in the background
+    autoLinkSimilarNodes(brainNodeId, embedding).catch(() => {});
   }
 
   await logAudit({
@@ -76,13 +153,15 @@ async function processMessage(raw: RawMessage): Promise<void> {
     riskClass: 'R0',
     toolName: 'ollama',
     inputSummary: raw.rawText.substring(0, 100),
-    outputSummary: `${classification.category} (${(classification.confidence * 100).toFixed(0)}%)`,
+    outputSummary: `${classification.category} (${(classification.confidence * 100).toFixed(0)}%)` +
+      (projectName ? ` → ${projectName}` : ''),
     decision: isHighConfidence ? 'auto_approved' : 'escalated',
     modelUsed: config.ollama.classifyModel,
     durationMs,
     metadata: {
       inboxId,
       brainNodeId,
+      projectId: projectId || null,
       classification,
     },
   }, traceId);
@@ -97,6 +176,7 @@ async function processMessage(raw: RawMessage): Promise<void> {
     senderId: raw.senderId,
     classification,
     isHighConfidence,
+    projectName,
   });
 }
 

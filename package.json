@@ -20,6 +20,10 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/core": "^1.1.28",
+    "@langchain/langgraph": "^1.1.5",
     "@temporalio/activity": "^1.15.0",
     "@temporalio/client": "^1.15.0",
     "@temporalio/worker": "^1.15.0",
@@ -27,6 +31,7 @@
     "dotenv": "^17.3.1",
     "nats": "^2.29.3",
     "ollama": "^0.6.3",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.18.0",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^13.0.0",

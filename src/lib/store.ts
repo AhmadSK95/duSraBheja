@@ -31,6 +31,7 @@ export async function createInboxItem(
   source: string,
   classification: ClassificationResult | null,
   sourceMetadata?: Record<string, any>,
+  projectId?: string,
 ): Promise<string> {
   const status = classification
     ? classification.confidence >= 0.7
@@ -39,8 +40,8 @@ export async function createInboxItem(
     : 'pending';
 
   const result = await query<{ id: string }>(
-    `INSERT INTO inbox_items (raw_text, source, source_metadata, classified_as, confidence, priority, next_action, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO inbox_items (raw_text, source, source_metadata, classified_as, confidence, priority, next_action, status, project_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
     [
       rawText,
@@ -51,6 +52,7 @@ export async function createInboxItem(
       classification?.priority || 'medium',
       classification?.nextAction || null,
       status,
+      projectId || null,
     ],
   );
   return result.rows[0].id;
@@ -60,20 +62,24 @@ export async function createBrainNode(
   inboxId: string,
   rawText: string,
   classification: ClassificationResult,
-): Promise<string> {
-  // Generate embedding for semantic search
-  let embedding: number[] | null = null;
-  try {
-    embedding = await generateEmbedding(rawText);
-  } catch (err) {
-    console.warn('[Store] Failed to generate embedding:', (err as Error).message);
+  projectId?: string,
+  precomputedEmbedding?: number[],
+): Promise<{ id: string; embedding: number[] | null }> {
+  // Use pre-computed embedding or generate one
+  let embedding: number[] | null = precomputedEmbedding || null;
+  if (!embedding) {
+    try {
+      embedding = await generateEmbedding(rawText);
+    } catch (err) {
+      console.warn('[Store] Failed to generate embedding:', (err as Error).message);
+    }
   }
 
   const embeddingStr = embedding ? `[${embedding.join(',')}]` : null;
 
   const result = await query<{ id: string }>(
-    `INSERT INTO brain_nodes (title, content, node_type, priority, next_action, source_inbox_id, embedding)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+    `INSERT INTO brain_nodes (title, content, node_type, priority, next_action, source_inbox_id, project_id, embedding)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
      RETURNING id`,
     [
       classification.summary,
@@ -82,10 +88,11 @@ export async function createBrainNode(
       classification.priority,
       classification.nextAction || null,
       inboxId,
+      projectId || null,
       embeddingStr,
     ],
   );
-  return result.rows[0].id;
+  return { id: result.rows[0].id, embedding };
 }
 
 export async function getInboxItem(id: string): Promise<InboxItem | null> {
