@@ -1,0 +1,24 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency manifest
+COPY pyproject.toml .
+
+# Install dependencies
+RUN uv pip install --system -e ".[dev]"
+
+# Copy source code
+COPY . .
+
+# Default command (overridden per service in docker-compose)
+CMD ["python", "-m", "src.bot.main"]

@@ -1,0 +1,58 @@
+"""Central configuration — reads from .env via pydantic-settings."""
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # Database
+    database_url: str = "postgresql+asyncpg://brain_user:changeme@localhost:5432/brain_db"
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
+    db_statement_timeout_ms: int = 30_000
+
+    # Redis
+    redis_url: str = "redis://localhost:6379"
+
+    # Discord
+    discord_token: str = ""
+    discord_guild_id: int = 0
+    inbox_channel_name: str = "inbox"
+    needs_review_channel_name: str = "needs-review"
+    daily_digest_channel_name: str = "daily-digest"
+    ask_channel_name: str = "ask-brain"
+
+    # Anthropic (Claude)
+    anthropic_api_key: str = ""
+    classifier_model: str = "claude-haiku-4-5-20251001"
+    sonnet_model: str = "claude-sonnet-4-6"
+    opus_model: str = "claude-opus-4-6"
+
+    # OpenAI (embeddings + Whisper)
+    openai_api_key: str = ""
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
+    whisper_model: str = "whisper-1"
+
+    # Classification
+    confidence_threshold: float = 0.75
+    max_clarification_attempts: int = 2
+
+    # Chunking
+    chunk_max_tokens: int = 512
+    chunk_overlap_tokens: int = 64
+
+    # MCP
+    mcp_transport: str = "streamable-http"
+    mcp_port: int = 8100
+
+    # Blob storage
+    blob_storage_path: str = "/data/blobs"
+
+    # Daily digest
+    digest_cron_hour: int = 8
+    digest_timezone: str = "America/New_York"
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+
+settings = Settings()

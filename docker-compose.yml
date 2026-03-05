@@ -1,0 +1,90 @@
+version: "3.8"
+
+services:
+  # Redis — lightweight job queue broker
+  brain-redis:
+    image: redis:7-alpine
+    container_name: brain-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6399:6379"
+    volumes:
+      - brain-redis-data:/data
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    networks:
+      - brain-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Discord bot
+  brain-bot:
+    build: .
+    container_name: brain-bot
+    restart: unless-stopped
+    depends_on:
+      brain-redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://brain-redis:6379
+      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
+    volumes:
+      - brain-blobs:/data/blobs
+    networks:
+      - brain-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python -m src.bot.main
+
+  # ARQ background worker
+  brain-worker:
+    build: .
+    container_name: brain-worker
+    restart: unless-stopped
+    depends_on:
+      brain-redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://brain-redis:6379
+      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
+    volumes:
+      - brain-blobs:/data/blobs
+    networks:
+      - brain-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python -m src.worker.main
+
+  # MCP server
+  brain-mcp:
+    build: .
+    container_name: brain-mcp
+    restart: unless-stopped
+    depends_on:
+      brain-redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://brain-redis:6379
+      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
+      - MCP_TRANSPORT=streamable-http
+      - MCP_PORT=8100
+    ports:
+      - "127.0.0.1:8100:8100"
+    networks:
+      - brain-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: python -m src.mcp.server
+
+volumes:
+  brain-redis-data:
+  brain-blobs:
+
+networks:
+  brain-net:
+    driver: bridge

@@ -1,0 +1,223 @@
+Got it. Discord becomes the cockpit. WhatsApp can be “optional intake later,” but we won’t need it to ship the brain.
+
+Here’s a concrete, buildable spec you can hand to Codex/Claude, with the few remaining decisions baked in (and called out).
+
+---
+
+## 1) Discord Brain v1: the user experience (what you’ll actually do daily)
+
+### Your private Discord server layout
+
+**Core channels (mapped to your buckets):**
+
+* `#inbox` (everything lands here first)
+* `#tasks`
+* `#projects`
+* `#people`
+* `#ideas`
+* `#notes`
+* `#resources`
+* `#reminders`
+* `#daily-planner`
+* `#weekly-planner`
+* `#needs-review` (only when confidence is low)
+* `#daily-digest` (morning post)
+
+### Your workflow
+
+* You drop anything into `#inbox`: text, pdf, image, audio, xlsx, links.
+* Bot replies with:
+
+  * ✅ classification + short summary + tags
+  * where it stored it (and a link back to the record)
+* If uncertain:
+
+  * Bot asks **one tiny question** in-thread (or posts a prompt in `#needs-review`)
+  * You answer in natural language or quick yes/no
+
+### Daily planner image rule
+
+* If you post an image in `#daily-planner`, bot stores it and extracts text, but **takes no action**.
+
+---
+
+## 2) Architecture that fits your droplet + existing barbershop system
+
+### On your droplet (24/7)
+
+**Services**
+
+1. `brain-bot` (Discord bot + API)
+2. `brain-worker` (background jobs: parsing, transcription, embeddings, digests)
+3. `redis` (queue)
+4. Postgres: either:
+
+   * **preferred:** separate DB inside same Postgres instance: `brain_db`
+   * or separate schema + separate role
+
+**Key safety moves so barbershop stays untouched**
+
+* Separate DB user: `brain_user` (only access to brain DB/schema)
+* Connection pool limits for brain services
+* Statement timeouts + job timeouts
+* Separate tablespaces not required, but separate DB is cleaner
+
+### On your Mac
+
+**`brain-collector` daemon**
+
+* Runs on schedule (every 2–6 hours, plus a morning run)
+* Collects:
+
+  * Git repo status + recent diffs summary
+  * “projects running” snapshot (we define this as: active git repos + last modified + optional docker ps)
+  * Codex/Claude logs if available locally (optional and scoped)
+* Pushes summaries to server via HTTPS with device token
+
+---
+
+## 3) The agent cast (small but powerful)
+
+You said: “product on the precipice of what AI can do.” Cool. We do a **multi-agent pipeline**, but keep it operationally simple.
+
+**Agents**
+
+1. **Ingestor**: handles attachments, extracts text, stores blobs
+2. **Classifier**: maps to bucket + entities + confidence
+3. **Clarifier**: asks smallest question when confidence low
+4. **Librarian**: merges into canonical notes (Projects/People)
+5. **Retriever**: answers “Ask my brain” using RAG over notes + artifacts
+6. **Planner**: daily digest generation
+7. **Project Tracker**: GitHub + Mac collector progress summaries
+8. **Curator**: writing topics + YouTube suggestions
+
+Implementation trick: these can be “agents” as separate prompts/tools, not separate processes. One worker service is enough.
+
+---
+
+## 4) Data model (Postgres) you’ll be happy you built
+
+### Tables (minimum)
+
+* `artifacts`: raw inputs (message text + file refs)
+* `artifact_chunks`: extracted chunks for search/RAG
+* `classifications`: bucket + confidence + entities(jsonb)
+* `notes`: canonical objects (Project/Person/Idea/etc.)
+* `links`: relationships between notes/artifacts (graph-lite)
+* `review_queue`: clarifications pending
+* `digests`: daily digest payload + feedback
+* `sources`: tokens/metadata for GitHub, Google, YouTube integrations
+
+### Storage for files
+
+* Use **DigitalOcean Spaces** (private) or droplet disk (private).
+* Store only `blob_ref`, `hash`, `mime`, `size` in Postgres.
+
+---
+
+## 5) Discord commands and behaviors (super concrete)
+
+### Basic commands
+
+* `/ask <question>`
+  Replies with an answer plus “sources” (links to artifacts/notes)
+* `/remember <text>`
+  Forces bucket = Notes unless specified
+* `/task <text>`
+  Creates/updates a task
+* `/project <name> <update>`
+  Updates a project note
+* `/digest now`
+  Generates today’s digest on demand
+* `/review`
+  Lists pending clarifications
+
+### Passive listening (no slash command needed)
+
+* Anything posted in `#inbox` is ingested automatically
+* Bot posts a summary + classification + storage link as a thread reply
+
+### Needs-review flow
+
+* If classifier confidence < threshold:
+
+  * Bot asks 1 question (max 2) in the same thread
+  * If you don’t answer, it gets queued and appears in the daily digest questionnaire
+
+---
+
+## 6) Integrations for your success metrics
+
+### GitHub (read-only)
+
+* Use GitHub App or fine-scoped token
+* Pull:
+
+  * commits last 7 days
+  * open PRs/issues
+  * repo activity score
+* Output: “progress per project”
+
+### YouTube
+
+* Requires **YouTube Data API OAuth**
+* Pull:
+
+  * Watch Later playlist (optional)
+  * subscriptions feed (optional)
+  * recommended videos are not directly exposed like the homepage; we’ll simulate recommendations via:
+
+    * your subscriptions + watch later + your “topics”
+* Output: 5 videos with reasoning
+
+### Gmail + Drive
+
+* OAuth scopes:
+
+  * Gmail readonly
+  * Drive readonly
+* Use the scraper on intervals, and summarize into digest prompts (not constant pings)
+
+---
+
+## 7) Build plan (fast ship, then power-up)
+
+### Sprint 1 (MVP): Discord ingestion + classify + store + review
+
+* Discord bot
+* Blob storage
+* Postgres schema
+* Classifier + Clarifier
+* `/ask` over stored text (basic keyword first)
+
+### Sprint 2: Proper retrieval (RAG) + canonical notes
+
+* Chunking + embeddings
+* Notes merge/update logic (Librarian)
+* Strong “Ask my brain” answers with citations to your own artifacts
+
+### Sprint 3: Mac collector + GitHub progress
+
+* Collector daemon on Mac
+* Secure push endpoint
+* Daily digest includes project progress
+
+### Sprint 4: Gmail/Drive + YouTube
+
+* OAuth, scrapers
+* Daily digest fully matches your 4 deliverables
+
+---
+
+## 8) The only 6 decisions I still need (quick answers)
+
+Reply with bullets:
+
+1. **Bot hosting language:** Python (FastAPI + discord.py) or Node (discord.js)?
+2. **Blob storage:** DigitalOcean Spaces (recommended) or droplet disk only?
+3. **Mac collector:** do you want it to read only git metadata, or also read file contents/diffs?
+4. **Codex/Claude logs:** do you have local logs you can point to, or should we skip initially?
+5. **Daily digest time:** what time in your timezone (ET) should it post?
+6. **Security:** are you okay with OAuth tokens stored encrypted in DB (recommended), or do you want everything only as env vars?
+
+Once you answer those, I’ll output a “Build Ticket Pack” you can paste into Codex/Claude: repo structure, Docker compose, DB migrations, Discord channel config, commands, prompts, and the digest job logic.

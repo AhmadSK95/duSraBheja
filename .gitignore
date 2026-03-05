@@ -1,7 +1,14 @@
-# Dependencies
-node_modules/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
 .venv/
 venv/
 env/
@@ -9,16 +16,11 @@ env/
 # Environment
 .env
 .env.local
-.env.*.local
-
-# Build
-dist/
-build/
-*.egg-info/
+.env.production
 
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
@@ -27,29 +29,21 @@ build/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-logs/
-
-# Data
-*.db
-*.sqlite
-
 # Docker
 docker-compose.override.yml
 
-# Temporal data
-infra/temporal-data/
+# Blobs (stored files)
+data/blobs/
 
-# NATS data
-infra/nats-data/
+# Test / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
 
-# WhatsApp auth session
-.wwebjs_auth/
-.wwebjs_cache/
+# Alembic
+alembic/versions/__pycache__/
 
-# Secrets
-*.pem
-*.key
-credentials.json
-tokens.json
+# Misc
+*.log
+*.pid
