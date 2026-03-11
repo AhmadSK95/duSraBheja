@@ -8,6 +8,7 @@ from src.collector.main import (
     build_repo_snapshot,
     collect_entries,
     discover_repo_roots,
+    run_git,
 )
 
 
@@ -101,3 +102,15 @@ def test_collect_entries_skips_unchanged_items_in_sync_mode(tmp_path: Path) -> N
     assert len(initial_entries) == 2
     assert {entry["entry_type"] for entry in initial_entries} == {"context_dump", "directory_inventory"}
     assert repeat_entries == []
+
+
+def test_run_git_returns_empty_string_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["git", "status"], timeout=5)
+
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+
+    assert run_git(["status"], cwd=repo) == ""

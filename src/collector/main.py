@@ -48,6 +48,7 @@ IGNORED_DIR_NAMES = {
     "node_modules",
     "venv",
 }
+GIT_COMMAND_TIMEOUT_SECONDS = 5
 
 
 def parse_paths(raw_value: str | None) -> list[Path]:
@@ -68,13 +69,18 @@ def save_state(path: Path, payload: dict) -> None:
 
 
 def run_git(args: list[str], cwd: Path) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+            env={"GIT_OPTIONAL_LOCKS": "0", **os.environ},
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     if result.returncode != 0:
         return ""
     return result.stdout.strip()
