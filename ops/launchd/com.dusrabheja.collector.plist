@@ -12,12 +12,20 @@
   <key>WorkingDirectory</key>
   <string>/Users/moenuddeenahmadshaik/Desktop/duSraBheja</string>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>17</integer>
-    <key>Minute</key>
-    <integer>0</integer>
-  </dict>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>5</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>17</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+  </array>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
