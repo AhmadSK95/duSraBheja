@@ -53,8 +53,15 @@ async def _iter_messages(client: httpx.AsyncClient, channel_id: str):
 
 
 async def _delete_message(client: httpx.AsyncClient, channel_id: str, message_id: str) -> None:
-    response = await client.delete(f"/channels/{channel_id}/messages/{message_id}")
-    response.raise_for_status()
+    while True:
+        response = await client.delete(f"/channels/{channel_id}/messages/{message_id}")
+        if response.status_code == 429:
+            payload = response.json()
+            await asyncio.sleep(float(payload.get("retry_after", 1.0)) + 0.25)
+            continue
+        response.raise_for_status()
+        await asyncio.sleep(0.15)
+        return
 
 
 async def _purge_bot_outputs(
