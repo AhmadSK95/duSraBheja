@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVER_USER="${SERVER_USER:-deployer}"
+SERVER_HOST="${SERVER_HOST:-104.131.63.231}"
+SERVER_SSH_KEY="${SERVER_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+LOCAL_PORT="${LOCAL_PORT:-8000}"
+REMOTE_HOST="${REMOTE_HOST:-127.0.0.1}"
+REMOTE_PORT="${REMOTE_PORT:-8000}"
+
+exec ssh -N \
+  -L "${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT}" \
+  -i "${SERVER_SSH_KEY}" \
+  "${SERVER_USER}@${SERVER_HOST}"
