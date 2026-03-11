@@ -12,7 +12,7 @@ import httpx
 from src.config import settings
 from src.database import async_session
 from src.lib.store import get_artifact_by_discord_id
-from src.worker.main import enqueue_ingest
+from src.worker.main import enqueue_classify, enqueue_ingest
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp"}
 
@@ -58,6 +58,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     queued = 0
+    requeued_existing = 0
     skipped_existing = 0
     skipped_non_image = 0
 
@@ -81,8 +82,14 @@ async def main() -> None:
 
             async with async_session() as session:
                 existing = await get_artifact_by_discord_id(session, message["id"])
-            if existing and not args.force:
-                skipped_existing += 1
+            if existing:
+                if not args.force:
+                    skipped_existing += 1
+                    continue
+                await enqueue_classify(str(existing.id))
+                requeued_existing += 1
+                if args.limit and queued + requeued_existing >= args.limit:
+                    break
                 continue
 
             normalized_attachments = [
@@ -108,6 +115,7 @@ async def main() -> None:
         {
             "channel": args.channel,
             "queued": queued,
+            "requeued_existing": requeued_existing,
             "skipped_existing": skipped_existing,
             "skipped_non_image": skipped_non_image,
         }

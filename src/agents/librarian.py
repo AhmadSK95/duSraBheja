@@ -1,12 +1,12 @@
 """Librarian agent — merges artifacts into canonical notes."""
 
-import json
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.base import agent_call
 from src.config import settings
+from src.lib.llm_json import parse_json_object
 
 SYSTEM_PROMPT = """You are the Librarian agent for a personal second brain.
 
@@ -84,4 +84,10 @@ Create a new canonical note for this."""
         trace_id=trace_id,
     )
 
-    return json.loads(result["text"])
+    parsed = parse_json_object(result["text"])
+    return {
+        "action": parsed.get("action", "create"),
+        "title": parsed.get("title", "Untitled"),
+        "content": parsed.get("content", artifact_text),
+        "tags": parsed.get("tags") or [],
+    }

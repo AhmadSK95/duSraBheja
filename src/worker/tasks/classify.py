@@ -29,75 +29,91 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
             log.warning(f"Artifact {artifact_id} has no text to classify")
             return
 
-        # Classify
-        if force_category:
-            # Skip classification, use forced category
-            result = {
-                "category": force_category,
-                "confidence": 1.0,
-                "entities": [],
-                "tags": [],
-                "priority": "medium",
-                "suggested_action": None,
-                "summary": artifact.raw_text[:200],
-                "_meta": {"model": "forced", "tokens_used": 0, "cost_usd": 0, "duration_ms": 0},
-            }
-        else:
-            result = await classify(session, artifact.raw_text, trace_id=trace_id)
+        try:
+            # Classify
+            if force_category:
+                # Skip classification, use forced category
+                result = {
+                    "category": force_category,
+                    "confidence": 1.0,
+                    "entities": [],
+                    "tags": [],
+                    "priority": "medium",
+                    "suggested_action": None,
+                    "summary": artifact.raw_text[:200],
+                    "_meta": {"model": "forced", "tokens_used": 0, "cost_usd": 0, "duration_ms": 0},
+                }
+            else:
+                result = await classify(session, artifact.raw_text, trace_id=trace_id)
 
-        log.info(
-            f"Classified artifact {artifact_id}: "
-            f"category={result['category']}, confidence={result['confidence']:.2f}"
-        )
-
-        # Store classification
-        meta = result.pop("_meta", {})
-        classification = await create_classification(
-            session,
-            artifact_id=artifact_uuid,
-            category=result["category"],
-            confidence=result["confidence"],
-            entities=result.get("entities", []),
-            tags=result.get("tags", []),
-            priority=result.get("priority", "medium"),
-            suggested_action=result.get("suggested_action"),
-            model_used=meta.get("model", "unknown"),
-            tokens_used=meta.get("tokens_used"),
-            cost_usd=meta.get("cost_usd"),
-            is_final=result["confidence"] >= settings.confidence_threshold,
-        )
-
-        # Update artifact summary
-        artifact.summary = result.get("summary", artifact.raw_text[:200])
-        await session.commit()
-
-        # Route based on confidence
-        from src.worker.main import (
-            get_pool,
-            JOB_ASK_CLARIFICATION,
-            JOB_GENERATE_EMBEDDINGS,
-            JOB_PROCESS_LIBRARIAN,
-        )
-
-        pool = await get_pool()
-
-        if result["confidence"] >= settings.confidence_threshold:
-            # High confidence → embed + librarian + route to channel
-            await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
-            await pool.enqueue_job(
-                JOB_PROCESS_LIBRARIAN,
-                artifact_id=artifact_id,
-                classification_id=str(classification.id),
+            log.info(
+                f"Classified artifact {artifact_id}: "
+                f"category={result['category']}, confidence={result['confidence']:.2f}"
             )
-            log.info(f"High confidence — routing artifact {artifact_id} to channel")
-        else:
-            # Low confidence → ask clarification
-            await pool.enqueue_job(
+
+            # Store classification
+            meta = result.pop("_meta", {})
+            classification = await create_classification(
+                session,
+                artifact_id=artifact_uuid,
+                category=result["category"],
+                confidence=result["confidence"],
+                entities=result.get("entities", []),
+                tags=result.get("tags", []),
+                priority=result.get("priority", "medium"),
+                suggested_action=result.get("suggested_action"),
+                model_used=meta.get("model", "unknown"),
+                tokens_used=meta.get("tokens_used"),
+                cost_usd=meta.get("cost_usd"),
+                is_final=result["confidence"] >= settings.confidence_threshold,
+            )
+
+            # Update artifact summary
+            artifact.summary = result.get("summary", artifact.raw_text[:200])
+            await session.commit()
+
+            # Route based on confidence
+            from src.worker.main import (
+                get_pool,
                 JOB_ASK_CLARIFICATION,
-                artifact_id=artifact_id,
-                classification_id=str(classification.id),
+                JOB_GENERATE_EMBEDDINGS,
+                JOB_PROCESS_LIBRARIAN,
             )
-            log.info(f"Low confidence ({result['confidence']:.2f}) — requesting clarification")
+
+            pool = await get_pool()
+
+            if result["confidence"] >= settings.confidence_threshold:
+                # High confidence → embed + librarian + route to channel
+                await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
+                await pool.enqueue_job(
+                    JOB_PROCESS_LIBRARIAN,
+                    artifact_id=artifact_id,
+                    classification_id=str(classification.id),
+                )
+                log.info(f"High confidence — routing artifact {artifact_id} to channel")
+            else:
+                # Low confidence → ask clarification
+                await pool.enqueue_job(
+                    JOB_ASK_CLARIFICATION,
+                    artifact_id=artifact_id,
+                    classification_id=str(classification.id),
+                )
+                log.info(f"Low confidence ({result['confidence']:.2f}) — requesting clarification")
+        except Exception as exc:
+            from src.worker.main import EVENT_ARTIFACT_FAILED, publish_event
+
+            log.exception("Failed to classify artifact %s", artifact_id)
+            await publish_event(
+                EVENT_ARTIFACT_FAILED,
+                {
+                    "artifact_id": artifact_id,
+                    "discord_message_id": artifact.discord_message_id,
+                    "discord_channel_id": artifact.discord_channel_id,
+                    "stage": "classification",
+                    "error": str(exc),
+                },
+            )
+            raise
 
 
 async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
@@ -111,36 +127,52 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
             log.error(f"Artifact {artifact_id} not found for reclassification")
             return
 
-        result = await reclassify(session, artifact.raw_text, user_answer, trace_id=trace_id)
+        try:
+            result = await reclassify(session, artifact.raw_text, user_answer, trace_id=trace_id)
 
-        meta = result.pop("_meta", {})
-        classification = await create_classification(
-            session,
-            artifact_id=artifact_uuid,
-            category=result["category"],
-            confidence=result["confidence"],
-            entities=result.get("entities", []),
-            tags=result.get("tags", []),
-            priority=result.get("priority", "medium"),
-            suggested_action=result.get("suggested_action"),
-            model_used=meta.get("model", "unknown"),
-            tokens_used=meta.get("tokens_used"),
-            cost_usd=meta.get("cost_usd"),
-            is_final=True,  # User-clarified = always final
-        )
+            meta = result.pop("_meta", {})
+            classification = await create_classification(
+                session,
+                artifact_id=artifact_uuid,
+                category=result["category"],
+                confidence=result["confidence"],
+                entities=result.get("entities", []),
+                tags=result.get("tags", []),
+                priority=result.get("priority", "medium"),
+                suggested_action=result.get("suggested_action"),
+                model_used=meta.get("model", "unknown"),
+                tokens_used=meta.get("tokens_used"),
+                cost_usd=meta.get("cost_usd"),
+                is_final=True,  # User-clarified = always final
+            )
 
-        artifact.summary = result.get("summary", artifact.raw_text[:200])
-        await session.commit()
+            artifact.summary = result.get("summary", artifact.raw_text[:200])
+            await session.commit()
 
-        # Route to embed + librarian
-        from src.worker.main import get_pool, JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN
+            # Route to embed + librarian
+            from src.worker.main import get_pool, JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN
 
-        pool = await get_pool()
-        await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
-        await pool.enqueue_job(
-            JOB_PROCESS_LIBRARIAN,
-            artifact_id=artifact_id,
-            classification_id=str(classification.id),
-        )
+            pool = await get_pool()
+            await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
+            await pool.enqueue_job(
+                JOB_PROCESS_LIBRARIAN,
+                artifact_id=artifact_id,
+                classification_id=str(classification.id),
+            )
 
-        log.info(f"Reclassified artifact {artifact_id}: {result['category']} ({result['confidence']:.2f})")
+            log.info(f"Reclassified artifact {artifact_id}: {result['category']} ({result['confidence']:.2f})")
+        except Exception as exc:
+            from src.worker.main import EVENT_ARTIFACT_FAILED, publish_event
+
+            log.exception("Failed to reclassify artifact %s", artifact_id)
+            await publish_event(
+                EVENT_ARTIFACT_FAILED,
+                {
+                    "artifact_id": artifact_id,
+                    "discord_message_id": artifact.discord_message_id,
+                    "discord_channel_id": artifact.discord_channel_id,
+                    "stage": "reclassification",
+                    "error": str(exc),
+                },
+            )
+            raise

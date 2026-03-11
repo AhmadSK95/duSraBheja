@@ -4,7 +4,9 @@ import pytest
 
 from src.worker.main import (
     JOB_PROCESS_INBOX_MESSAGE,
+    JOB_CLASSIFY_ARTIFACT,
     JOB_RECLASSIFY_ARTIFACT,
+    enqueue_classify,
     enqueue_ingest,
     enqueue_reclassify,
 )
@@ -68,6 +70,28 @@ async def test_enqueue_reclassify_uses_registered_job_name(monkeypatch) -> None:
             {
                 "artifact_id": "artifact-id",
                 "user_answer": "answer",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_classify_uses_registered_job_name(monkeypatch) -> None:
+    pool = _FakePool()
+
+    async def _fake_get_pool():
+        return pool
+
+    monkeypatch.setattr("src.worker.main.get_pool", _fake_get_pool)
+
+    await enqueue_classify("artifact-id", force_category="daily_planner")
+
+    assert pool.calls == [
+        (
+            JOB_CLASSIFY_ARTIFACT,
+            {
+                "artifact_id": "artifact-id",
+                "force_category": "daily_planner",
             },
         )
     ]

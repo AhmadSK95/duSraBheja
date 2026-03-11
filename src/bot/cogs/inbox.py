@@ -137,7 +137,7 @@ class InboxCog(commands.Cog):
         await self.bot.wait_until_ready()
         redis = Redis.from_url(settings.redis_url)
         pubsub = redis.pubsub()
-        await pubsub.subscribe("brain:artifact_processed", "brain:review_created")
+        await pubsub.subscribe("brain:artifact_processed", "brain:review_created", "brain:artifact_failed")
         try:
             while not self._listener_stop.is_set():
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -151,10 +151,12 @@ class InboxCog(commands.Cog):
                     await self._handle_artifact_processed(payload)
                 elif channel_name == "brain:review_created":
                     await self._handle_review_created(payload)
+                elif channel_name == "brain:artifact_failed":
+                    await self._handle_artifact_failed(payload)
         except asyncio.CancelledError:
             raise
         finally:
-            await pubsub.unsubscribe("brain:artifact_processed", "brain:review_created")
+            await pubsub.unsubscribe("brain:artifact_processed", "brain:review_created", "brain:artifact_failed")
             await pubsub.aclose()
             await redis.aclose()
 
@@ -171,30 +173,51 @@ class InboxCog(commands.Cog):
         source_message = await source_channel.fetch_message(int(message_id))
         await source_message.add_reaction("\u2705")
 
+        planner = payload.get("planner") or {}
+        weekly_rollup = payload.get("weekly_rollup") or {}
         receipt = discord.Embed(
-            title=f"Stored as {payload['category'].replace('_', ' ').title()}",
+            title="Brain Receipt",
             description=payload.get("summary") or payload.get("note_title") or "Stored in the brain.",
             color=discord.Color.green(),
         )
-        receipt.add_field(name="Note", value=payload.get("note_title") or "Untitled", inline=False)
+        receipt.add_field(name="Category", value=payload["category"].replace("_", " ").title(), inline=True)
         receipt.add_field(name="Confidence", value=f"{payload.get('confidence', 0):.0%}", inline=True)
         receipt.add_field(name="Stored", value="Yes", inline=True)
+        receipt.add_field(name="Note", value=payload.get("note_title") or "Untitled", inline=False)
+        receipt.add_field(
+            name="Pipeline",
+            value="Ingested -> Classified -> Stored",
+            inline=False,
+        )
         tags = payload.get("tags") or []
         if tags:
             receipt.add_field(name="Tags", value=", ".join(tags[:10]), inline=False)
+        if planner.get("dates"):
+            receipt.add_field(name="Planner Dates", value=_format_list(planner["dates"]), inline=False)
+        if planner.get("top_items"):
+            receipt.add_field(name="Top Items", value=_format_list(planner["top_items"]), inline=False)
 
         planner_message = None
+        weekly_message = None
         target_channel_name = payload.get("category_channel")
         if payload.get("category") in {"daily_planner", "weekly_planner"} and target_channel_name:
             target_channel = discord.utils.get(source_channel.guild.text_channels, name=target_channel_name)
             if target_channel:
                 planner_card = discord.Embed(
-                    title=payload.get("note_title") or payload["category"].replace("_", " ").title(),
-                    description=(payload.get("note_content_preview") or payload.get("summary") or "Planner stored.")[:4000],
+                    title=planner.get("title") or payload.get("note_title") or payload["category"].replace("_", " ").title(),
+                    description=(planner.get("summary") or payload.get("summary") or "Planner stored.")[:4000],
                     color=discord.Color.purple() if payload["category"] == "daily_planner" else discord.Color.dark_purple(),
                 )
                 planner_card.add_field(name="Type", value=payload["category"].replace("_", " ").title(), inline=True)
                 planner_card.add_field(name="Status", value="Ingested", inline=True)
+                if planner.get("dates"):
+                    planner_card.add_field(name="Dates", value=_format_list(planner["dates"]), inline=False)
+                if planner.get("top_items"):
+                    planner_card.add_field(name="Top Items", value=_format_list(planner["top_items"]), inline=False)
+                if planner.get("focus_projects"):
+                    planner_card.add_field(name="Projects", value=_format_list(planner["focus_projects"]), inline=False)
+                if planner.get("focus_people"):
+                    planner_card.add_field(name="People", value=_format_list(planner["focus_people"]), inline=False)
                 planner_card.add_field(
                     name="Source",
                     value=f"[Open original]({source_message.jump_url})",
@@ -203,10 +226,31 @@ class InboxCog(commands.Cog):
                 planner_message = await target_channel.send(embed=planner_card)
                 await source_message.add_reaction("\U0001f4c5")
 
+        if weekly_rollup:
+            weekly_channel = discord.utils.get(source_channel.guild.text_channels, name="weekly-planner")
+            if weekly_channel:
+                weekly_card = discord.Embed(
+                    title=weekly_rollup.get("title") or "Weekly Rollup",
+                    description=weekly_rollup.get("summary") or "Weekly planner rollup updated.",
+                    color=discord.Color.dark_purple(),
+                )
+                if weekly_rollup.get("dates"):
+                    weekly_card.add_field(name="Dates", value=_format_list(weekly_rollup["dates"]), inline=False)
+                if weekly_rollup.get("top_items"):
+                    weekly_card.add_field(name="Top Items", value=_format_list(weekly_rollup["top_items"]), inline=False)
+                weekly_card.add_field(name="Source", value=f"[Open original]({source_message.jump_url})", inline=False)
+                weekly_message = await weekly_channel.send(embed=weekly_card)
+
         if planner_message:
             receipt.add_field(
                 name="Planner Card",
                 value=f"[Open card]({planner_message.jump_url})",
+                inline=False,
+            )
+        if weekly_message:
+            receipt.add_field(
+                name="Weekly Rollup",
+                value=f"[Open card]({weekly_message.jump_url})",
                 inline=False,
             )
 
@@ -239,6 +283,28 @@ class InboxCog(commands.Cog):
         async with async_session() as session:
             await set_review_thread(session, payload["review_id"], str(thread.id))
 
+    async def _handle_artifact_failed(self, payload: dict):
+        channel_id = payload.get("discord_channel_id")
+        message_id = payload.get("discord_message_id")
+        if not channel_id or not message_id:
+            return
+
+        channel = await self.bot.fetch_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        message = await channel.fetch_message(int(message_id))
+        await message.add_reaction("\u274c")
+        embed = discord.Embed(
+            title="Brain Processing Failed",
+            description="This message was seen, but it was not fully stored yet.",
+            color=discord.Color.red(),
+        )
+        embed.add_field(name="Stage", value=str(payload.get("stage") or "unknown").title(), inline=True)
+        embed.add_field(name="Stored", value="No", inline=True)
+        embed.add_field(name="Error", value=(payload.get("error") or "Unknown error")[:1000], inline=False)
+        await message.reply(embed=embed, mention_author=False)
+
 
 async def post_to_channel(
     bot: commands.Bot,
@@ -258,6 +324,13 @@ async def post_to_channel(
         return None
 
     return await channel.send(embed=embed)
+
+
+def _format_list(values: list[str], *, limit: int = 6) -> str:
+    trimmed = [value for value in values if value][:limit]
+    if not trimmed:
+        return "None"
+    return "\n".join(f"- {value[:120]}" for value in trimmed)
 
 
 def build_classification_embed(classification: dict, summary: str, artifact_id: str) -> discord.Embed:

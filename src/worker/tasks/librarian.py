@@ -12,12 +12,17 @@ from src.lib.store import (
     create_note,
     find_notes_by_title,
     get_artifact,
+    get_note,
+    get_related,
     update_note,
 )
 from src.models import Classification
+from src.services.planner import build_planner_payload, merge_weekly_rollup
 from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
 
 log = logging.getLogger("brain-worker.librarian")
+
+PLANNER_CATEGORIES = {"daily_planner", "weekly_planner"}
 
 
 async def process_librarian(ctx, artifact_id: str, classification_id: str):
@@ -36,103 +41,262 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
             log.error(f"Classification {classification_id} not found")
             return
 
-        classification_data = {
-            "category": normalize_category(classification.category),
-            "confidence": classification.confidence,
-            "entities": classification.entities or [],
-            "tags": list(classification.tags or []),
-            "summary": artifact.summary or "",
+        try:
+            classification_data = {
+                "category": normalize_category(classification.category),
+                "confidence": classification.confidence,
+                "entities": classification.entities or [],
+                "tags": list(classification.tags or []),
+                "summary": artifact.summary or "",
+            }
+
+            artifact_note = await _get_existing_artifact_note(session, artifact_uuid)
+            planner_payload = None
+
+            if classification.category in PLANNER_CATEGORIES:
+                planner_payload = build_planner_payload(
+                    artifact.raw_text,
+                    classification_data,
+                    fallback_summary=artifact.summary or "",
+                )
+                note_id, note_title, note_content = await _upsert_planner_note(
+                    session,
+                    artifact_note,
+                    classification,
+                    planner_payload,
+                )
+            else:
+                note_id, note_title, note_content = await _upsert_canonical_note(
+                    session,
+                    classification,
+                    classification_data,
+                    artifact.raw_text,
+                    artifact_note,
+                )
+
+            if artifact_note is None:
+                await create_link(
+                    session,
+                    source_type="artifact",
+                    source_id=artifact_uuid,
+                    target_type="note",
+                    target_id=note_id,
+                    relation="derived_from",
+                )
+
+            weekly_rollup = None
+            if classification.category == "daily_planner" and planner_payload:
+                weekly_rollup = await _upsert_weekly_rollup(
+                    session,
+                    artifact_uuid,
+                    note_id,
+                    planner_payload,
+                )
+
+            project_note_id = note_id if classification.category == "project" else None
+            await create_journal_entry(
+                session,
+                artifact_id=artifact_uuid,
+                project_note_id=project_note_id,
+                entry_type="artifact_ingested",
+                actor_type="human" if artifact.source in {"discord", "manual", "command"} else "agent",
+                actor_name=artifact.source,
+                title=artifact.summary or note_title,
+                body_markdown=artifact.raw_text,
+                summary=artifact.summary or note_title,
+                tags=list(classification.tags or []),
+                source_links=[],
+                metadata_={"category": classification.category, "note_id": str(note_id)},
+            )
+
+            await publish_event(
+                EVENT_ARTIFACT_PROCESSED,
+                {
+                    "artifact_id": str(artifact_uuid),
+                    "discord_message_id": artifact.discord_message_id,
+                    "discord_channel_id": artifact.discord_channel_id,
+                    "source": artifact.source,
+                    "summary": artifact.summary or note_title,
+                    "category": classification.category,
+                    "confidence": float(classification.confidence or 0),
+                    "tags": list(classification.tags or []),
+                    "note_id": str(note_id),
+                    "note_title": note_title,
+                    "note_content_preview": (note_content or "")[:1200],
+                    "category_channel": CATEGORY_CHANNELS.get(classification.category),
+                    "planner": planner_payload["card"] if planner_payload else None,
+                    "weekly_rollup": weekly_rollup,
+                },
+            )
+        except Exception as exc:
+            from src.worker.main import EVENT_ARTIFACT_FAILED
+
+            log.exception("Failed librarian processing for artifact %s", artifact_id)
+            await publish_event(
+                EVENT_ARTIFACT_FAILED,
+                {
+                    "artifact_id": str(artifact_uuid),
+                    "discord_message_id": artifact.discord_message_id,
+                    "discord_channel_id": artifact.discord_channel_id,
+                    "stage": "librarian",
+                    "error": str(exc),
+                },
+            )
+            raise
+
+
+async def _get_existing_artifact_note(session, artifact_uuid: uuid.UUID):
+    links = await get_related(session, "artifact", artifact_uuid)
+    for link in links:
+        if link.target_type != "note" or link.relation != "derived_from":
+            continue
+        note = await get_note(session, link.target_id)
+        if note:
+            return note
+    return None
+
+
+async def _upsert_planner_note(session, artifact_note, classification, planner_payload: dict):
+    if artifact_note:
+        await update_note(
+            session,
+            artifact_note.id,
+            category=classification.category,
+            title=planner_payload["title"],
+            content=planner_payload["content"],
+            tags=planner_payload["tags"],
+            priority=classification.priority or "medium",
+            metadata_=planner_payload["metadata"],
+        )
+        note_id = artifact_note.id
+        log.info("Updated planner note %s: %s", note_id, planner_payload["title"])
+    else:
+        note = await create_note(
+            session,
+            category=classification.category,
+            title=planner_payload["title"],
+            content=planner_payload["content"],
+            tags=planner_payload["tags"],
+            priority=classification.priority or "medium",
+            metadata_=planner_payload["metadata"],
+        )
+        note_id = note.id
+        log.info("Created planner note %s: %s", note_id, planner_payload["title"])
+
+    return note_id, planner_payload["title"], planner_payload["content"]
+
+
+async def _upsert_canonical_note(session, classification, classification_data: dict, artifact_text: str, artifact_note):
+    existing_note = artifact_note
+    existing_note_content = artifact_note.content if artifact_note else None
+
+    if existing_note is None and classification.category in MERGEABLE_CATEGORIES:
+        entity_names = [
+            e["value"]
+            for e in (classification.entities or [])
+            if e.get("type") in ("person", "project")
+        ]
+
+        for name in entity_names:
+            matches = await find_notes_by_title(session, name, classification.category)
+            if matches:
+                existing_note = matches[0]
+                existing_note_content = existing_note.content
+                break
+
+    result = await process_artifact(
+        session,
+        artifact_text=artifact_text,
+        classification=classification_data,
+        existing_note_content=existing_note_content,
+    )
+
+    if existing_note:
+        await update_note(
+            session,
+            existing_note.id,
+            content=result["content"],
+            title=result["title"],
+            tags=result.get("tags", list(classification.tags or [])),
+            priority=classification.priority or "medium",
+        )
+        note_id = existing_note.id
+        log.info("Updated note %s: %s", note_id, result["title"])
+    else:
+        note = await create_note(
+            session,
+            category=classification.category,
+            title=result["title"],
+            content=result["content"],
+            tags=result.get("tags", list(classification.tags or [])),
+            priority=classification.priority or "medium",
+        )
+        note_id = note.id
+        log.info("Created note %s: %s", note_id, result["title"])
+
+    return note_id, result["title"], result["content"]
+
+
+async def _upsert_weekly_rollup(session, artifact_uuid: uuid.UUID, planner_note_id, planner_payload: dict):
+    if not planner_payload["metadata"].get("week_start"):
+        return None
+
+    merged_payload, changed = merge_weekly_rollup({}, planner_payload, artifact_uuid)
+    week_title = merged_payload["title"]
+
+    matches = await find_notes_by_title(session, week_title, "weekly_planner")
+    weekly_note = matches[0] if matches else None
+    if weekly_note:
+        merged_payload, changed = merge_weekly_rollup(weekly_note.metadata_ or {}, planner_payload, artifact_uuid)
+
+    if not changed:
+        return {
+            "title": merged_payload["card"]["title"],
+            "summary": merged_payload["card"]["summary"],
+            "dates": merged_payload["card"]["dates"],
+            "top_items": merged_payload["card"]["top_items"],
         }
 
-        # For People and Projects, try to find existing note to merge into
-        existing_note = None
-        existing_note_content = None
-
-        if classification.category in MERGEABLE_CATEGORIES:
-            # Search for existing note by entity names
-            entity_names = [
-                e["value"]
-                for e in (classification.entities or [])
-                if e.get("type") in ("person", "project")
-            ]
-
-            for name in entity_names:
-                matches = await find_notes_by_title(session, name, classification.category)
-                if matches:
-                    existing_note = matches[0]
-                    existing_note_content = existing_note.content
-                    break
-
-        # Call librarian agent
-        result = await process_artifact(
+    if weekly_note:
+        await update_note(
             session,
-            artifact_text=artifact.raw_text,
-            classification=classification_data,
-            existing_note_content=existing_note_content,
+            weekly_note.id,
+            category="weekly_planner",
+            title=merged_payload["title"],
+            content=merged_payload["content"],
+            tags=merged_payload["tags"],
+            metadata_=merged_payload["metadata"],
         )
+        weekly_note_id = weekly_note.id
+    else:
+        weekly_note = await create_note(
+            session,
+            category="weekly_planner",
+            title=merged_payload["title"],
+            content=merged_payload["content"],
+            tags=merged_payload["tags"],
+            priority="medium",
+            metadata_=merged_payload["metadata"],
+        )
+        weekly_note_id = weekly_note.id
 
-        # Create or update note
-        if result["action"] == "update" and existing_note:
-            await update_note(
-                session,
-                existing_note.id,
-                content=result["content"],
-                tags=result.get("tags", list(classification.tags or [])),
-            )
-            note_id = existing_note.id
-            log.info(f"Updated note {note_id}: {existing_note.title}")
-        else:
-            note = await create_note(
-                session,
-                category=classification.category,
-                title=result["title"],
-                content=result["content"],
-                tags=result.get("tags", list(classification.tags or [])),
-                priority=classification.priority or "medium",
-            )
-            note_id = note.id
-            log.info(f"Created note {note_id}: {result['title']}")
-
-        # Link artifact → note
+    note_links = await get_related(session, "note", planner_note_id)
+    if not any(
+        link.target_type == "note" and link.target_id == weekly_note_id and link.relation == "rolls_up_to"
+        for link in note_links
+    ):
         await create_link(
             session,
-            source_type="artifact",
-            source_id=artifact_uuid,
+            source_type="note",
+            source_id=planner_note_id,
             target_type="note",
-            target_id=note_id,
-            relation="derived_from",
+            target_id=weekly_note_id,
+            relation="rolls_up_to",
         )
 
-        project_note_id = note_id if classification.category == "project" else None
-        await create_journal_entry(
-            session,
-            artifact_id=artifact_uuid,
-            project_note_id=project_note_id,
-            entry_type="artifact_ingested",
-            actor_type="human" if artifact.source in {"discord", "manual", "command"} else "agent",
-            actor_name=artifact.source,
-            title=artifact.summary or result["title"],
-            body_markdown=artifact.raw_text,
-            summary=artifact.summary or result["title"],
-            tags=list(classification.tags or []),
-            source_links=[],
-            metadata_={"category": classification.category, "note_id": str(note_id)},
-        )
-
-        await publish_event(
-            EVENT_ARTIFACT_PROCESSED,
-            {
-                "artifact_id": str(artifact_uuid),
-                "discord_message_id": artifact.discord_message_id,
-                "discord_channel_id": artifact.discord_channel_id,
-                "source": artifact.source,
-                "summary": artifact.summary or result["title"],
-                "category": classification.category,
-                "confidence": float(classification.confidence or 0),
-                "tags": list(classification.tags or []),
-                "note_id": str(note_id),
-                "note_title": result["title"],
-                "note_content_preview": (result["content"] or "")[:1200],
-                "category_channel": CATEGORY_CHANNELS.get(classification.category),
-            },
-        )
+    return {
+        "title": merged_payload["card"]["title"],
+        "summary": merged_payload["card"]["summary"],
+        "dates": merged_payload["card"]["dates"],
+        "top_items": merged_payload["card"]["top_items"],
+    }

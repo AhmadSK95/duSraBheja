@@ -23,6 +23,7 @@ JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
+EVENT_ARTIFACT_FAILED = "brain:artifact_failed"
 
 
 async def get_pool() -> ArqRedis:
@@ -57,6 +58,11 @@ async def enqueue_ingest(
 async def enqueue_reclassify(artifact_id: str, user_answer: str):
     pool = await get_pool()
     await pool.enqueue_job(JOB_RECLASSIFY_ARTIFACT, artifact_id=artifact_id, user_answer=user_answer)
+
+
+async def enqueue_classify(artifact_id: str, force_category: str | None = None):
+    pool = await get_pool()
+    await pool.enqueue_job(JOB_CLASSIFY_ARTIFACT, artifact_id=artifact_id, force_category=force_category)
 
 
 async def publish_event(channel: str, payload: dict) -> None:

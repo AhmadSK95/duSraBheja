@@ -1,12 +1,15 @@
 """Classifier agent — Claude Haiku 4.5 structured classification."""
 
-import json
+import re
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.base import agent_call
 from src.config import settings
+from src.constants import normalize_category, normalize_tags
+from src.lib.llm_json import LLMJSONError, parse_json_object
+from src.services.planner import extract_planner_dates
 
 SYSTEM_PROMPT = """You are a personal knowledge classifier for a second brain system.
 
@@ -61,7 +64,7 @@ async def classify(
         trace_id=trace_id,
     )
 
-    parsed = json.loads(result["text"])
+    parsed = _parse_classifier_response(result["text"], text)
     parsed["_meta"] = {
         "model": result["model"],
         "tokens_used": result["input_tokens"] + result["output_tokens"],
@@ -96,7 +99,7 @@ Classify this input considering the user's clarification."""
         trace_id=trace_id,
     )
 
-    parsed = json.loads(result["text"])
+    parsed = _parse_classifier_response(result["text"], original_text)
     parsed["_meta"] = {
         "model": result["model"],
         "tokens_used": result["input_tokens"] + result["output_tokens"],
@@ -104,3 +107,79 @@ Classify this input considering the user's clarification."""
         "duration_ms": result["duration_ms"],
     }
     return parsed
+
+
+def _parse_classifier_response(response_text: str, original_text: str) -> dict:
+    try:
+        parsed = parse_json_object(response_text)
+    except LLMJSONError:
+        parsed = _fallback_classification(original_text)
+
+    category = normalize_category(parsed.get("category"))
+    confidence = parsed.get("confidence", 0.4)
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0.4
+    confidence = min(max(confidence, 0.0), 1.0)
+
+    entities = []
+    for entity in parsed.get("entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        entity_type = str(entity.get("type") or "").strip()
+        entity_value = str(entity.get("value") or "").strip()
+        if entity_type and entity_value:
+            entities.append({"type": entity_type, "value": entity_value})
+
+    return {
+        "category": category,
+        "confidence": confidence,
+        "entities": entities,
+        "tags": normalize_tags(parsed.get("tags") or []),
+        "priority": str(parsed.get("priority") or "medium").lower(),
+        "suggested_action": parsed.get("suggested_action"),
+        "summary": str(parsed.get("summary") or original_text[:200]).strip(),
+    }
+
+
+def _fallback_classification(text: str) -> dict:
+    dates = extract_planner_dates(text)
+    bullet_count = sum(
+        1
+        for line in (text or "").splitlines()
+        if line.strip().startswith(("→", "-", "*", "•"))
+    )
+    if dates and (bullet_count >= 3 or len(dates) >= 2):
+        category = "weekly_planner" if len(dates) >= 3 else "daily_planner"
+        scope = "week" if category == "weekly_planner" else "day"
+        return {
+            "category": category,
+            "confidence": 0.82 if category == "weekly_planner" else 0.78,
+            "entities": [{"type": "date", "value": item["label"]} for item in dates[:10]],
+            "tags": ["planner", "classifier-fallback"],
+            "priority": "medium",
+            "suggested_action": f"Store this as a {scope} planner and surface the top items.",
+            "summary": f"Planner capture covering {len(dates)} date entries.",
+        }
+
+    lowered = (text or "").lower()
+    if re.search(r"\b(todo|follow up|apply to|interview prep|need to)\b", lowered):
+        category = "task"
+        confidence = 0.58
+    elif re.search(r"\b(project|prototype|launch|website|build|integration)\b", lowered):
+        category = "project"
+        confidence = 0.55
+    else:
+        category = "note"
+        confidence = 0.4
+
+    return {
+        "category": category,
+        "confidence": confidence,
+        "entities": [],
+        "tags": ["classifier-fallback"],
+        "priority": "medium",
+        "suggested_action": "Review this capture and confirm the category if needed.",
+        "summary": (text or "Unstructured capture").strip()[:200],
+    }
