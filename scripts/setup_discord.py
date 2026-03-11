@@ -10,18 +10,11 @@ from src.config import settings
 
 CHANNELS = [
     ("inbox", "Drop anything here — the brain will classify and route it"),
-    ("tasks", "Actionable items with deadlines"),
-    ("projects", "Multi-step initiatives and ongoing efforts"),
-    ("people", "Contacts and notes about people"),
-    ("ideas", "Brainstorms, concepts, and creative thoughts"),
-    ("notes", "General knowledge and durable notes"),
-    ("resources", "References, guides, links, and reusable assets"),
-    ("reminders", "Time-bound alerts"),
     ("daily-planner", "Daily planning entries and screenshots"),
     ("weekly-planner", "Weekly planning entries and screenshots"),
     ("needs-review", "Items that need your clarification"),
-    ("daily-digest", "Morning digest with tasks, progress, and recommendations"),
-    ("ask-brain", "Ask questions and get answers from your brain"),
+    ("daily-digest", "Morning digest with tasks, project progress, and recommendations"),
+    ("ask-brain", "Operator channel for asking the brain questions and reviewing outputs"),
 ]
 
 
@@ -41,7 +34,7 @@ async def main():
         print(f"Guild: {guild.name}")
         print(f"Existing channels: {existing}")
 
-        # Create a category for brain channels
+        # Create a category for the main brain operator channels
         category = discord.utils.get(guild.categories, name="BRAIN")
         if not category:
             category = await guild.create_category("BRAIN")
