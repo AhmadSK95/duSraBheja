@@ -39,11 +39,13 @@ if [[ "${COLLECTOR_API_BASE_URL}" == http://127.0.0.1:* || "${COLLECTOR_API_BASE
 fi
 
 if [[ -x "${VENV_PYTHON}" ]] && "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
-  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" exec "${VENV_PYTHON}" -m src.collector.main "${MODE}"
+  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" "${VENV_PYTHON}" -m src.collector.main "${MODE}"
+  exit $?
 fi
 
 if command -v python3.12 >/dev/null 2>&1; then
-  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" exec python3.12 -m src.collector.main "${MODE}"
+  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" python3.12 -m src.collector.main "${MODE}"
+  exit $?
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -60,7 +62,7 @@ if [[ "${DOCKER_COLLECTOR_API_BASE_URL}" == http://127.0.0.1:* || "${DOCKER_COLL
   DOCKER_COLLECTOR_API_BASE_URL="http://host.docker.internal:${COLLECTOR_TUNNEL_PORT}"
 fi
 
-exec docker run --rm \
+docker run --rm \
   -v "${ROOT_DIR}:/app" \
   -w /app \
   --env-file "${ROOT_DIR}/.env" \
@@ -68,3 +70,4 @@ exec docker run --rm \
   -e COLLECTOR_API_BASE_URL="${DOCKER_COLLECTOR_API_BASE_URL}" \
   "${DOCKER_IMAGE}" \
   python -m src.collector.main "${MODE}"
+exit $?
