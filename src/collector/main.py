@@ -158,20 +158,39 @@ def discover_context_workspaces(search_roots: list[Path], repo_roots: list[Path]
 
 def collect_context_files(root: Path, max_depth: int) -> list[dict]:
     entries = []
-    for current_path, files in iter_tree(root, max_depth) or []:
-        for path in sorted(files):
-            relative_parts = path.relative_to(root).parts
-            in_signal_dir = any(part in SIGNAL_DIR_NAMES for part in relative_parts)
-            if not in_signal_dir and not is_text_like(path):
-                continue
-            if not in_signal_dir and path.name.lower() not in ROOT_CONTEXT_FILE_NAMES and not path.name.lower().startswith("readme"):
-                continue
 
+    try:
+        top_level_entries = sorted(root.iterdir(), key=lambda path: path.name.lower())
+    except OSError:
+        return entries
+
+    for path in top_level_entries:
+        if path.is_file() and (
+            path.name.lower() in ROOT_CONTEXT_FILE_NAMES or path.name.lower().startswith("readme")
+        ):
             entries.append({
                 "path": str(path),
                 "relative_path": str(path.relative_to(root)),
                 "content": read_text_excerpt(path),
             })
+
+        if not path.is_dir() or path.name not in SIGNAL_DIR_NAMES:
+            continue
+
+        signal_root_depth = len(path.parts)
+        for current_path, dirnames, files in os.walk(path):
+            current_dir = Path(current_path)
+            relative_depth = len(current_dir.parts) - signal_root_depth
+            if relative_depth >= max_depth:
+                dirnames[:] = []
+
+            for file_name in sorted(files):
+                file_path = current_dir / file_name
+                entries.append({
+                    "path": str(file_path),
+                    "relative_path": str(file_path.relative_to(root)),
+                    "content": read_text_excerpt(file_path),
+                })
     return entries
 
 
