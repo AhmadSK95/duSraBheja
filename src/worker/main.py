@@ -12,6 +12,14 @@ log = logging.getLogger("brain-worker")
 
 _pool: ArqRedis | None = None
 
+JOB_PROCESS_INBOX_MESSAGE = "src.worker.tasks.ingest.process_inbox_message"
+JOB_CLASSIFY_ARTIFACT = "src.worker.tasks.classify.classify_artifact"
+JOB_RECLASSIFY_ARTIFACT = "src.worker.tasks.classify.reclassify_artifact"
+JOB_ASK_CLARIFICATION = "src.worker.tasks.clarify.ask_clarification"
+JOB_GENERATE_EMBEDDINGS = "src.worker.tasks.embed.generate_embeddings"
+JOB_PROCESS_LIBRARIAN = "src.worker.tasks.librarian.process_librarian"
+JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
+
 
 async def get_pool() -> ArqRedis:
     global _pool
@@ -32,7 +40,7 @@ async def enqueue_ingest(
 ):
     pool = await get_pool()
     await pool.enqueue_job(
-        "process_inbox_message",
+        JOB_PROCESS_INBOX_MESSAGE,
         discord_message_id=discord_message_id,
         discord_channel_id=discord_channel_id,
         text=text,
@@ -44,7 +52,7 @@ async def enqueue_ingest(
 
 async def enqueue_reclassify(artifact_id: str, user_answer: str):
     pool = await get_pool()
-    await pool.enqueue_job("reclassify_artifact", artifact_id=artifact_id, user_answer=user_answer)
+    await pool.enqueue_job(JOB_RECLASSIFY_ARTIFACT, artifact_id=artifact_id, user_answer=user_answer)
 
 
 # ── Worker class (ARQ entrypoint) ───────────────────────────────
@@ -55,18 +63,18 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
 
     functions = [
-        "src.worker.tasks.ingest.process_inbox_message",
-        "src.worker.tasks.classify.classify_artifact",
-        "src.worker.tasks.classify.reclassify_artifact",
-        "src.worker.tasks.clarify.ask_clarification",
-        "src.worker.tasks.embed.generate_embeddings",
-        "src.worker.tasks.librarian.process_librarian",
-        "src.worker.tasks.digest.generate_daily_digest",
+        JOB_PROCESS_INBOX_MESSAGE,
+        JOB_CLASSIFY_ARTIFACT,
+        JOB_RECLASSIFY_ARTIFACT,
+        JOB_ASK_CLARIFICATION,
+        JOB_GENERATE_EMBEDDINGS,
+        JOB_PROCESS_LIBRARIAN,
+        JOB_GENERATE_DAILY_DIGEST,
     ]
 
     cron_jobs = [
         cron(
-            "src.worker.tasks.digest.generate_daily_digest",
+            JOB_GENERATE_DAILY_DIGEST,
             hour=settings.digest_cron_hour,
             minute=0,
         )

@@ -90,11 +90,11 @@ async def process_inbox_message(
         log.info(f"Created artifact {artifact.id} (type={content_type})")
 
         # Enqueue classification
-        from src.worker.main import get_pool
+        from src.worker.main import get_pool, JOB_CLASSIFY_ARTIFACT
 
         pool = await get_pool()
         await pool.enqueue_job(
-            "classify_artifact",
+            JOB_CLASSIFY_ARTIFACT,
             artifact_id=str(artifact.id),
             force_category=force_category,
         )

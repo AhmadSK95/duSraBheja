@@ -72,15 +72,20 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
         await session.commit()
 
         # Route based on confidence
-        from src.worker.main import get_pool
+        from src.worker.main import (
+            get_pool,
+            JOB_ASK_CLARIFICATION,
+            JOB_GENERATE_EMBEDDINGS,
+            JOB_PROCESS_LIBRARIAN,
+        )
 
         pool = await get_pool()
 
         if result["confidence"] >= settings.confidence_threshold:
             # High confidence → embed + librarian + route to channel
-            await pool.enqueue_job("generate_embeddings", artifact_id=artifact_id)
+            await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
             await pool.enqueue_job(
-                "process_librarian",
+                JOB_PROCESS_LIBRARIAN,
                 artifact_id=artifact_id,
                 classification_id=str(classification.id),
             )
@@ -88,7 +93,7 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
         else:
             # Low confidence → ask clarification
             await pool.enqueue_job(
-                "ask_clarification",
+                JOB_ASK_CLARIFICATION,
                 artifact_id=artifact_id,
                 classification_id=str(classification.id),
             )
@@ -128,12 +133,12 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
         await session.commit()
 
         # Route to embed + librarian
-        from src.worker.main import get_pool
+        from src.worker.main import get_pool, JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN
 
         pool = await get_pool()
-        await pool.enqueue_job("generate_embeddings", artifact_id=artifact_id)
+        await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
         await pool.enqueue_job(
-            "process_librarian",
+            JOB_PROCESS_LIBRARIAN,
             artifact_id=artifact_id,
             classification_id=str(classification.id),
         )
