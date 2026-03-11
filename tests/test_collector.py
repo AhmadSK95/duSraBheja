@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -108,9 +109,24 @@ def test_run_git_returns_empty_string_on_timeout(tmp_path: Path, monkeypatch) ->
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    def _raise_timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=["git", "status"], timeout=5)
+    kill_calls: list[tuple[int, int]] = []
 
-    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+    class _TimeoutPopen:
+        pid = 12345
+        returncode = None
+
+        def __init__(self, *args, **kwargs):
+            assert kwargs["start_new_session"] is True
+            assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd=["git", "status"], timeout=timeout)
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", _TimeoutPopen)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: kill_calls.append((pid, sig)))
 
     assert run_git(["status"], cwd=repo) == ""
+    assert kill_calls == [(12345, 9)]

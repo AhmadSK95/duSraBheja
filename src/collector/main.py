@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,21 +70,35 @@ def save_state(path: Path, payload: dict) -> None:
 
 
 def run_git(args: list[str], cwd: Path) -> str:
+    process = subprocess.Popen(
+        ["git", *args],
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        env={
+            "GCM_INTERACTIVE": "Never",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            **os.environ,
+        },
+    )
     try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
-            env={"GIT_OPTIONAL_LOCKS": "0", **os.environ},
-        )
+        stdout, _ = process.communicate(timeout=GIT_COMMAND_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
         return ""
-    if result.returncode != 0:
+    if process.returncode != 0:
         return ""
-    return result.stdout.strip()
+    return stdout.strip()
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -198,7 +213,7 @@ def build_repo_snapshot(root: Path, *, max_depth: int) -> dict | None:
     if not (root / ".git").exists():
         return None
 
-    remote_url = run_git(["remote", "get-url", "origin"], cwd=root)
+    remote_url = run_git(["config", "--get", "remote.origin.url"], cwd=root)
     branch = run_git(["branch", "--show-current"], cwd=root)
     recent_commits = run_git(["log", "--oneline", "-n", "5"], cwd=root)
     diff_summary = run_git(["diff", "--stat", "HEAD~1..HEAD"], cwd=root)
