@@ -6,11 +6,11 @@
   <string>com.dusrabheja.collector</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/moenuddeenahmadshaik/Desktop/duSraBheja/scripts/run_collector.sh</string>
+	<string>/Users/moenuddeenahmadshaik/code/duSraBheja/scripts/run_collector.sh</string>
     <string>sync</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/moenuddeenahmadshaik/Desktop/duSraBheja</string>
+	<string>/Users/moenuddeenahmadshaik/code/duSraBheja</string>
   <key>StartCalendarInterval</key>
   <array>
     <dict>
