@@ -462,7 +462,7 @@ async def post_entries(entries: list[dict], *, mode: str) -> dict:
         return response.json()
 
 
-async def run(mode: str) -> dict:
+def prepare_payload_bundle(mode: str) -> tuple[dict, dict, Path]:
     from src.config import settings
 
     roots = select_collection_roots(mode)
@@ -475,11 +475,22 @@ async def run(mode: str) -> dict:
         scan_max_depth=settings.collector_scan_max_depth,
         inventory_recent_files_limit=settings.collector_inventory_recent_files_limit,
     )
-    if not entries:
+    payload = {
+        "source_name": "mac-collector",
+        "mode": mode,
+        "device_name": settings.collector_device_name,
+        "entries": entries,
+    }
+    return payload, next_state, state_path
+
+
+async def run(mode: str) -> dict:
+    payload, next_state, state_path = prepare_payload_bundle(mode)
+    if not payload["entries"]:
         save_state(state_path, next_state)
         return {"status": "noop", "items_seen": 0}
 
-    response = await post_entries(entries, mode=mode)
+    response = await post_entries(payload["entries"], mode=mode)
     save_state(state_path, next_state)
     return response
 
@@ -487,9 +498,29 @@ async def run(mode: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Brain collector")
     parser.add_argument("mode", choices=["bootstrap", "sync"])
+    parser.add_argument("--prepare-dir", dest="prepare_dir")
     args = parser.parse_args()
 
     import asyncio
+
+    if args.prepare_dir:
+        payload, next_state, state_path = prepare_payload_bundle(args.mode)
+        prepare_dir = Path(args.prepare_dir).expanduser().resolve()
+        prepare_dir.mkdir(parents=True, exist_ok=True)
+        (prepare_dir / "payload.json").write_text(json.dumps(payload, indent=2))
+        (prepare_dir / "next_state.json").write_text(json.dumps(next_state, indent=2, sort_keys=True))
+        (prepare_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "mode": args.mode,
+                    "items_seen": len(payload["entries"]),
+                    "state_path": str(state_path),
+                },
+                indent=2,
+            )
+        )
+        print(json.dumps({"status": "prepared", "items_seen": len(payload["entries"])}))
+        return
 
     result = asyncio.run(run(args.mode))
     print(json.dumps(result, indent=2))

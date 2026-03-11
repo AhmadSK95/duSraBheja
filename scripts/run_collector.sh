@@ -5,13 +5,12 @@ MODE="${1:-sync}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PYTHON="${ROOT_DIR}/.venv/bin/python"
 DOCKER_IMAGE="${DOCKER_IMAGE:-dusrabheja-local-collector:latest}"
-COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL:-http://127.0.0.1:18000}"
-DEFAULT_TUNNEL_PORT="${COLLECTOR_API_BASE_URL##*:}"
-if [[ "${DEFAULT_TUNNEL_PORT}" == "${COLLECTOR_API_BASE_URL}" ]]; then
-  DEFAULT_TUNNEL_PORT="18000"
-fi
-COLLECTOR_TUNNEL_PORT="${COLLECTOR_TUNNEL_PORT:-${DEFAULT_TUNNEL_PORT}}"
-TUNNEL_PID=""
+SERVER_USER="${SERVER_USER:-deployer}"
+SERVER_HOST="${SERVER_HOST:-104.131.63.231}"
+SERVER_SSH_KEY="${SERVER_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+REMOTE_APP_DIR="${REMOTE_APP_DIR:-/opt/dusrabheja}"
+PREP_DIR="$(mktemp -d /tmp/dusrabheja-collector.XXXXXX)"
+PARSE_PYTHON=""
 
 case "${MODE}" in
   bootstrap|sync) ;;
@@ -21,53 +20,96 @@ case "${MODE}" in
     ;;
 esac
 
-cd "${ROOT_DIR}"
-export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/dusrabheja-pycache}"
-
 cleanup() {
-  if [[ -n "${TUNNEL_PID}" ]]; then
-    kill "${TUNNEL_PID}" >/dev/null 2>&1 || true
-  fi
+  rm -rf "${PREP_DIR}"
 }
 
 trap cleanup EXIT
 
-if [[ "${COLLECTOR_API_BASE_URL}" == http://127.0.0.1:* || "${COLLECTOR_API_BASE_URL}" == http://localhost:* ]]; then
-  LOCAL_PORT="${COLLECTOR_TUNNEL_PORT}" ./scripts/open_collector_tunnel.sh &
-  TUNNEL_PID=$!
-  sleep 2
+cd "${ROOT_DIR}"
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/dusrabheja-pycache}"
+
+run_prepare_native() {
+  if [[ -x "${VENV_PYTHON}" ]] && "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+    PARSE_PYTHON="${VENV_PYTHON}"
+    "${VENV_PYTHON}" -m src.collector.main "${MODE}" --prepare-dir "${PREP_DIR}"
+    return 0
+  fi
+
+  if command -v python3.12 >/dev/null 2>&1; then
+    PARSE_PYTHON="$(command -v python3.12)"
+    python3.12 -m src.collector.main "${MODE}" --prepare-dir "${PREP_DIR}"
+    return 0
+  fi
+
+  return 1
+}
+
+run_prepare_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Need Python 3.12+ or Docker to run the collector." >&2
+    exit 1
+  fi
+
+  if ! docker image inspect "${DOCKER_IMAGE}" >/dev/null 2>&1; then
+    docker build -t "${DOCKER_IMAGE}" "${ROOT_DIR}"
+  fi
+
+  docker run --rm \
+    -v "${ROOT_DIR}:/app" \
+    -v "${PREP_DIR}:${PREP_DIR}" \
+    -w /app \
+    --env-file "${ROOT_DIR}/.env" \
+    -e PYTHONPYCACHEPREFIX=/tmp/dusrabheja-pycache \
+    "${DOCKER_IMAGE}" \
+    python -m src.collector.main "${MODE}" --prepare-dir "${PREP_DIR}"
+}
+
+if ! run_prepare_native; then
+  run_prepare_docker
 fi
 
-if [[ -x "${VENV_PYTHON}" ]] && "${VENV_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
-  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" "${VENV_PYTHON}" -m src.collector.main "${MODE}"
-  exit $?
+if [[ -z "${PARSE_PYTHON}" ]]; then
+  if [[ -x "${VENV_PYTHON}" ]]; then
+    PARSE_PYTHON="${VENV_PYTHON}"
+  else
+    PARSE_PYTHON="$(command -v python3.12)"
+  fi
 fi
 
-if command -v python3.12 >/dev/null 2>&1; then
-  COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}" python3.12 -m src.collector.main "${MODE}"
-  exit $?
+ITEMS_SEEN="$("${PARSE_PYTHON}" - <<'PY' "${PREP_DIR}/meta.json"
+import json
+import sys
+from pathlib import Path
+
+meta = json.loads(Path(sys.argv[1]).read_text())
+print(meta["items_seen"])
+PY
+)"
+
+STATE_PATH="$("${PARSE_PYTHON}" - <<'PY' "${PREP_DIR}/meta.json"
+import json
+import sys
+from pathlib import Path
+
+meta = json.loads(Path(sys.argv[1]).read_text())
+print(meta["state_path"])
+PY
+)"
+
+commit_state() {
+  mkdir -p "$(dirname "${STATE_PATH}")"
+  cp "${PREP_DIR}/next_state.json" "${STATE_PATH}"
+}
+
+if [[ "${ITEMS_SEEN}" == "0" ]]; then
+  commit_state
+  echo '{"status":"noop","items_seen":0}'
+  exit 0
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Need Python 3.12+ or Docker to run the collector." >&2
-  exit 1
-fi
+ssh -i "${SERVER_SSH_KEY}" "${SERVER_USER}@${SERVER_HOST}" \
+  "cd '${REMOTE_APP_DIR}' && /bin/zsh -lc 'set -a && source .env && curl -sS -X POST -H \"Authorization: Bearer \$API_TOKEN\" -H \"Content-Type: application/json\" --data-binary @- http://127.0.0.1:8000/api/ingest/collector'" \
+  < "${PREP_DIR}/payload.json"
 
-if ! docker image inspect "${DOCKER_IMAGE}" >/dev/null 2>&1; then
-  docker build -t "${DOCKER_IMAGE}" "${ROOT_DIR}"
-fi
-
-DOCKER_COLLECTOR_API_BASE_URL="${COLLECTOR_API_BASE_URL}"
-if [[ "${DOCKER_COLLECTOR_API_BASE_URL}" == http://127.0.0.1:* || "${DOCKER_COLLECTOR_API_BASE_URL}" == http://localhost:* ]]; then
-  DOCKER_COLLECTOR_API_BASE_URL="http://host.docker.internal:${COLLECTOR_TUNNEL_PORT}"
-fi
-
-docker run --rm \
-  -v "${ROOT_DIR}:/app" \
-  -w /app \
-  --env-file "${ROOT_DIR}/.env" \
-  -e PYTHONPYCACHEPREFIX=/tmp/dusrabheja-pycache \
-  -e COLLECTOR_API_BASE_URL="${DOCKER_COLLECTOR_API_BASE_URL}" \
-  "${DOCKER_IMAGE}" \
-  python -m src.collector.main "${MODE}"
-exit $?
+commit_state
