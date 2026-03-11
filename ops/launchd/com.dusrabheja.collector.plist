@@ -11,8 +11,13 @@
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/moenuddeenahmadshaik/Desktop/duSraBheja</string>
-  <key>StartInterval</key>
-  <integer>14400</integer>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>17</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>

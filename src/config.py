@@ -64,8 +64,12 @@ class Settings(BaseSettings):
     collector_device_name: str = "macbook"
     collector_interval_hours: int = 4
     collector_project_roots: str = ""
+    collector_bootstrap_roots: str = ""
+    collector_daily_roots: str = ""
     collector_state_path: str = "~/.brain-collector/state.json"
     collector_api_base_url: str = "http://127.0.0.1:8000"
+    collector_scan_max_depth: int = 4
+    collector_inventory_recent_files_limit: int = 50
 
     # GitHub
     github_api_token: str = ""
