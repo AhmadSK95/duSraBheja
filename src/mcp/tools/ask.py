@@ -18,7 +18,7 @@ def register(mcp: FastMCP):
 
         Args:
             question: What you want to know
-            category: Optional category filter (task, project, people, idea, note, reminder, planner)
+            category: Optional category filter (task, project, people, idea, note, resource, reminder, daily_planner, weekly_planner)
         """
         async with async_session() as session:
             result = await answer_question(

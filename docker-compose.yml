@@ -30,13 +30,10 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://brain-redis:6379
-      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
     volumes:
       - brain-blobs:/data/blobs
     networks:
       - brain-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: python -m src.bot.main
 
   # ARQ background worker
@@ -50,13 +47,10 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://brain-redis:6379
-      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
     volumes:
       - brain-blobs:/data/blobs
     networks:
       - brain-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: python -m src.worker.main
 
   # MCP server
@@ -70,16 +64,34 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://brain-redis:6379
-      - DATABASE_URL=postgresql+asyncpg://brain_user:${DB_PASSWORD}@host.docker.internal:5432/brain_db
       - MCP_TRANSPORT=streamable-http
       - MCP_PORT=8100
     ports:
       - "127.0.0.1:8100:8100"
     networks:
       - brain-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: python -m src.mcp.server
+
+  # Private API
+  brain-api:
+    build: .
+    container_name: brain-api
+    restart: unless-stopped
+    depends_on:
+      brain-redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://brain-redis:6379
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - brain-blobs:/data/blobs
+    networks:
+      - brain-net
+    command: python -m src.api.main
 
 volumes:
   brain-redis-data:

@@ -1,25 +1,22 @@
 """Librarian task — create or merge canonical notes."""
 
-import json
 import logging
 import uuid
 
-from src.database import async_session
 from src.agents.librarian import process_artifact
+from src.constants import MERGEABLE_CATEGORIES, normalize_category
+from src.database import async_session
 from src.lib.store import (
-    get_artifact,
-    get_note,
-    create_note,
-    update_note,
-    find_notes_by_title,
+    create_journal_entry,
     create_link,
+    create_note,
+    find_notes_by_title,
+    get_artifact,
+    update_note,
 )
 from src.models import Classification
 
 log = logging.getLogger("brain-worker.librarian")
-
-# Categories that get canonical note merging
-MERGEABLE_CATEGORIES = {"people", "project"}
 
 
 async def process_librarian(ctx, artifact_id: str, classification_id: str):
@@ -39,7 +36,7 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
             return
 
         classification_data = {
-            "category": classification.category,
+            "category": normalize_category(classification.category),
             "confidence": classification.confidence,
             "entities": classification.entities or [],
             "tags": list(classification.tags or []),
@@ -103,4 +100,20 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
             target_type="note",
             target_id=note_id,
             relation="derived_from",
+        )
+
+        project_note_id = note_id if classification.category == "project" else None
+        await create_journal_entry(
+            session,
+            artifact_id=artifact_uuid,
+            project_note_id=project_note_id,
+            entry_type="artifact_ingested",
+            actor_type="human" if artifact.source in {"discord", "manual", "command"} else "agent",
+            actor_name=artifact.source,
+            title=artifact.summary or result["title"],
+            body_markdown=artifact.raw_text,
+            summary=artifact.summary or result["title"],
+            tags=list(classification.tags or []),
+            source_links=[],
+            metadata_={"category": classification.category, "note_id": str(note_id)},
         )

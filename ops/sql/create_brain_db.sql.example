@@ -1,0 +1,29 @@
+-- Safe template: replace placeholders before running.
+-- Run as the postgres superuser (or another sufficiently privileged role).
+
+CREATE ROLE brain_user
+  WITH LOGIN
+  PASSWORD 'REPLACE_WITH_STRONG_PASSWORD'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  INHERIT;
+
+CREATE DATABASE brain_db
+  WITH
+  OWNER = brain_user
+  ENCODING = 'UTF8'
+  TEMPLATE = template0;
+
+\connect brain_db
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+REVOKE ALL ON DATABASE brain_db FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE brain_db TO brain_user;
+
+GRANT USAGE, CREATE ON SCHEMA public TO brain_user;
+ALTER SCHEMA public OWNER TO brain_user;
+
+ALTER ROLE brain_user SET search_path = public;

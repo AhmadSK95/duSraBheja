@@ -21,7 +21,7 @@ def register(mcp: FastMCP):
 
         Args:
             query: What to search for
-            category: Filter to a category (task, project, people, idea, note, reminder, planner)
+            category: Filter to a category (task, project, people, idea, note, resource, reminder, daily_planner, weekly_planner)
             limit: Max results to return (default 10)
             include_content: Return full content or just summaries
         """

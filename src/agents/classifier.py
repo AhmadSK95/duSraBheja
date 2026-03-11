@@ -15,13 +15,15 @@ Classify the input into exactly ONE of these categories:
 - project: A multi-step initiative or ongoing effort
 - people: Information about a person (name, contact, relationship, notes)
 - idea: A brainstorm, concept, possibility, or creative thought
-- note: General knowledge, reference material, learning, or resource
+- note: General knowledge, reference material, learning, or durable notes
+- resource: A document, link, reference, guide, or asset worth reusing
 - reminder: A time-bound alert or thing to remember at a specific time
-- planner: A daily or weekly plan, schedule, or agenda
+- daily_planner: A daily plan, schedule, or agenda
+- weekly_planner: A weekly plan, schedule, or agenda
 
 For each input, return a JSON object with these exact fields:
 {
-  "category": "one of the 7 categories above",
+  "category": "one of the 9 categories above",
   "confidence": 0.0 to 1.0,
   "entities": [{"type": "person|project|topic|date|url", "value": "extracted value"}],
   "tags": ["relevant", "tags"],

@@ -1,0 +1,189 @@
+"""Story-centric service helpers used by API, MCP, worker, and collector."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.constants import normalize_category, normalize_tags
+from src.lib import store
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def publish_story_entry(
+    session: AsyncSession,
+    *,
+    actor_type: str,
+    actor_name: str,
+    entry_type: str,
+    title: str,
+    body_markdown: str,
+    project_ref: str | None = None,
+    tags: list[str] | None = None,
+    source_links: list[str] | None = None,
+    source: str = "manual",
+    category: str = "note",
+    metadata_: dict | None = None,
+    happened_at: datetime | None = None,
+    artifact_id: uuid.UUID | None = None,
+    source_item_id: uuid.UUID | None = None,
+) -> dict:
+    project_note = None
+    if project_ref:
+        project_note = await store.get_or_create_project_note(session, project_ref)
+
+    if artifact_id is None:
+        artifact = await store.create_artifact(
+            session,
+            content_type="text",
+            raw_text=body_markdown,
+            summary=title,
+            source=source,
+            metadata_={
+                "actor_type": actor_type,
+                "actor_name": actor_name,
+                "entry_type": entry_type,
+                **(metadata_ or {}),
+            },
+        )
+        artifact_id = artifact.id
+
+        await store.create_classification(
+            session,
+            artifact_id=artifact.id,
+            category=normalize_category(category),
+            confidence=1.0,
+            entities=[],
+            tags=tags or [],
+            priority="medium",
+            suggested_action=None,
+            model_used="story-publish",
+            tokens_used=0,
+            cost_usd=0,
+            is_final=True,
+        )
+    else:
+        artifact = await store.get_artifact(session, artifact_id)
+
+    journal_entry = await store.create_journal_entry(
+        session,
+        artifact_id=artifact_id,
+        project_note_id=project_note.id if project_note else None,
+        source_item_id=source_item_id,
+        entry_type=entry_type,
+        actor_type=actor_type,
+        actor_name=actor_name,
+        title=title,
+        body_markdown=body_markdown,
+        summary=(body_markdown or title)[:280],
+        tags=normalize_tags(tags),
+        source_links=source_links or [],
+        metadata_=metadata_ or {},
+        happened_at=happened_at or _utcnow(),
+    )
+
+    if project_note and artifact:
+        await store.create_link(
+            session,
+            source_type="artifact",
+            source_id=artifact.id,
+            target_type="note",
+            target_id=project_note.id,
+            relation="related_to_project",
+        )
+
+    return {
+        "artifact": artifact,
+        "project_note": project_note,
+        "journal_entry": journal_entry,
+    }
+
+
+async def build_project_story_payload(session: AsyncSession, project_note_id: uuid.UUID) -> dict | None:
+    story = await store.get_project_story(session, project_note_id)
+    if not story:
+        return None
+
+    project = story["project"]
+    return {
+        "project": {
+            "id": str(project.id),
+            "title": project.title,
+            "category": project.category,
+            "content": project.content,
+            "status": project.status,
+            "tags": list(project.tags or []),
+            "updated_at": str(project.updated_at),
+        },
+        "repos": [
+            {
+                "id": str(repo.id),
+                "owner": repo.repo_owner,
+                "name": repo.repo_name,
+                "url": repo.repo_url,
+                "branch": repo.branch,
+                "local_path": repo.local_path,
+                "is_primary": repo.is_primary,
+            }
+            for repo in story["repos"]
+        ],
+        "recent_activity": [
+            {
+                "id": str(entry.id),
+                "entry_type": entry.entry_type,
+                "actor_type": entry.actor_type,
+                "actor_name": entry.actor_name,
+                "title": entry.title,
+                "summary": entry.summary,
+                "tags": list(entry.tags or []),
+                "source_links": entry.source_links or [],
+                "happened_at": str(entry.happened_at),
+            }
+            for entry in story["journal_entries"]
+        ],
+        "sources": [
+            {
+                "id": str(item.id),
+                "external_id": item.external_id,
+                "title": item.title,
+                "summary": item.summary,
+                "external_url": item.external_url,
+                "happened_at": str(item.happened_at) if item.happened_at else None,
+            }
+            for item in story["source_items"]
+        ],
+        "links": [
+            {
+                "relation": link.relation,
+                "target_type": link.target_type,
+                "target_id": str(link.target_id),
+            }
+            for link in story["related_links"]
+        ],
+    }
+
+
+async def build_project_brief_payload(session: AsyncSession, project_note_id: uuid.UUID) -> dict | None:
+    payload = await build_project_story_payload(session, project_note_id)
+    if not payload:
+        return None
+
+    recent_titles = [entry["title"] for entry in payload["recent_activity"][:5]]
+    repo_names = [repo["name"] for repo in payload["repos"]]
+    source_titles = [item["title"] for item in payload["sources"][:5]]
+
+    return {
+        "project_id": payload["project"]["id"],
+        "title": payload["project"]["title"],
+        "status": payload["project"]["status"],
+        "summary": payload["project"]["content"] or payload["project"]["title"],
+        "latest_updates": recent_titles,
+        "repo_names": repo_names,
+        "recent_sources": source_titles,
+        "tags": payload["project"]["tags"],
+    }

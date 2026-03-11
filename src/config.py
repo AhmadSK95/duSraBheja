@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 5
     db_statement_timeout_ms: int = 30_000
+    db_ssl: bool = False
+    db_ssl_require: bool = False
+    db_ssl_reject_unauthorized: bool = True
 
     # Redis
     redis_url: str = "redis://localhost:6379"
@@ -45,12 +48,28 @@ class Settings(BaseSettings):
     mcp_transport: str = "streamable-http"
     mcp_port: int = 8100
 
+    # API
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_token: str = ""
+
     # Blob storage
     blob_storage_path: str = "/data/blobs"
 
     # Daily digest
     digest_cron_hour: int = 8
     digest_timezone: str = "America/New_York"
+
+    # Collector
+    collector_device_name: str = "macbook"
+    collector_interval_hours: int = 4
+    collector_project_roots: str = ""
+    collector_state_path: str = "~/.brain-collector/state.json"
+    collector_api_base_url: str = "http://127.0.0.1:8000"
+
+    # GitHub
+    github_api_token: str = ""
+    github_api_base_url: str = "https://api.github.com"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -11,17 +11,6 @@ from src.lib.store import get_review_by_thread, resolve_review
 
 log = logging.getLogger("brain-bot.inbox")
 
-# Category → Discord channel name mapping
-CATEGORY_CHANNELS = {
-    "task": "tasks",
-    "project": "projects",
-    "people": "people",
-    "idea": "ideas",
-    "note": "notes",
-    "reminder": "reminders",
-    "planner": "planner",
-}
-
 
 class InboxCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -31,7 +20,7 @@ class InboxCog(commands.Cog):
         return channel.name == settings.inbox_channel_name
 
     def _is_planner_channel(self, channel: discord.TextChannel) -> bool:
-        return channel.name == "planner"
+        return channel.name in {"daily-planner", "weekly-planner"}
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -103,9 +92,9 @@ class InboxCog(commands.Cog):
             await enqueue_ingest(
                 discord_message_id=str(message.id),
                 discord_channel_id=str(message.channel.id),
-                text=message.content or "[Daily planner image]",
+                text=message.content or f"[{message.channel.name} image]",
                 attachments=attachments,
-                force_category="planner",
+                force_category="daily_planner" if message.channel.name == "daily-planner" else "weekly_planner",
             )
 
     async def _handle_thread_reply(self, message: discord.Message):
@@ -159,8 +148,10 @@ def build_classification_embed(classification: dict, summary: str, artifact_id: 
         "people": discord.Color.green(),
         "idea": discord.Color.gold(),
         "note": discord.Color.greyple(),
+        "resource": discord.Color.brand_green(),
         "reminder": discord.Color.orange(),
-        "planner": discord.Color.purple(),
+        "daily_planner": discord.Color.purple(),
+        "weekly_planner": discord.Color.dark_purple(),
     }
 
     category = classification["category"]

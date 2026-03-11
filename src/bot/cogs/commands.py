@@ -6,10 +6,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.config import settings
+from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
 from src.agents.retriever import answer_question
-from src.lib.store import get_pending_reviews
+from src.lib.store import find_notes_by_title, get_pending_reviews
+from src.services.digest import generate_or_refresh_digest
+from src.services.story import build_project_story_payload
 
 log = logging.getLogger("brain-bot.commands")
 
@@ -26,8 +28,8 @@ class CommandsCog(commands.Cog):
     )
     @app_commands.choices(
         category=[
-            app_commands.Choice(name=cat, value=cat)
-            for cat in ["task", "project", "people", "idea", "note", "reminder", "planner"]
+            app_commands.Choice(name=cat.replace("_", " "), value=cat)
+            for cat in BRAIN_CATEGORIES
         ]
     )
     async def ask(
@@ -71,8 +73,8 @@ class CommandsCog(commands.Cog):
     )
     @app_commands.choices(
         category=[
-            app_commands.Choice(name=cat, value=cat)
-            for cat in ["task", "project", "people", "idea", "note", "reminder", "planner"]
+            app_commands.Choice(name=cat.replace("_", " "), value=cat)
+            for cat in BRAIN_CATEGORIES
         ]
     )
     async def remember(
@@ -138,6 +140,65 @@ class CommandsCog(commands.Cog):
                 inline=False,
             )
 
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="story", description="Show the current story for a project")
+    @app_commands.describe(project_name="Project title")
+    async def story(self, interaction: discord.Interaction, project_name: str):
+        await interaction.response.defer(thinking=True)
+
+        async with async_session() as session:
+            matches = await find_notes_by_title(session, project_name, "project")
+            if not matches:
+                await interaction.followup.send(f"Project not found: {project_name}")
+                return
+
+            payload = await build_project_story_payload(session, matches[0].id)
+
+        embed = discord.Embed(
+            title=payload["project"]["title"],
+            description=payload["project"]["content"] or "No project summary yet.",
+            color=discord.Color.blue(),
+        )
+        if payload["repos"]:
+            embed.add_field(
+                name="Repos",
+                value="\n".join(repo["name"] for repo in payload["repos"][:5]),
+                inline=False,
+            )
+        if payload["recent_activity"]:
+            embed.add_field(
+                name="Recent Activity",
+                value="\n".join(entry["title"] for entry in payload["recent_activity"][:5]),
+                inline=False,
+            )
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="digest", description="Generate or refresh today's digest")
+    async def digest(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo("America/New_York")).date()
+        async with async_session() as session:
+            payload = await generate_or_refresh_digest(session, digest_date=now)
+
+        embed = discord.Embed(
+            title=f"Daily Digest - {payload['digest_date']}",
+            color=discord.Color.gold(),
+        )
+        task_titles = [task["title"] for task in payload["tasks"][:5]] or ["No active tasks"]
+        project_titles = [project["title"] for project in payload["projects"][:5]] or ["No active projects"]
+        embed.add_field(name="Tasks", value="\n".join(task_titles), inline=False)
+        embed.add_field(name="Projects", value="\n".join(project_titles), inline=False)
+        if payload["pending_reviews"]:
+            embed.add_field(
+                name="Pending Reviews",
+                value="\n".join(item["question"] for item in payload["pending_reviews"][:3]),
+                inline=False,
+            )
         await interaction.followup.send(embed=embed)
 
 

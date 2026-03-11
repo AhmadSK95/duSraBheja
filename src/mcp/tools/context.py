@@ -2,6 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
+from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
 from src.lib import store
 
@@ -77,7 +78,7 @@ def register(mcp: FastMCP):
             categories: Filter to specific categories (default: all)
             since_days: How far back to look (default: 30 days)
         """
-        all_categories = categories or ["task", "project", "people", "idea", "note", "reminder", "planner"]
+        all_categories = categories or list(BRAIN_CATEGORIES)
         result = {}
 
         async with async_session() as session:
@@ -107,7 +108,7 @@ def register(mcp: FastMCP):
         """List notes in a specific category. Returns title, status, priority, and creation date.
 
         Args:
-            category: One of: task, project, people, idea, note, reminder, planner
+            category: One of: task, project, people, idea, note, resource, reminder, daily_planner, weekly_planner
             status: Filter by status (active, completed, archived)
             limit: Max notes to return
         """

@@ -4,6 +4,7 @@ import logging
 
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
+from arq.cron import cron
 
 from src.config import settings
 
@@ -60,6 +61,15 @@ class WorkerSettings:
         "src.worker.tasks.clarify.ask_clarification",
         "src.worker.tasks.embed.generate_embeddings",
         "src.worker.tasks.librarian.process_librarian",
+        "src.worker.tasks.digest.generate_daily_digest",
+    ]
+
+    cron_jobs = [
+        cron(
+            "src.worker.tasks.digest.generate_daily_digest",
+            hour=settings.digest_cron_hour,
+            minute=0,
+        )
     ]
 
     max_jobs = 5

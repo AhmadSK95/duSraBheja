@@ -1,0 +1,1 @@
+"""Mac collector package."""
