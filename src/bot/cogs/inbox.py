@@ -1,13 +1,16 @@
 """Inbox Cog — listens on #inbox, enqueues processing, handles review threads."""
 
+import asyncio
+import json
 import logging
 
 import discord
+from redis.asyncio import Redis
 from discord.ext import commands
 
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_review_by_thread, resolve_review
+from src.lib.store import get_review_by_thread, resolve_review, set_review_thread
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -15,6 +18,17 @@ log = logging.getLogger("brain-bot.inbox")
 class InboxCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._listener_task: asyncio.Task | None = None
+        self._listener_stop = asyncio.Event()
+
+    async def cog_load(self):
+        self._listener_stop.clear()
+        self._listener_task = asyncio.create_task(self._listen_notifications())
+
+    def cog_unload(self):
+        self._listener_stop.set()
+        if self._listener_task:
+            self._listener_task.cancel()
 
     def _is_inbox_channel(self, channel: discord.TextChannel) -> bool:
         return channel.name == settings.inbox_channel_name
@@ -118,6 +132,112 @@ class InboxCog(commands.Cog):
 
             await message.add_reaction("\u2705")
             log.info(f"Review {review.id} answered in thread {thread_id}")
+
+    async def _listen_notifications(self):
+        await self.bot.wait_until_ready()
+        redis = Redis.from_url(settings.redis_url)
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("brain:artifact_processed", "brain:review_created")
+        try:
+            while not self._listener_stop.is_set():
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if not message:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                channel_name = message["channel"].decode()
+                payload = json.loads(message["data"])
+                if channel_name == "brain:artifact_processed":
+                    await self._handle_artifact_processed(payload)
+                elif channel_name == "brain:review_created":
+                    await self._handle_review_created(payload)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await pubsub.unsubscribe("brain:artifact_processed", "brain:review_created")
+            await pubsub.aclose()
+            await redis.aclose()
+
+    async def _handle_artifact_processed(self, payload: dict):
+        channel_id = payload.get("discord_channel_id")
+        message_id = payload.get("discord_message_id")
+        if not channel_id or not message_id:
+            return
+
+        source_channel = await self.bot.fetch_channel(int(channel_id))
+        if not isinstance(source_channel, discord.TextChannel):
+            return
+
+        source_message = await source_channel.fetch_message(int(message_id))
+        await source_message.add_reaction("\u2705")
+
+        receipt = discord.Embed(
+            title=f"Stored as {payload['category'].replace('_', ' ').title()}",
+            description=payload.get("summary") or payload.get("note_title") or "Stored in the brain.",
+            color=discord.Color.green(),
+        )
+        receipt.add_field(name="Note", value=payload.get("note_title") or "Untitled", inline=False)
+        receipt.add_field(name="Confidence", value=f"{payload.get('confidence', 0):.0%}", inline=True)
+        receipt.add_field(name="Stored", value="Yes", inline=True)
+        tags = payload.get("tags") or []
+        if tags:
+            receipt.add_field(name="Tags", value=", ".join(tags[:10]), inline=False)
+
+        planner_message = None
+        target_channel_name = payload.get("category_channel")
+        if payload.get("category") in {"daily_planner", "weekly_planner"} and target_channel_name:
+            target_channel = discord.utils.get(source_channel.guild.text_channels, name=target_channel_name)
+            if target_channel:
+                planner_card = discord.Embed(
+                    title=payload.get("note_title") or payload["category"].replace("_", " ").title(),
+                    description=(payload.get("note_content_preview") or payload.get("summary") or "Planner stored.")[:4000],
+                    color=discord.Color.purple() if payload["category"] == "daily_planner" else discord.Color.dark_purple(),
+                )
+                planner_card.add_field(name="Type", value=payload["category"].replace("_", " ").title(), inline=True)
+                planner_card.add_field(name="Status", value="Ingested", inline=True)
+                planner_card.add_field(
+                    name="Source",
+                    value=f"[Open original]({source_message.jump_url})",
+                    inline=False,
+                )
+                planner_message = await target_channel.send(embed=planner_card)
+                await source_message.add_reaction("\U0001f4c5")
+
+        if planner_message:
+            receipt.add_field(
+                name="Planner Card",
+                value=f"[Open card]({planner_message.jump_url})",
+                inline=False,
+            )
+
+        await source_message.reply(embed=receipt, mention_author=False)
+
+    async def _handle_review_created(self, payload: dict):
+        channel_id = payload.get("discord_channel_id")
+        message_id = payload.get("discord_message_id")
+        if not channel_id or not message_id:
+            return
+
+        channel = await self.bot.fetch_channel(int(channel_id))
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        message = await channel.fetch_message(int(message_id))
+        thread = await message.create_thread(
+            name=f"brain-review-{payload['review_id'][:8]}",
+            auto_archive_duration=1440,
+        )
+        await thread.send(
+            embed=discord.Embed(
+                title="Need Clarification",
+                description=payload["question"],
+                color=discord.Color.orange(),
+            )
+        )
+        await message.add_reaction("\u2753")
+
+        async with async_session() as session:
+            await set_review_thread(session, payload["review_id"], str(thread.id))
 
 
 async def post_to_channel(

@@ -1,5 +1,6 @@
 """ARQ worker entrypoint + job enqueue helpers."""
 
+import json
 import logging
 
 from arq import create_pool
@@ -19,6 +20,9 @@ JOB_ASK_CLARIFICATION = "src.worker.tasks.clarify.ask_clarification"
 JOB_GENERATE_EMBEDDINGS = "src.worker.tasks.embed.generate_embeddings"
 JOB_PROCESS_LIBRARIAN = "src.worker.tasks.librarian.process_librarian"
 JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
+
+EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
+EVENT_REVIEW_CREATED = "brain:review_created"
 
 
 async def get_pool() -> ArqRedis:
@@ -53,6 +57,11 @@ async def enqueue_ingest(
 async def enqueue_reclassify(artifact_id: str, user_answer: str):
     pool = await get_pool()
     await pool.enqueue_job(JOB_RECLASSIFY_ARTIFACT, artifact_id=artifact_id, user_answer=user_answer)
+
+
+async def publish_event(channel: str, payload: dict) -> None:
+    pool = await get_pool()
+    await pool.pool.publish(channel, json.dumps(payload))
 
 
 # ── Worker class (ARQ entrypoint) ───────────────────────────────

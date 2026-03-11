@@ -5,7 +5,8 @@ import uuid
 
 from src.database import async_session
 from src.agents.clarifier import generate_question
-from src.lib.store import get_artifact, create_review
+from src.lib.store import create_review, get_artifact
+from src.worker.main import EVENT_REVIEW_CREATED, publish_event
 
 log = logging.getLogger("brain-worker.clarify")
 
@@ -61,19 +62,13 @@ async def ask_clarification(ctx, artifact_id: str, classification_id: str):
 
         log.info(f"Created review {review.id} for artifact {artifact_id}: {question}")
 
-        # Signal bot to create thread (via Redis pub/sub or polling)
-        from src.worker.main import get_pool
-
-        pool = await get_pool()
-        import json
-
-        await pool.pool.publish(
-            "brain:review_created",
-            json.dumps({
+        await publish_event(
+            EVENT_REVIEW_CREATED,
+            {
                 "review_id": str(review.id),
                 "artifact_id": artifact_id,
                 "discord_message_id": artifact.discord_message_id,
                 "discord_channel_id": artifact.discord_channel_id,
                 "question": question,
-            }),
+            },
         )

@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from src.agents.librarian import process_artifact
-from src.constants import MERGEABLE_CATEGORIES, normalize_category
+from src.constants import CATEGORY_CHANNELS, MERGEABLE_CATEGORIES, normalize_category
 from src.database import async_session
 from src.lib.store import (
     create_journal_entry,
@@ -15,6 +15,7 @@ from src.lib.store import (
     update_note,
 )
 from src.models import Classification
+from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
 
 log = logging.getLogger("brain-worker.librarian")
 
@@ -116,4 +117,22 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
             tags=list(classification.tags or []),
             source_links=[],
             metadata_={"category": classification.category, "note_id": str(note_id)},
+        )
+
+        await publish_event(
+            EVENT_ARTIFACT_PROCESSED,
+            {
+                "artifact_id": str(artifact_uuid),
+                "discord_message_id": artifact.discord_message_id,
+                "discord_channel_id": artifact.discord_channel_id,
+                "source": artifact.source,
+                "summary": artifact.summary or result["title"],
+                "category": classification.category,
+                "confidence": float(classification.confidence or 0),
+                "tags": list(classification.tags or []),
+                "note_id": str(note_id),
+                "note_title": result["title"],
+                "note_content_preview": (result["content"] or "")[:1200],
+                "category_channel": CATEGORY_CHANNELS.get(classification.category),
+            },
         )

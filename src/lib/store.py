@@ -249,6 +249,17 @@ async def resolve_review(session: AsyncSession, review_id: uuid.UUID, answer: st
     return result.scalar_one()
 
 
+async def set_review_thread(session: AsyncSession, review_id: uuid.UUID, thread_id: str) -> ReviewQueue | None:
+    await session.execute(
+        update(ReviewQueue)
+        .where(ReviewQueue.id == review_id)
+        .values(discord_thread_id=thread_id)
+    )
+    await session.commit()
+    result = await session.execute(select(ReviewQueue).where(ReviewQueue.id == review_id))
+    return result.scalar_one_or_none()
+
+
 async def create_digest(session: AsyncSession, *, digest_date: date, payload: dict) -> Digest:
     digest = Digest(digest_date=digest_date, payload=payload)
     session.add(digest)
