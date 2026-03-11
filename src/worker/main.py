@@ -67,7 +67,7 @@ async def enqueue_classify(artifact_id: str, force_category: str | None = None):
 
 async def publish_event(channel: str, payload: dict) -> None:
     pool = await get_pool()
-    await pool.pool.publish(channel, json.dumps(payload))
+    await pool.publish(channel, json.dumps(payload))
 
 
 # ── Worker class (ARQ entrypoint) ───────────────────────────────
