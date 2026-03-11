@@ -71,7 +71,11 @@ class Settings(BaseSettings):
     github_api_token: str = ""
     github_api_base_url: str = "https://api.github.com"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
