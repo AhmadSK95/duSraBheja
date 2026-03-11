@@ -1,6 +1,5 @@
 """FastMCP server — exposes brain tools to Claude Code / Codex."""
 
-import asyncio
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -10,7 +9,7 @@ from src.config import settings
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("brain-mcp")
 
-mcp = FastMCP("duSraBheja Brain")
+mcp = FastMCP("duSraBheja Brain", host="0.0.0.0", port=settings.mcp_port)
 
 
 # ── Import tools (registers them with the mcp instance) ─────────
@@ -30,7 +29,7 @@ register_story(mcp)
 def main():
     """Run MCP server."""
     if settings.mcp_transport == "streamable-http":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=settings.mcp_port)
+        mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")
 
