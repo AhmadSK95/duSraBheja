@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_review_by_thread, resolve_review, set_review_thread
+from src.lib.store import get_artifact, get_review_by_thread, resolve_review, set_review_thread, update_artifact
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -254,7 +254,16 @@ class InboxCog(commands.Cog):
                 inline=False,
             )
 
-        await source_message.reply(embed=receipt, mention_author=False)
+        receipt_message = await source_message.reply(embed=receipt, mention_author=False)
+
+        artifact_id = payload.get("artifact_id")
+        if artifact_id:
+            await self._store_artifact_outputs(
+                artifact_id,
+                receipt_message=receipt_message,
+                planner_message=planner_message,
+                weekly_message=weekly_message,
+            )
 
     async def _handle_review_created(self, payload: dict):
         channel_id = payload.get("discord_channel_id")
@@ -304,6 +313,36 @@ class InboxCog(commands.Cog):
         embed.add_field(name="Stored", value="No", inline=True)
         embed.add_field(name="Error", value=(payload.get("error") or "Unknown error")[:1000], inline=False)
         await message.reply(embed=embed, mention_author=False)
+
+    async def _store_artifact_outputs(
+        self,
+        artifact_id: str,
+        *,
+        receipt_message: discord.Message | None = None,
+        planner_message: discord.Message | None = None,
+        weekly_message: discord.Message | None = None,
+    ) -> None:
+        metadata_updates = {}
+        if receipt_message:
+            metadata_updates["discord_receipt_message_id"] = str(receipt_message.id)
+        if planner_message:
+            metadata_updates["discord_planner_card_channel_id"] = str(planner_message.channel.id)
+            metadata_updates["discord_planner_card_message_id"] = str(planner_message.id)
+        if weekly_message:
+            metadata_updates["discord_weekly_rollup_channel_id"] = str(weekly_message.channel.id)
+            metadata_updates["discord_weekly_rollup_message_id"] = str(weekly_message.id)
+
+        if not metadata_updates:
+            return
+
+        async with async_session() as session:
+            from uuid import UUID
+
+            artifact_uuid = UUID(artifact_id)
+            artifact = await get_artifact(session, artifact_uuid)
+            merged = dict(artifact.metadata_ or {}) if artifact else {}
+            merged.update(metadata_updates)
+            await update_artifact(session, artifact_uuid, metadata_=merged)
 
 
 async def post_to_channel(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.constants import normalize_category, normalize_tags
@@ -48,6 +48,13 @@ async def get_artifact(session: AsyncSession, artifact_id: uuid.UUID) -> Artifac
 async def get_artifact_by_discord_id(session: AsyncSession, message_id: str) -> Artifact | None:
     result = await session.execute(select(Artifact).where(Artifact.discord_message_id == message_id))
     return result.scalar_one_or_none()
+
+
+async def update_artifact(session: AsyncSession, artifact_id: uuid.UUID, **kwargs) -> Artifact | None:
+    kwargs.setdefault("updated_at", _utcnow())
+    await session.execute(update(Artifact).where(Artifact.id == artifact_id).values(**kwargs))
+    await session.commit()
+    return await get_artifact(session, artifact_id)
 
 
 async def create_classification(session: AsyncSession, **kwargs) -> Classification:
@@ -129,6 +136,36 @@ async def list_notes(
     return list(result.scalars().all())
 
 
+async def list_active_project_aliases(session: AsyncSession, limit: int = 25) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+
+    projects = await list_notes(session, category="project", limit=limit)
+    for project in projects:
+        cleaned = (project.title or "").strip()
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            seen.add(key)
+            aliases.append(cleaned)
+
+    repo_result = await session.execute(
+        select(ProjectRepo).order_by(ProjectRepo.updated_at.desc(), ProjectRepo.created_at.desc()).limit(limit * 2)
+    )
+    for repo in repo_result.scalars():
+        for candidate in (repo.repo_name, repo.local_path):
+            cleaned = (candidate or "").strip()
+            if not cleaned:
+                continue
+            leaf = cleaned.rstrip("/").split("/")[-1]
+            for value in (cleaned, leaf):
+                key = value.lower()
+                if value and key not in seen:
+                    seen.add(key)
+                    aliases.append(value)
+
+    return aliases[: limit * 2]
+
+
 async def update_note(session: AsyncSession, note_id: uuid.UUID, **kwargs) -> Note | None:
     if "category" in kwargs:
         kwargs["category"] = normalize_category(kwargs["category"])
@@ -147,6 +184,29 @@ async def create_chunks(session: AsyncSession, chunks: list[dict]) -> list[Chunk
     for chunk in chunk_objects:
         await session.refresh(chunk)
     return chunk_objects
+
+
+async def reset_artifact_processing(session: AsyncSession, artifact_id: uuid.UUID) -> None:
+    artifact = await get_artifact(session, artifact_id)
+    if artifact:
+        metadata = dict(artifact.metadata_ or {})
+        for key in (
+            "discord_receipt_message_id",
+            "discord_planner_card_channel_id",
+            "discord_planner_card_message_id",
+            "discord_weekly_rollup_channel_id",
+            "discord_weekly_rollup_message_id",
+        ):
+            metadata.pop(key, None)
+        artifact.metadata_ = metadata
+        artifact.summary = None
+        artifact.updated_at = _utcnow()
+
+    await session.execute(delete(ReviewQueue).where(ReviewQueue.artifact_id == artifact_id))
+    await session.execute(delete(JournalEntry).where(JournalEntry.artifact_id == artifact_id))
+    await session.execute(delete(Chunk).where(Chunk.artifact_id == artifact_id))
+    await session.execute(delete(Classification).where(Classification.artifact_id == artifact_id))
+    await session.commit()
 
 
 async def vector_search(
