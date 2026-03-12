@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dusrabheja.agent-history</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/moenuddeenahmadshaik/code/duSraBheja/scripts/run_agent_history_sync.sh</string>
+    <string>sync_agent_history</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/moenuddeenahmadshaik/code/duSraBheja</string>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/moenuddeenahmadshaik/.codex/sessions</string>
+    <string>/Users/moenuddeenahmadshaik/.codex/archived_sessions</string>
+    <string>/Users/moenuddeenahmadshaik/.codex/memories</string>
+    <string>/Users/moenuddeenahmadshaik/.claude/projects</string>
+    <string>/Users/moenuddeenahmadshaik/.claude/plans</string>
+    <string>/Users/moenuddeenahmadshaik/.claude/todos</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/dusrabheja-agent-history.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/dusrabheja-agent-history.err</string>
+</dict>
+</plist>

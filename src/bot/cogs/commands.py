@@ -8,10 +8,10 @@ from discord.ext import commands
 
 from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
-from src.agents.retriever import answer_question
 from src.bot.cogs.inbox import build_answer_embed
 from src.lib.store import find_notes_by_title, get_pending_reviews
 from src.services.digest import generate_or_refresh_digest
+from src.services.query import query_brain
 from src.services.story import build_project_story_payload
 
 log = logging.getLogger("brain-bot.commands")
@@ -43,15 +43,54 @@ class CommandsCog(commands.Cog):
         await interaction.response.defer(thinking=True)
 
         async with async_session() as session:
-            result = await answer_question(
+            result = await query_brain(
                 session,
                 question=question,
+                mode="answer",
                 category=category,
                 use_opus=deep,
             )
 
         embed = build_answer_embed(question, result)
         await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="latest", description="Show the latest grounded story on a subject")
+    async def latest(self, interaction: discord.Interaction, subject: str, deep: bool = False):
+        await interaction.response.defer(thinking=True)
+        question = f"What is the latest on {subject}?"
+        async with async_session() as session:
+            result = await query_brain(session, question=question, mode="latest", use_opus=deep)
+        await interaction.followup.send(embed=build_answer_embed(question, result))
+
+    @app_commands.command(name="timeline", description="Show the timeline for a subject")
+    async def timeline(self, interaction: discord.Interaction, subject: str, deep: bool = False):
+        await interaction.response.defer(thinking=True)
+        question = f"Show me the timeline for {subject}"
+        async with async_session() as session:
+            result = await query_brain(session, question=question, mode="timeline", use_opus=deep)
+        await interaction.followup.send(embed=build_answer_embed(question, result))
+
+    @app_commands.command(name="changed", description="Show what changed since a boundary")
+    async def changed(
+        self,
+        interaction: discord.Interaction,
+        subject: str,
+        since: str = "yesterday",
+        deep: bool = False,
+    ):
+        await interaction.response.defer(thinking=True)
+        question = f"What changed since {since} on {subject}"
+        async with async_session() as session:
+            result = await query_brain(session, question=question, mode="changed_since", use_opus=deep)
+        await interaction.followup.send(embed=build_answer_embed(question, result))
+
+    @app_commands.command(name="sources", description="Show raw sources for a subject")
+    async def sources(self, interaction: discord.Interaction, subject: str):
+        await interaction.response.defer(thinking=True)
+        question = f"Show sources for {subject}"
+        async with async_session() as session:
+            result = await query_brain(session, question=question, mode="sources")
+        await interaction.followup.send(embed=build_answer_embed(question, result))
 
     @app_commands.command(name="remember", description="Save a quick note to your brain")
     @app_commands.describe(

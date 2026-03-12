@@ -40,10 +40,19 @@ class CollectorEntryPayload(BaseModel):
 
 
 class CollectorIngestRequest(BaseModel):
+    source_type: str = "collector"
     source_name: str = "mac-collector"
     mode: str = "sync"
     device_name: str
+    emit_sync_event: bool = True
     entries: list[CollectorEntryPayload] = Field(default_factory=list)
+
+
+class QueryRequest(BaseModel):
+    question: str = Field(min_length=3)
+    mode: str | None = None
+    category: str | None = None
+    use_opus: bool = False
 
 
 class SyncReportRequest(BaseModel):

@@ -376,10 +376,16 @@ class InboxCog(commands.Cog):
             f"{entry.get('title')} ({entry.get('actor_name') or 'unknown'})"
             for entry in payload.get("recent_activity", [])[:5]
         ] or ["No recent activity"]
+        trigger = payload.get("trigger") or "scheduled"
+        is_story_pulse = trigger == "story_pulse"
 
         embed = discord.Embed(
-            title=f"Daily Digest - {payload.get('digest_date')}",
-            description="Fresh morning snapshot from the brain.",
+            title=f"{'Story Pulse' if is_story_pulse else 'Daily Digest'} - {payload.get('digest_date')}",
+            description=(
+                "New grounded story signals just landed."
+                if is_story_pulse
+                else "Fresh morning snapshot from the brain."
+            ),
             color=discord.Color.gold(),
         )
         embed.add_field(name="Tasks", value="\n".join(task_titles), inline=False)
@@ -397,6 +403,22 @@ class InboxCog(commands.Cog):
         writing_topics = payload.get("writing_topics") or []
         if writing_topics:
             embed.add_field(name="Writing Topics", value="\n".join(writing_topics[:5]), inline=False)
+        if payload.get("open_loops"):
+            loop_lines = [
+                item.get("open_question") or item.get("title") or "Open loop"
+                for item in payload["open_loops"][:3]
+            ]
+            embed.add_field(name="Open Loops", value="\n".join(loop_lines), inline=False)
+        if payload.get("story_connections"):
+            connection_lines = [
+                f"{item.get('subject_ref')} ({item.get('mentions')} mentions)"
+                for item in payload["story_connections"][:5]
+                if item.get("subject_ref")
+            ]
+            if connection_lines:
+                embed.add_field(name="Connections", value="\n".join(connection_lines), inline=False)
+        if payload.get("reason"):
+            embed.set_footer(text=f"Trigger: {payload['reason']}")
 
         await post_to_channel(
             self.bot,
@@ -421,6 +443,13 @@ class InboxCog(commands.Cog):
             embed.add_field(name="Device", value=str(payload["device_name"]), inline=True)
         if payload.get("source_type"):
             embed.add_field(name="Source", value=str(payload["source_type"]).title(), inline=True)
+        projects_touched = ((payload.get("metadata") or {}).get("projects_touched")) or payload.get("projects_touched") or []
+        if projects_touched:
+            embed.add_field(
+                name="Projects Touched",
+                value="\n".join(projects_touched[:5]),
+                inline=False,
+            )
         if payload.get("sync_run_id"):
             embed.set_footer(text=f"Sync run: {payload['sync_run_id'][:8]}")
 
@@ -546,6 +575,8 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
         color=discord.Color.teal(),
     )
     embed.add_field(name="Question", value=question[:1024], inline=False)
+    if result.get("mode"):
+        embed.add_field(name="Mode", value=str(result["mode"]).replace("_", " ").title(), inline=True)
 
     sources = result.get("sources") or []
     if sources:

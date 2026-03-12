@@ -20,6 +20,7 @@ JOB_ASK_CLARIFICATION = "src.worker.tasks.clarify.ask_clarification"
 JOB_GENERATE_EMBEDDINGS = "src.worker.tasks.embed.generate_embeddings"
 JOB_PROCESS_LIBRARIAN = "src.worker.tasks.librarian.process_librarian"
 JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
+JOB_GENERATE_SCHEDULED_DIGEST_TICK = "src.worker.tasks.digest.generate_scheduled_digest_tick"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
@@ -72,6 +73,22 @@ async def publish_event(channel: str, payload: dict) -> None:
     await pool.publish(channel, json.dumps(payload))
 
 
+async def enqueue_story_pulse_digest(*, reason: str, metadata: dict | None = None) -> bool:
+    pool = await get_pool()
+    cooldown_seconds = max(60, settings.digest_story_pulse_cooldown_minutes * 60)
+    debounce_key = "brain:digest:story_pulse_lock"
+    acquired = await pool.set(debounce_key, reason, ex=cooldown_seconds, nx=True)
+    if not acquired:
+        return False
+    await pool.enqueue_job(
+        JOB_GENERATE_DAILY_DIGEST,
+        trigger="story_pulse",
+        reason=reason,
+        metadata=metadata or {},
+    )
+    return True
+
+
 # ── Worker class (ARQ entrypoint) ───────────────────────────────
 
 class WorkerSettings:
@@ -87,12 +104,13 @@ class WorkerSettings:
         JOB_GENERATE_EMBEDDINGS,
         JOB_PROCESS_LIBRARIAN,
         JOB_GENERATE_DAILY_DIGEST,
+        JOB_GENERATE_SCHEDULED_DIGEST_TICK,
     ]
 
     cron_jobs = [
         cron(
-            JOB_GENERATE_DAILY_DIGEST,
-            hour=settings.digest_cron_hour,
+            JOB_GENERATE_SCHEDULED_DIGEST_TICK,
+            hour=set(range(24)),
             minute=0,
         )
     ]

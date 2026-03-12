@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # Daily digest
     digest_cron_hour: int = 8
     digest_timezone: str = "America/New_York"
+    digest_story_pulse_cooldown_minutes: int = 15
 
     # Collector
     collector_device_name: str = "macbook"
@@ -73,6 +74,12 @@ class Settings(BaseSettings):
     collector_api_base_url: str = "http://127.0.0.1:8000"
     collector_scan_max_depth: int = 4
     collector_inventory_recent_files_limit: int = 50
+    agent_history_state_path: str = "~/.brain-collector/agent-history-state.json"
+    agent_history_idle_seconds: int = 300
+    agent_history_poll_seconds: int = 900
+
+    # Story retrieval
+    story_max_events: int = 25
 
     # GitHub
     github_api_token: str = ""

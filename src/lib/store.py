@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.constants import normalize_category, normalize_tags
@@ -336,7 +336,9 @@ async def get_digest_by_date(session: AsyncSession, digest_date: date) -> Digest
 
 async def create_journal_entry(session: AsyncSession, **kwargs) -> JournalEntry:
     kwargs["tags"] = normalize_tags(kwargs.get("tags"))
+    kwargs.setdefault("evidence_refs", [])
     kwargs.setdefault("source_links", [])
+    kwargs.setdefault("subject_type", "topic")
     kwargs.setdefault("happened_at", _utcnow())
     kwargs.setdefault("created_at", _utcnow())
     journal_entry = JournalEntry(**kwargs)
@@ -357,6 +359,64 @@ async def list_recent_activity(
         query = query.where(JournalEntry.project_note_id == project_note_id)
     query = query.order_by(JournalEntry.happened_at.desc(), JournalEntry.created_at.desc()).limit(limit)
     result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def list_story_events(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID | None = None,
+    subject_ref: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 50,
+    ascending: bool = False,
+) -> list[JournalEntry]:
+    query = select(JournalEntry)
+    if project_note_id:
+        query = query.where(JournalEntry.project_note_id == project_note_id)
+    if subject_ref:
+        lowered = subject_ref.lower()
+        query = query.where(
+            or_(
+                func.lower(JournalEntry.subject_ref) == lowered,
+                func.lower(JournalEntry.title).contains(lowered),
+                func.lower(func.coalesce(JournalEntry.summary, "")).contains(lowered),
+            )
+        )
+    if since:
+        query = query.where(JournalEntry.happened_at >= since)
+    if until:
+        query = query.where(JournalEntry.happened_at <= until)
+    ordering = (
+        JournalEntry.happened_at.asc(),
+        JournalEntry.created_at.asc(),
+    ) if ascending else (
+        JournalEntry.happened_at.desc(),
+        JournalEntry.created_at.desc(),
+    )
+    query = query.order_by(*ordering).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def find_story_subjects(session: AsyncSession, phrase: str, limit: int = 10) -> list[JournalEntry]:
+    lowered = (phrase or "").strip().lower()
+    if not lowered:
+        return []
+
+    result = await session.execute(
+        select(JournalEntry)
+        .where(
+            or_(
+                func.lower(func.coalesce(JournalEntry.subject_ref, "")).contains(lowered),
+                func.lower(JournalEntry.title).contains(lowered),
+                func.lower(func.coalesce(JournalEntry.summary, "")).contains(lowered),
+            )
+        )
+        .order_by(JournalEntry.happened_at.desc(), JournalEntry.created_at.desc())
+        .limit(limit)
+    )
     return list(result.scalars().all())
 
 
@@ -473,6 +533,21 @@ async def create_source_item(session: AsyncSession, **kwargs) -> SourceItem:
     await session.commit()
     await session.refresh(source_item)
     return source_item
+
+
+async def get_source_item_by_external_id(
+    session: AsyncSession,
+    *,
+    sync_source_id: uuid.UUID,
+    external_id: str,
+) -> SourceItem | None:
+    result = await session.execute(
+        select(SourceItem).where(
+            SourceItem.sync_source_id == sync_source_id,
+            SourceItem.external_id == external_id,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def upsert_source_item(

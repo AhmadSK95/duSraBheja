@@ -37,10 +37,20 @@ MERGEABLE_CATEGORIES = {"project", "people", "resource"}
 SOURCE_TYPES = (
     "discord",
     "collector",
+    "codex_history",
+    "claude_history",
     "github",
     "agent",
     "manual",
     "mcp",
+)
+
+QUERY_MODES = (
+    "answer",
+    "latest",
+    "timeline",
+    "changed_since",
+    "sources",
 )
 
 

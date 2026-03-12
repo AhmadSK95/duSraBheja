@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime
 
 import httpx
@@ -10,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.lib import store
+from src.agents.storyteller import extract_story_event
+from src.services.indexing import index_artifact
 from src.services.story import publish_story_entry
+
+log = logging.getLogger("brain.services.sync")
 
 
 def _hash_payload(value: str) -> str:
@@ -20,14 +25,16 @@ def _hash_payload(value: str) -> str:
 async def import_collector_payload(
     session: AsyncSession,
     *,
+    source_type: str,
     source_name: str,
     mode: str,
     device_name: str,
+    emit_sync_event: bool = True,
     entries: list[dict],
 ) -> dict:
     sync_source = await store.upsert_sync_source(
         session,
-        source_type="collector",
+        source_type=source_type,
         name=source_name,
         status="active",
         config={"device_name": device_name},
@@ -35,16 +42,18 @@ async def import_collector_payload(
     sync_run = await store.start_sync_run(session, sync_source_id=sync_source.id, mode=mode)
 
     imported = 0
+    projects_touched: set[str] = set()
     for entry in entries:
         project_ref = entry.get("project_ref")
         title = entry.get("title") or project_ref or "Collector update"
         body_markdown = entry.get("body_markdown") or ""
-        payload_hash = _hash_payload(f"{project_ref}|{title}|{body_markdown}")
+        payload_hash = entry.get("content_hash") or _hash_payload(f"{project_ref}|{title}|{body_markdown}")
         happened_at = entry.get("happened_at")
         happened_dt = datetime.fromisoformat(happened_at) if happened_at else None
 
         project_note = None
         if project_ref:
+            projects_touched.add(project_ref)
             project_note = await store.get_or_create_project_note(session, project_ref)
             if entry.get("repo"):
                 await store.upsert_project_repo(
@@ -58,16 +67,25 @@ async def import_collector_payload(
                     is_primary=entry["repo"].get("is_primary", False),
                 )
 
+        source_item = await store.get_source_item_by_external_id(
+            session,
+            sync_source_id=sync_source.id,
+            external_id=entry.get("external_id") or payload_hash,
+        )
+        if source_item and source_item.content_hash == payload_hash:
+            continue
+
         artifact = await store.create_artifact(
             session,
             content_type="text",
             raw_text=body_markdown,
             summary=title,
-            source="collector",
+            source=source_type,
             metadata_={
                 "entry_type": entry.get("entry_type", "context_dump"),
                 "device_name": device_name,
                 "project_ref": project_ref,
+                "source_type": source_type,
                 "collector_metadata": entry.get("metadata", {}),
             },
         )
@@ -80,11 +98,15 @@ async def import_collector_payload(
             tags=entry.get("tags", []),
             priority="medium",
             suggested_action=None,
-            model_used="collector",
+            model_used=source_type,
             tokens_used=0,
             cost_usd=0,
             is_final=True,
         )
+        try:
+            await index_artifact(session, artifact.id)
+        except Exception as exc:
+            log.warning("Failed to index imported artifact %s: %s", artifact.id, exc)
         source_item, created = await store.upsert_source_item(
             session,
             sync_source_id=sync_source.id,
@@ -98,17 +120,35 @@ async def import_collector_payload(
             artifact_id=artifact.id,
             happened_at=happened_dt,
         )
-        await publish_story_entry(
+        story_fields = await _extract_story_fields(
             session,
-            actor_type="collector",
-            actor_name=device_name,
-            entry_type=entry.get("entry_type", "context_dump"),
+            source_type=source_type,
             title=title,
             body_markdown=body_markdown,
             project_ref=project_ref,
-            tags=entry.get("tags", []),
+            actor_name=device_name,
+        )
+        await publish_story_entry(
+            session,
+            actor_type="collector" if source_type == "collector" else "agent",
+            actor_name=device_name,
+            subject_type=story_fields["subject_type"],
+            subject_ref=story_fields["subject_ref"] or project_ref,
+            entry_type=story_fields["entry_type"] or entry.get("entry_type", "context_dump"),
+            title=story_fields["title"] or title,
+            body_markdown=body_markdown,
+            project_ref=project_ref,
+            summary=story_fields["summary"] or entry.get("summary"),
+            decision=story_fields["decision"],
+            rationale=story_fields["rationale"],
+            constraint=story_fields["constraint"],
+            outcome=story_fields["outcome"],
+            impact=story_fields["impact"],
+            open_question=story_fields["open_question"],
+            evidence_refs=story_fields["evidence_refs"],
+            tags=story_fields["tags"] or entry.get("tags", []),
             source_links=entry.get("source_links", []),
-            source="collector",
+            source=source_type,
             category=entry.get("category", "note"),
             metadata_=entry.get("metadata"),
             happened_at=happened_dt,
@@ -133,11 +173,15 @@ async def import_collector_payload(
         "items_seen": len(entries),
         "items_imported": imported,
         "source_name": source_name,
-        "source_type": "collector",
+        "source_type": source_type,
         "device_name": device_name,
         "mode": mode,
+        "projects_touched": sorted(projects_touched),
     }
-    await _publish_sync_event(result)
+    if emit_sync_event:
+        await _publish_sync_event(result)
+    if imported and emit_sync_event:
+        await _trigger_story_pulse(reason=f"{source_type}:{mode}", metadata=result)
     return result
 
 
@@ -263,6 +307,8 @@ async def run_github_sync(session: AsyncSession) -> dict:
         "mode": "sync",
     }
     await _publish_sync_event(result)
+    if imported:
+        await _trigger_story_pulse(reason="github:sync", metadata=result)
     return result
 
 
@@ -315,6 +361,8 @@ async def record_sync_report(
     if error:
         result["error"] = error
     await _publish_sync_event(result)
+    if items_imported:
+        await _trigger_story_pulse(reason=f"{source_type}:{mode}", metadata=result)
     return result
 
 
@@ -322,3 +370,61 @@ async def _publish_sync_event(payload: dict) -> None:
     from src.worker.main import EVENT_SYNC_COMPLETED, publish_event
 
     await publish_event(EVENT_SYNC_COMPLETED, payload)
+
+
+async def _extract_story_fields(
+    session: AsyncSession,
+    *,
+    source_type: str,
+    title: str,
+    body_markdown: str,
+    project_ref: str | None,
+    actor_name: str,
+) -> dict:
+    if source_type not in {"codex_history", "claude_history"}:
+        return {
+            "subject_type": "project" if project_ref else "topic",
+            "subject_ref": project_ref,
+            "entry_type": "context_dump",
+            "title": title,
+            "summary": body_markdown[:280] if body_markdown else title,
+            "decision": None,
+            "rationale": None,
+            "constraint": None,
+            "outcome": None,
+            "impact": None,
+            "open_question": None,
+            "evidence_refs": [],
+            "tags": [],
+        }
+
+    try:
+        return await extract_story_event(
+            session,
+            title=title,
+            body_markdown=body_markdown,
+            project_ref=project_ref,
+            actor_name=actor_name,
+        )
+    except Exception:
+        return {
+            "subject_type": "project" if project_ref else "topic",
+            "subject_ref": project_ref,
+            "entry_type": "conversation_session",
+            "title": title,
+            "summary": body_markdown[:280] if body_markdown else title,
+            "decision": None,
+            "rationale": None,
+            "constraint": None,
+            "outcome": None,
+            "impact": None,
+            "open_question": None,
+            "evidence_refs": [],
+            "tags": ["conversation"],
+        }
+
+
+async def _trigger_story_pulse(*, reason: str, metadata: dict) -> None:
+    from src.worker.main import enqueue_story_pulse_digest
+
+    await enqueue_story_pulse_digest(reason=reason, metadata=metadata)

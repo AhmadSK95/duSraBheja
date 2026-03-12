@@ -223,12 +223,21 @@ class JournalEntry(Base):
     artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
     project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
     source_item_id = Column(UUID(as_uuid=True), ForeignKey("source_items.id", ondelete="SET NULL"), nullable=True)
+    subject_type = Column(String, nullable=False, default="topic")
+    subject_ref = Column(String, nullable=True)
     entry_type = Column(String, nullable=False, default="note")
     actor_type = Column(String, nullable=False, default="human")
     actor_name = Column(String, nullable=False, default="unknown")
     title = Column(String, nullable=False)
     body_markdown = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)
+    decision = Column(Text, nullable=True)
+    rationale = Column(Text, nullable=True)
+    constraint = Column(Text, nullable=True)
+    outcome = Column(Text, nullable=True)
+    impact = Column(Text, nullable=True)
+    open_question = Column(Text, nullable=True)
+    evidence_refs = Column(JSONB, default=list)
     tags = Column(ARRAY(String), default=list)
     source_links = Column(JSONB, default=list)
     metadata_ = Column("metadata", JSONB, default=dict)
@@ -243,6 +252,7 @@ class JournalEntry(Base):
         Index("idx_journal_project", "project_note_id"),
         Index("idx_journal_happened", "happened_at"),
         Index("idx_journal_entry_type", "entry_type"),
+        Index("idx_journal_subject", "subject_type", "subject_ref"),
     )
 
 

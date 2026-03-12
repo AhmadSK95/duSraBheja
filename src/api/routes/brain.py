@@ -6,11 +6,18 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from src.api.schemas import CollectorIngestRequest, ManualIngestRequest, SyncReportRequest, SyncRunResponse
+from src.api.schemas import (
+    CollectorIngestRequest,
+    ManualIngestRequest,
+    QueryRequest,
+    SyncReportRequest,
+    SyncRunResponse,
+)
 from src.database import async_session
 from src.lib.auth import require_api_token
 from src.lib.embeddings import embed_text
 from src.lib.store import get_note, vector_search
+from src.services.query import query_brain
 from src.services.story import build_project_brief_payload, build_project_story_payload
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
@@ -41,9 +48,11 @@ async def ingest_collector(payload: CollectorIngestRequest) -> dict:
     async with async_session() as session:
         result = await import_collector_payload(
             session,
+            source_type=payload.source_type,
             source_name=payload.source_name,
             mode=payload.mode,
             device_name=payload.device_name,
+            emit_sync_event=payload.emit_sync_event,
             entries=[entry.model_dump(mode="json") for entry in payload.entries],
         )
     return {"status": "completed", **result}
@@ -128,3 +137,15 @@ async def search_route(
                     })
             items.append(item)
     return items
+
+
+@router.post("/query", dependencies=[Depends(require_api_token)])
+async def query_route(payload: QueryRequest) -> dict:
+    async with async_session() as session:
+        return await query_brain(
+            session,
+            question=payload.question,
+            mode=payload.mode,
+            category=payload.category,
+            use_opus=payload.use_opus,
+        )

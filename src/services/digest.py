@@ -21,16 +21,60 @@ async def build_daily_digest_payload(session, *, digest_date: date) -> dict:
 
     recent_cutoff = digest_date - timedelta(days=7)
     project_updates = {}
+    open_loops = []
+    subject_counter: dict[str, int] = {}
     for entry in recent_activity:
         if entry.happened_at.date() < recent_cutoff:
             continue
         if not entry.project_note_id:
-            continue
-        project_updates.setdefault(str(entry.project_note_id), []).append({
-            "title": entry.title,
-            "entry_type": entry.entry_type,
-            "happened_at": str(entry.happened_at),
-        })
+            if getattr(entry, "open_question", None):
+                open_loops.append(
+                    {
+                        "title": entry.title,
+                        "open_question": entry.open_question,
+                        "happened_at": str(entry.happened_at),
+                    }
+                )
+        else:
+            project_updates.setdefault(str(entry.project_note_id), []).append({
+                "title": entry.title,
+                "entry_type": entry.entry_type,
+                "happened_at": str(entry.happened_at),
+                "decision": getattr(entry, "decision", None),
+                "impact": getattr(entry, "impact", None),
+                "open_question": getattr(entry, "open_question", None),
+            })
+        subject_ref = getattr(entry, "subject_ref", None)
+        if subject_ref:
+            subject_counter[subject_ref] = subject_counter.get(subject_ref, 0) + 1
+
+    connection_summaries = [
+        {"subject_ref": subject_ref, "mentions": count}
+        for subject_ref, count in sorted(subject_counter.items(), key=lambda item: item[1], reverse=True)
+        if count > 1
+    ]
+
+    narration_lines = [
+        f"Daily digest for {digest_date.isoformat()}.",
+        "Where things stand:",
+    ]
+    narration_lines.extend(
+        f"Project {project.title} has {len(project_updates.get(str(project.id), []))} recent updates."
+        for project in projects[:5]
+    )
+    if recent_activity:
+        narration_lines.append("Recent turning points:")
+        narration_lines.extend(
+            f"{entry.title}. {getattr(entry, 'summary', None) or ''}".strip()
+            for entry in recent_activity[:5]
+        )
+    if open_loops:
+        narration_lines.append("Unresolved loops:")
+        narration_lines.extend(
+            item["open_question"]
+            for item in open_loops[:3]
+            if item.get("open_question")
+        )
 
     return {
         "digest_date": digest_date.isoformat(),
@@ -58,6 +102,9 @@ async def build_daily_digest_payload(session, *, digest_date: date) -> dict:
                 "title": entry.title,
                 "entry_type": entry.entry_type,
                 "actor_name": entry.actor_name,
+                "decision": getattr(entry, "decision", None),
+                "impact": getattr(entry, "impact", None),
+                "open_question": getattr(entry, "open_question", None),
                 "happened_at": str(entry.happened_at),
             }
             for entry in recent_activity[:10]
@@ -69,6 +116,9 @@ async def build_daily_digest_payload(session, *, digest_date: date) -> dict:
             }
             for review in pending_reviews[:10]
         ],
+        "open_loops": open_loops[:10],
+        "story_connections": connection_summaries[:10],
+        "narration_script": " ".join(line for line in narration_lines if line),
         "writing_topics": [project.title for project in projects[:5]],
     }
 

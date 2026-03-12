@@ -128,6 +128,17 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "weekly_rollup": weekly_rollup,
                 },
             )
+            from src.worker.main import enqueue_story_pulse_digest
+
+            await enqueue_story_pulse_digest(
+                reason=f"artifact:{classification.category}",
+                metadata={
+                    "artifact_id": str(artifact_uuid),
+                    "category": classification.category,
+                    "note_id": str(note_id),
+                    "note_title": note_title,
+                },
+            )
         except Exception as exc:
             from src.worker.main import EVENT_ARTIFACT_FAILED
 

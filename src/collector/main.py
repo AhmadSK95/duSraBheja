@@ -491,6 +491,7 @@ async def post_entries(entries: list[dict], *, mode: str) -> dict:
         "Authorization": f"Bearer {settings.api_token}",
     }
     payload = {
+        "source_type": "collector",
         "source_name": "mac-collector",
         "mode": mode,
         "device_name": settings.collector_device_name,
@@ -516,6 +517,7 @@ def prepare_payload_bundle(mode: str) -> tuple[dict, dict, Path]:
         inventory_recent_files_limit=settings.collector_inventory_recent_files_limit,
     )
     payload = {
+        "source_type": "collector",
         "source_name": "mac-collector",
         "mode": mode,
         "device_name": settings.collector_device_name,

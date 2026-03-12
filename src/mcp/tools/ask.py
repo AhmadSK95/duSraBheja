@@ -3,7 +3,7 @@
 from mcp.server.fastmcp import FastMCP
 
 from src.database import async_session
-from src.agents.retriever import answer_question
+from src.services.query import query_brain
 
 
 def register(mcp: FastMCP):
@@ -11,6 +11,7 @@ def register(mcp: FastMCP):
     async def ask_brain(
         question: str,
         category: str | None = None,
+        mode: str | None = None,
     ) -> dict:
         """Ask a natural language question to the brain. Returns an AI-synthesized answer
         with citations to specific artifacts and notes.
@@ -19,11 +20,13 @@ def register(mcp: FastMCP):
         Args:
             question: What you want to know
             category: Optional category filter (task, project, people, idea, note, resource, reminder, daily_planner, weekly_planner)
+            mode: Optional query mode (answer, latest, timeline, changed_since, sources)
         """
         async with async_session() as session:
-            result = await answer_question(
+            result = await query_brain(
                 session,
                 question=question,
+                mode=mode,
                 category=category,
             )
 
@@ -31,4 +34,5 @@ def register(mcp: FastMCP):
             "answer": result["answer"],
             "sources": result["sources"],
             "confidence": result["confidence"],
+            "mode": result.get("mode"),
         }

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 
 import pytest
 
@@ -37,61 +36,32 @@ def test_candidate_lookup_phrases_prioritize_project_terms() -> None:
 
 
 @pytest.mark.asyncio
-async def test_answer_question_uses_project_story_context_when_project_matches(monkeypatch) -> None:
+async def test_answer_question_routes_through_query_service(monkeypatch) -> None:
     captured = {}
-    project_id = uuid.uuid4()
 
-    async def _fake_embed_text(question: str):
-        return [0.0, 0.0, 0.0]
-
-    async def _fake_vector_search(session, query_embedding, limit=20, min_similarity=0.3, category=None):
-        return []
-
-    async def _fake_find_notes_by_title(session, title: str, category: str | None = None):
-        if category == "project" and "dataGenie".lower() in title.lower():
-            return [SimpleNamespace(id=project_id, title="dataGenie", category="project", content="Canonical summary")]
-        return []
-
-    async def _fake_build_project_story_payload(session, note_id):
+    async def _fake_query_brain(session, *, question: str, category=None, use_opus=False):
+        captured["question"] = question
+        captured["category"] = category
+        captured["use_opus"] = use_opus
         return {
-            "project": {
-                "id": str(project_id),
-                "title": "dataGenie",
-                "category": "project",
-                "content": "Shipping the project assistant workflow.",
-                "status": "active",
-                "tags": ["ai", "workflow"],
-                "updated_at": "2026-03-12T08:00:00+00:00",
-            },
-            "repos": [{"name": "dataGenie", "branch": "main"}],
-            "recent_activity": [
-                {
-                    "title": "Shipped context sync improvements",
-                    "summary": "Collector snapshots and planner fixes landed.",
-                    "happened_at": "2026-03-12T07:45:00+00:00",
-                }
-            ],
-            "sources": [{"title": "GitHub repo snapshot", "summary": "Repo updated this morning."}],
-            "links": [],
-        }
-
-    async def _fake_agent_call(session, **kwargs):
-        captured["prompt"] = kwargs["prompt"]
-        return {
-            "text": "Latest on dataGenie: context sync improvements landed this morning. [1]",
+            "mode": "latest",
+            "answer": "Latest on dataGenie: context sync improvements landed this morning. [1]",
+            "sources": [{"id": str(uuid.uuid4()), "title": "dataGenie", "category": "project_story", "similarity": 0.96}],
+            "confidence": "high",
             "model": "claude-sonnet-4-6",
             "cost_usd": 0,
         }
 
-    monkeypatch.setattr(retriever, "embed_text", _fake_embed_text)
-    monkeypatch.setattr(retriever, "vector_search", _fake_vector_search)
-    monkeypatch.setattr(retriever, "find_notes_by_title", _fake_find_notes_by_title)
-    monkeypatch.setattr(retriever, "build_project_story_payload", _fake_build_project_story_payload)
-    monkeypatch.setattr(retriever, "agent_call", _fake_agent_call)
+    monkeypatch.setattr(retriever, "query_brain", _fake_query_brain)
 
-    result = await retriever.answer_question(object(), "What is the latest on dataGenie project")
+    result = await retriever.answer_question(object(), "What is the latest on dataGenie project", use_opus=True)
 
-    assert "Recent Project Activity" in captured["prompt"]
+    assert captured == {
+        "question": "What is the latest on dataGenie project",
+        "category": None,
+        "use_opus": True,
+    }
+    assert result["mode"] == "latest"
     assert result["confidence"] == "high"
     assert result["sources"][0]["category"] == "project_story"
     assert result["answer"].startswith("Latest on dataGenie")
