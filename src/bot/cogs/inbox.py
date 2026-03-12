@@ -8,6 +8,7 @@ import discord
 from redis.asyncio import Redis
 from discord.ext import commands
 
+from src.agents.retriever import answer_question
 from src.config import settings
 from src.database import async_session
 from src.lib.store import get_artifact, get_review_by_thread, resolve_review, set_review_thread, update_artifact
@@ -36,6 +37,9 @@ class InboxCog(commands.Cog):
     def _is_planner_channel(self, channel: discord.TextChannel) -> bool:
         return channel.name in {"daily-planner", "weekly-planner"}
 
+    def _is_ask_channel(self, channel: discord.TextChannel) -> bool:
+        return channel.name == settings.ask_channel_name
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         # Ignore bot messages
@@ -50,6 +54,10 @@ class InboxCog(commands.Cog):
         # Handle #inbox messages
         if isinstance(message.channel, discord.TextChannel) and self._is_inbox_channel(message.channel):
             await self._handle_inbox_message(message)
+            return
+
+        if isinstance(message.channel, discord.TextChannel) and self._is_ask_channel(message.channel):
+            await self._handle_ask_message(message)
             return
 
         # Handle #planner images (store only, no action)
@@ -133,11 +141,48 @@ class InboxCog(commands.Cog):
             await message.add_reaction("\u2705")
             log.info(f"Review {review.id} answered in thread {thread_id}")
 
+    async def _handle_ask_message(self, message: discord.Message):
+        question = (message.content or "").strip()
+        if not question:
+            if message.attachments:
+                await message.reply(
+                    "Use `#inbox` for files, audio, and links you want stored. Use this channel for questions.",
+                    mention_author=False,
+                )
+            return
+
+        await message.add_reaction("\U0001f914")
+        try:
+            async with message.channel.typing():
+                async with async_session() as session:
+                    result = await answer_question(session, question=question)
+
+            embed = build_answer_embed(question, result)
+            await message.reply(embed=embed, mention_author=False)
+            await message.add_reaction("\u2705")
+        except Exception as exc:
+            log.exception("Failed to answer ask-brain message %s", message.id)
+            await message.add_reaction("\u274c")
+            await message.reply(
+                embed=discord.Embed(
+                    title="Brain Answer Failed",
+                    description="I saw the question, but I could not answer it yet.",
+                    color=discord.Color.red(),
+                ).add_field(name="Error", value=str(exc)[:1000], inline=False),
+                mention_author=False,
+            )
+
     async def _listen_notifications(self):
         await self.bot.wait_until_ready()
         redis = Redis.from_url(settings.redis_url)
         pubsub = redis.pubsub()
-        await pubsub.subscribe("brain:artifact_processed", "brain:review_created", "brain:artifact_failed")
+        await pubsub.subscribe(
+            "brain:artifact_processed",
+            "brain:review_created",
+            "brain:artifact_failed",
+            "brain:digest_ready",
+            "brain:sync_completed",
+        )
         try:
             while not self._listener_stop.is_set():
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -153,10 +198,20 @@ class InboxCog(commands.Cog):
                     await self._handle_review_created(payload)
                 elif channel_name == "brain:artifact_failed":
                     await self._handle_artifact_failed(payload)
+                elif channel_name == "brain:digest_ready":
+                    await self._handle_digest_ready(payload)
+                elif channel_name == "brain:sync_completed":
+                    await self._handle_sync_completed(payload)
         except asyncio.CancelledError:
             raise
         finally:
-            await pubsub.unsubscribe("brain:artifact_processed", "brain:review_created", "brain:artifact_failed")
+            await pubsub.unsubscribe(
+                "brain:artifact_processed",
+                "brain:review_created",
+                "brain:artifact_failed",
+                "brain:digest_ready",
+                "brain:sync_completed",
+            )
             await pubsub.aclose()
             await redis.aclose()
 
@@ -314,6 +369,68 @@ class InboxCog(commands.Cog):
         embed.add_field(name="Error", value=(payload.get("error") or "Unknown error")[:1000], inline=False)
         await message.reply(embed=embed, mention_author=False)
 
+    async def _handle_digest_ready(self, payload: dict):
+        task_titles = [task["title"] for task in payload.get("tasks", [])[:5]] or ["No active tasks"]
+        project_titles = [project["title"] for project in payload.get("projects", [])[:5]] or ["No active projects"]
+        recent_titles = [
+            f"{entry.get('title')} ({entry.get('actor_name') or 'unknown'})"
+            for entry in payload.get("recent_activity", [])[:5]
+        ] or ["No recent activity"]
+
+        embed = discord.Embed(
+            title=f"Daily Digest - {payload.get('digest_date')}",
+            description="Fresh morning snapshot from the brain.",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="Tasks", value="\n".join(task_titles), inline=False)
+        embed.add_field(name="Projects", value="\n".join(project_titles), inline=False)
+        embed.add_field(name="Recent Activity", value="\n".join(recent_titles), inline=False)
+
+        pending_reviews = payload.get("pending_reviews") or []
+        if pending_reviews:
+            embed.add_field(
+                name="Pending Reviews",
+                value="\n".join(item["question"] for item in pending_reviews[:3]),
+                inline=False,
+            )
+
+        writing_topics = payload.get("writing_topics") or []
+        if writing_topics:
+            embed.add_field(name="Writing Topics", value="\n".join(writing_topics[:5]), inline=False)
+
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.daily_digest_channel_name,
+            embed,
+        )
+
+    async def _handle_sync_completed(self, payload: dict):
+        status = (payload.get("status") or "completed").lower()
+        color = discord.Color.gold() if status == "noop" else discord.Color.green()
+        embed = discord.Embed(
+            title="Brain Sync Receipt",
+            description=f"{payload.get('source_name') or 'sync'} {status}.",
+            color=color,
+        )
+        embed.add_field(name="Mode", value=str(payload.get("mode") or "sync").title(), inline=True)
+        embed.add_field(name="Seen", value=str(payload.get("items_seen") or 0), inline=True)
+        embed.add_field(name="Imported", value=str(payload.get("items_imported") or 0), inline=True)
+
+        if payload.get("device_name"):
+            embed.add_field(name="Device", value=str(payload["device_name"]), inline=True)
+        if payload.get("source_type"):
+            embed.add_field(name="Source", value=str(payload["source_type"]).title(), inline=True)
+        if payload.get("sync_run_id"):
+            embed.set_footer(text=f"Sync run: {payload['sync_run_id'][:8]}")
+
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.daily_digest_channel_name,
+            embed,
+        )
+
     async def _store_artifact_outputs(
         self,
         artifact_id: str,
@@ -412,6 +529,34 @@ def build_classification_embed(classification: dict, summary: str, artifact_id: 
         embed.add_field(name="Suggested Action", value=classification["suggested_action"], inline=False)
 
     embed.set_footer(text=f"ID: {artifact_id[:8]}")
+    return embed
+
+
+def build_answer_embed(question: str, result: dict) -> discord.Embed:
+    model_label = result.get("model") or "unknown"
+    if "-" in model_label:
+        parts = [part for part in model_label.split("-") if part]
+        model_label = parts[1].title() if len(parts) > 1 else parts[0].title()
+    else:
+        model_label = model_label.title()
+
+    embed = discord.Embed(
+        title="Brain Answer",
+        description=result["answer"],
+        color=discord.Color.teal(),
+    )
+    embed.add_field(name="Question", value=question[:1024], inline=False)
+
+    sources = result.get("sources") or []
+    if sources:
+        source_lines = [
+            f"[{i}] {src['category']}: {src['title']} ({src['similarity']:.0%})"
+            for i, src in enumerate(sources[:5], 1)
+        ]
+        embed.add_field(name="Sources", value="\n".join(source_lines), inline=False)
+
+    embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
+    embed.add_field(name="Model", value=model_label, inline=True)
     return embed
 
 

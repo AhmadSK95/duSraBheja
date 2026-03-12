@@ -9,6 +9,7 @@ from discord.ext import commands
 from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
 from src.agents.retriever import answer_question
+from src.bot.cogs.inbox import build_answer_embed
 from src.lib.store import find_notes_by_title, get_pending_reviews
 from src.services.digest import generate_or_refresh_digest
 from src.services.story import build_project_story_payload
@@ -49,21 +50,7 @@ class CommandsCog(commands.Cog):
                 use_opus=deep,
             )
 
-        embed = discord.Embed(
-            title="Brain Answer",
-            description=result["answer"],
-            color=discord.Color.teal(),
-        )
-
-        if result["sources"]:
-            source_lines = []
-            for i, src in enumerate(result["sources"], 1):
-                source_lines.append(f"[{i}] {src['category']}: {src['title']} ({src['similarity']:.0%})")
-            embed.add_field(name="Sources", value="\n".join(source_lines[:5]), inline=False)
-
-        embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
-        embed.add_field(name="Model", value=result["model"].split("-")[1].title(), inline=True)
-
+        embed = build_answer_embed(question, result)
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="remember", description="Save a quick note to your brain")

@@ -10,7 +10,8 @@ from src.config import settings
 from src.lib.embeddings import embed_text
 from src.lib.store import vector_search, get_artifact, get_note
 
-SYSTEM_PROMPT = """You are the Retriever agent for duSraBheja, Ahmad's personal second brain.
+def build_system_prompt() -> str:
+    prompt = """You are the Retriever agent for duSraBheja, Ahmad's personal second brain.
 
 Answer the question using ONLY the provided context. If the context doesn't contain
 enough information, say so honestly.
@@ -21,6 +22,11 @@ Rules:
 - If you're synthesizing from multiple sources, make that clear
 - Include dates when they're relevant to the answer
 - Don't make up information not in the context"""
+
+    voice = (settings.brain_voice_instructions or "").strip()
+    if voice:
+        prompt += f"\n- Match Ahmad's voice and tone using these instructions: {voice}"
+    return prompt
 
 
 async def answer_question(
@@ -115,7 +121,7 @@ Answer the question. Cite your sources using [1], [2], etc."""
         agent_name="retriever",
         action="synthesize",
         prompt=prompt,
-        system=SYSTEM_PROMPT,
+        system=build_system_prompt(),
         model=model,
         max_tokens=2048,
         temperature=0.1,

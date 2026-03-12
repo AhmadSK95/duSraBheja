@@ -46,6 +46,18 @@ class CollectorIngestRequest(BaseModel):
     entries: list[CollectorEntryPayload] = Field(default_factory=list)
 
 
+class SyncReportRequest(BaseModel):
+    source_type: str
+    source_name: str
+    mode: str = "sync"
+    status: str
+    items_seen: int = 0
+    items_imported: int = 0
+    device_name: str | None = None
+    error: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
 class SyncRunResponse(BaseModel):
     status: str
     sync_run_id: str | None = None

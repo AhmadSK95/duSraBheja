@@ -555,6 +555,8 @@ def main() -> None:
                     "mode": args.mode,
                     "items_seen": len(payload["entries"]),
                     "state_path": str(state_path),
+                    "device_name": payload["device_name"],
+                    "source_name": payload["source_name"],
                 },
                 indent=2,
             )

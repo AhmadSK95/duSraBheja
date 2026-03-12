@@ -126,12 +126,19 @@ async def import_collector_payload(
         items_imported=imported,
     )
     await store.touch_sync_source(session, sync_source.id)
-    return {
+    result = {
+        "status": "completed",
         "sync_source_id": str(sync_source.id),
         "sync_run_id": str(sync_run.id),
         "items_seen": len(entries),
         "items_imported": imported,
+        "source_name": source_name,
+        "source_type": "collector",
+        "device_name": device_name,
+        "mode": mode,
     }
+    await _publish_sync_event(result)
+    return result
 
 
 async def run_github_sync(session: AsyncSession) -> dict:
@@ -245,9 +252,73 @@ async def run_github_sync(session: AsyncSession) -> dict:
         items_imported=imported,
     )
     await store.touch_sync_source(session, sync_source.id)
-    return {
+    result = {
         "status": "completed",
         "sync_run_id": str(sync_run.id),
+        "sync_source_id": str(sync_source.id),
         "items_seen": items_seen,
         "items_imported": imported,
+        "source_name": "github-readonly",
+        "source_type": "github",
+        "mode": "sync",
     }
+    await _publish_sync_event(result)
+    return result
+
+
+async def record_sync_report(
+    session: AsyncSession,
+    *,
+    source_type: str,
+    source_name: str,
+    mode: str,
+    status: str,
+    items_seen: int,
+    items_imported: int,
+    device_name: str | None = None,
+    error: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    sync_source = await store.upsert_sync_source(
+        session,
+        source_type=source_type,
+        name=source_name,
+        status="active" if status not in {"failed", "not_configured"} else status,
+        config={"device_name": device_name} if device_name else {},
+    )
+    sync_run = await store.start_sync_run(
+        session,
+        sync_source_id=sync_source.id,
+        mode=mode,
+        metadata_=metadata,
+    )
+    await store.finish_sync_run(
+        session,
+        sync_run.id,
+        status=status,
+        items_seen=items_seen,
+        items_imported=items_imported,
+        error=error,
+    )
+    await store.touch_sync_source(session, sync_source.id)
+    result = {
+        "status": status,
+        "sync_source_id": str(sync_source.id),
+        "sync_run_id": str(sync_run.id),
+        "items_seen": items_seen,
+        "items_imported": items_imported,
+        "source_name": source_name,
+        "source_type": source_type,
+        "device_name": device_name,
+        "mode": mode,
+    }
+    if error:
+        result["error"] = error
+    await _publish_sync_event(result)
+    return result
+
+
+async def _publish_sync_event(payload: dict) -> None:
+    from src.worker.main import EVENT_SYNC_COMPLETED, publish_event
+
+    await publish_event(EVENT_SYNC_COMPLETED, payload)

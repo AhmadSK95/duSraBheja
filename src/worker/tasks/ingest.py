@@ -11,6 +11,7 @@ import httpx
 from src.config import settings
 from src.database import async_session
 from src.lib.store import create_artifact
+from src.worker.extractors.link import extract_url, extract_urls_from_text
 from src.worker.extractors.router import extract
 
 log = logging.getLogger("brain-worker.ingest")
@@ -49,11 +50,20 @@ async def process_inbox_message(
         blob_mime = None
         blob_size = None
         content_type = "text"
+        attachment_records = []
 
         # Download and extract attachments
         for att in attachments:
             file_path, meta = await _download_attachment(att)
             if file_path:
+                attachment_record = {
+                    "filename": att.get("filename"),
+                    "content_type": att.get("content_type"),
+                    "size": att.get("size"),
+                    "blob_ref": meta["blob_ref"],
+                    "blob_hash": meta["blob_hash"],
+                }
+                attachment_records.append(attachment_record)
                 blob_ref = meta["blob_ref"]
                 blob_hash = meta["blob_hash"]
                 blob_mime = att["content_type"]
@@ -63,6 +73,15 @@ async def process_inbox_message(
                 extracted = await extract(file_path, att["content_type"], session=session)
                 if extracted:
                     extracted_texts.append(extracted)
+
+        linked_urls = extract_urls_from_text(text or "")
+        for url in linked_urls:
+            try:
+                extracted = await extract_url(url)
+            except Exception as exc:
+                log.warning("Failed to extract linked content for %s: %s", url, exc)
+                extracted = f"# Linked Resource\nURL: {url}\n\n[Unable to fetch linked content]"
+            extracted_texts.append(extracted)
 
         # Combine text
         raw_text = text or ""
@@ -84,6 +103,10 @@ async def process_inbox_message(
             blob_hash=blob_hash,
             blob_mime=blob_mime,
             blob_size_bytes=blob_size,
+            metadata_={
+                "attachments": attachment_records,
+                "linked_urls": linked_urls,
+            },
             source=source,
         )
 

@@ -6,13 +6,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from src.api.schemas import CollectorIngestRequest, ManualIngestRequest, SyncRunResponse
+from src.api.schemas import CollectorIngestRequest, ManualIngestRequest, SyncReportRequest, SyncRunResponse
 from src.database import async_session
 from src.lib.auth import require_api_token
 from src.lib.embeddings import embed_text
 from src.lib.store import get_note, vector_search
 from src.services.story import build_project_brief_payload, build_project_story_payload
-from src.services.sync import import_collector_payload, run_github_sync
+from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
 
 router = APIRouter(prefix="/api", tags=["brain"])
@@ -62,6 +62,24 @@ async def run_source_sync(source: str) -> SyncRunResponse:
             )
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source: {source}")
+
+
+@router.post("/sync/report", dependencies=[Depends(require_api_token)], response_model=SyncRunResponse)
+async def report_sync_run(payload: SyncReportRequest) -> SyncRunResponse:
+    async with async_session() as session:
+        result = await record_sync_report(
+            session,
+            source_type=payload.source_type,
+            source_name=payload.source_name,
+            mode=payload.mode,
+            status=payload.status,
+            items_seen=payload.items_seen,
+            items_imported=payload.items_imported,
+            device_name=payload.device_name,
+            error=payload.error,
+            metadata=payload.metadata,
+        )
+    return SyncRunResponse(**result)
 
 
 @router.get("/projects/{project_id}/story", dependencies=[Depends(require_api_token)])

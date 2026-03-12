@@ -5,6 +5,7 @@ from src.worker.extractors.pdf import extract_pdf
 from src.worker.extractors.image import extract_image
 from src.worker.extractors.audio import extract_audio
 from src.worker.extractors.excel import extract_excel
+from src.worker.extractors.docx import extract_docx
 
 MIME_MAP = {
     "text/plain": extract_text,
@@ -25,6 +26,7 @@ MIME_MAP = {
     "audio/x-m4a": extract_audio,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": extract_excel,
     "application/vnd.ms-excel": extract_excel,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": extract_docx,
 }
 
 

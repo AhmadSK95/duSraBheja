@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     needs_review_channel_name: str = "needs-review"
     daily_digest_channel_name: str = "daily-digest"
     ask_channel_name: str = "ask-brain"
+    brain_voice_instructions: str = (
+        "Write like Ahmad: direct, thoughtful, low-fluff, builder-operator energy."
+    )
 
     # Anthropic (Claude)
     anthropic_api_key: str = ""

@@ -97,12 +97,37 @@ print(meta["state_path"])
 PY
 )"
 
+DEVICE_NAME="$("${PARSE_PYTHON}" - <<'PY' "${PREP_DIR}/meta.json"
+import json
+import sys
+from pathlib import Path
+
+meta = json.loads(Path(sys.argv[1]).read_text())
+print(meta["device_name"])
+PY
+)"
+
+SOURCE_NAME="$("${PARSE_PYTHON}" - <<'PY' "${PREP_DIR}/meta.json"
+import json
+import sys
+from pathlib import Path
+
+meta = json.loads(Path(sys.argv[1]).read_text())
+print(meta["source_name"])
+PY
+)"
+
 commit_state() {
   mkdir -p "$(dirname "${STATE_PATH}")"
   cp "${PREP_DIR}/next_state.json" "${STATE_PATH}"
 }
 
 if [[ "${ITEMS_SEEN}" == "0" ]]; then
+  ssh -i "${SERVER_SSH_KEY}" "${SERVER_USER}@${SERVER_HOST}" \
+    "cd '${REMOTE_APP_DIR}' && /usr/bin/bash -lc 'set -a && source .env && curl -sS -X POST -H \"Authorization: Bearer \$API_TOKEN\" -H \"Content-Type: application/json\" --data-binary @- http://127.0.0.1:8000/api/sync/report'" \
+    <<EOF
+{"source_type":"collector","source_name":"${SOURCE_NAME}","mode":"${MODE}","status":"noop","items_seen":0,"items_imported":0,"device_name":"${DEVICE_NAME}"}
+EOF
   commit_state
   echo '{"status":"noop","items_seen":0}'
   exit 0

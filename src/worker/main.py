@@ -24,6 +24,8 @@ JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
 EVENT_ARTIFACT_FAILED = "brain:artifact_failed"
+EVENT_DIGEST_READY = "brain:digest_ready"
+EVENT_SYNC_COMPLETED = "brain:sync_completed"
 
 
 async def get_pool() -> ArqRedis:
