@@ -69,6 +69,11 @@ class ProjectStateRefreshRequest(BaseModel):
     project_ids: list[str] = Field(default_factory=list)
 
 
+class ProjectManualStateRequest(BaseModel):
+    project_name: str = Field(min_length=1)
+    manual_state: str = Field(min_length=1)
+
+
 class SyncReportRequest(BaseModel):
     source_type: str
     source_name: str
@@ -109,4 +114,3 @@ class AgentSessionCloseoutRequest(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     source_links: list[str] = Field(default_factory=list)
     transcript_excerpt: str | None = None
-

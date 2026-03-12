@@ -13,12 +13,14 @@ from src.api.schemas import (
     AgentSessionCloseoutRequest,
     CollectorIngestRequest,
     ManualIngestRequest,
+    ProjectManualStateRequest,
     ProjectStateRefreshRequest,
     QueryRequest,
     ReminderCreateRequest,
     SyncReportRequest,
     SyncRunResponse,
 )
+from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
 from src.lib.auth import require_api_token
 from src.lib.embeddings import embed_text
@@ -190,6 +192,35 @@ async def recompute_projects_route(payload: ProjectStateRefreshRequest) -> dict:
             }
             for item in snapshots
         ],
+    }
+
+
+@router.post("/projects/manual-state", dependencies=[Depends(require_api_token)])
+async def set_project_manual_state_route(payload: ProjectManualStateRequest) -> dict:
+    if payload.manual_state not in PROJECT_MANUAL_STATES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"manual_state must be one of: {', '.join(PROJECT_MANUAL_STATES)}",
+        )
+    async with async_session() as session:
+        project = await resolve_project(
+            session,
+            project_hint=payload.project_name,
+            source_refs=[payload.project_name],
+            create_if_missing=False,
+        )
+        if not project:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        snapshot = await store.set_project_manual_state(
+            session,
+            project_note_id=project.id,
+            manual_state=payload.manual_state,
+        )
+        await recompute_project_states(session, project_note_ids=[project.id])
+    return {
+        "status": "updated",
+        "project": project.title,
+        "manual_state": snapshot.manual_state,
     }
 
 

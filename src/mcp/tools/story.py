@@ -2,6 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
+from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
 from src.lib import store
 from src.services.identity import resolve_project
@@ -194,6 +195,35 @@ def register(mcp: FastMCP):
                 "project": payload["project"],
                 "aliases": payload.get("aliases", [])[:12],
                 "repos": payload.get("repos", [])[:6],
+            }
+
+    @mcp.tool()
+    async def set_project_focus_state(project_name: str, state: str) -> dict:
+        """Set a project's manual focus state: normal, pinned, ignored, or done."""
+        if state not in PROJECT_MANUAL_STATES:
+            return {"error": f"State must be one of: {', '.join(PROJECT_MANUAL_STATES)}"}
+        async with async_session() as session:
+            project = await resolve_project(
+                session,
+                project_hint=project_name,
+                source_refs=[project_name],
+                create_if_missing=False,
+            )
+            if not project:
+                return {"error": f"Project '{project_name}' not found"}
+            snapshot = await store.set_project_manual_state(
+                session,
+                project_note_id=project.id,
+                manual_state=state,
+            )
+            refreshed = await recompute_project_states(session, project_note_ids=[project.id])
+            latest = refreshed[0] if refreshed else snapshot
+            return {
+                "status": "updated",
+                "project": project.title,
+                "manual_state": latest.manual_state,
+                "active_score": latest.active_score,
+                "status_label": latest.status,
             }
 
     @mcp.tool()
