@@ -7,10 +7,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.constants import BRAIN_CATEGORIES
-from src.database import async_session
 from src.bot.cogs.inbox import build_answer_embed, build_digest_embeds
-from src.lib.store import find_notes_by_title, get_pending_reviews
+from src.database import async_session
+from src.lib.store import get_pending_reviews
 from src.services.digest import generate_or_refresh_digest
+from src.services.identity import resolve_project
+from src.services.session_bootstrap import build_session_bootstrap
 from src.services.reminders import store_reminder
 from src.services.query import query_brain
 from src.services.project_state import recompute_project_states
@@ -18,6 +20,27 @@ from src.services.story import build_project_story_payload
 from src.lib import store
 
 log = logging.getLogger("brain-bot.commands")
+
+
+async def _resolve_project_payload(session, subject: str, *, session_id: str) -> tuple[object, dict, dict] | tuple[None, None, None]:
+    project = await resolve_project(
+        session,
+        project_hint=subject,
+        source_refs=[subject],
+        create_if_missing=False,
+    )
+    if not project:
+        return None, None, None
+    await recompute_project_states(session, project_note_ids=[project.id])
+    payload = await build_project_story_payload(session, project.id)
+    bootstrap = await build_session_bootstrap(
+        session,
+        agent_kind="discord",
+        session_id=session_id,
+        project_hint=project.title,
+        include_web=False,
+    )
+    return project, payload, bootstrap
 
 
 class CommandsCog(commands.Cog):
@@ -99,26 +122,35 @@ class CommandsCog(commands.Cog):
     async def project(self, interaction: discord.Interaction, subject: str):
         await interaction.response.defer(thinking=True)
         async with async_session() as session:
-            matches = await find_notes_by_title(session, subject, "project")
-            if not matches:
+            _project, payload, bootstrap = await _resolve_project_payload(
+                session,
+                subject,
+                session_id=f"discord:project:{interaction.id}",
+            )
+            if not payload:
                 await interaction.followup.send(f"Project not found: {subject}")
                 return
-            await recompute_project_states(session, project_note_ids=[matches[0].id])
-            payload = await build_project_story_payload(session, matches[0].id)
 
         snapshot = payload.get("snapshot") or {}
+        reboot = bootstrap.get("reboot_brief") or {}
         embed = discord.Embed(
             title=payload["project"]["title"],
-            description=snapshot.get("implemented") or payload["project"]["content"] or "No project summary yet.",
+            description=reboot.get("where_it_stands") or snapshot.get("implemented") or payload["project"]["content"] or "No project summary yet.",
             color=discord.Color.blue(),
         )
         embed.add_field(name="Status", value=(snapshot.get("status") or payload["project"]["status"]).title(), inline=True)
         embed.add_field(name="Active Score", value=f"{snapshot.get('active_score', 0):.2f}", inline=True)
         embed.add_field(name="Confidence", value=f"{snapshot.get('confidence', 0):.0%}", inline=True)
-        if snapshot.get("remaining"):
-            embed.add_field(name="Left", value=str(snapshot["remaining"])[:1024], inline=False)
-        if snapshot.get("holes"):
+        if reboot.get("what_changed"):
+            embed.add_field(name="What Changed", value=str(reboot["what_changed"])[:1024], inline=False)
+        if reboot.get("what_is_left"):
+            embed.add_field(name="What's Left", value=str(reboot["what_is_left"])[:1024], inline=False)
+        if reboot.get("blockers"):
+            embed.add_field(name="Blockers", value="\n".join(f"- {item}" for item in reboot["blockers"][:5]), inline=False)
+        elif snapshot.get("holes"):
             embed.add_field(name="Holes", value="\n".join(f"- {item}" for item in snapshot["holes"][:5]), inline=False)
+        if reboot.get("open_loops"):
+            embed.add_field(name="Open Loops", value="\n".join(f"- {item}" for item in reboot["open_loops"][:5]), inline=False)
         if payload.get("connections"):
             embed.add_field(
                 name="Connections",
@@ -142,25 +174,25 @@ class CommandsCog(commands.Cog):
     async def pin_project(self, interaction: discord.Interaction, subject: str):
         await interaction.response.defer(thinking=True)
         async with async_session() as session:
-            matches = await find_notes_by_title(session, subject, "project")
-            if not matches:
+            project = await resolve_project(session, project_hint=subject, source_refs=[subject], create_if_missing=False)
+            if not project:
                 await interaction.followup.send(f"Project not found: {subject}")
                 return
-            await store.set_project_manual_state(session, project_note_id=matches[0].id, manual_state="pinned")
-            await recompute_project_states(session, project_note_ids=[matches[0].id])
-        await interaction.followup.send(f"Pinned project: {subject}")
+            await store.set_project_manual_state(session, project_note_id=project.id, manual_state="pinned")
+            await recompute_project_states(session, project_note_ids=[project.id])
+        await interaction.followup.send(f"Pinned project: {project.title}")
 
     @app_commands.command(name="ignore-project", description="Mark a project as ignored or dormant")
     async def ignore_project(self, interaction: discord.Interaction, subject: str):
         await interaction.response.defer(thinking=True)
         async with async_session() as session:
-            matches = await find_notes_by_title(session, subject, "project")
-            if not matches:
+            project = await resolve_project(session, project_hint=subject, source_refs=[subject], create_if_missing=False)
+            if not project:
                 await interaction.followup.send(f"Project not found: {subject}")
                 return
-            await store.set_project_manual_state(session, project_note_id=matches[0].id, manual_state="ignored")
-            await recompute_project_states(session, project_note_ids=[matches[0].id])
-        await interaction.followup.send(f"Ignoring project for active-focus ranking: {subject}")
+            await store.set_project_manual_state(session, project_note_id=project.id, manual_state="ignored")
+            await recompute_project_states(session, project_note_ids=[project.id])
+        await interaction.followup.send(f"Ignoring project for active-focus ranking: {project.title}")
 
     @app_commands.command(name="remind", description="Create a recurring or one-time reminder")
     async def remind(self, interaction: discord.Interaction, text: str, project_name: str | None = None):
@@ -176,9 +208,14 @@ class CommandsCog(commands.Cog):
             )
             project_note_id = None
             if project_name:
-                matches = await find_notes_by_title(session, project_name, "project")
-                if matches:
-                    project_note_id = matches[0].id
+                project = await resolve_project(
+                    session,
+                    project_hint=project_name,
+                    source_refs=[project_name],
+                    create_if_missing=False,
+                )
+                if project:
+                    project_note_id = project.id
             reminder = await store_reminder(
                 session,
                 raw_text=text,
@@ -272,22 +309,35 @@ class CommandsCog(commands.Cog):
         await interaction.response.defer(thinking=True)
 
         async with async_session() as session:
-            matches = await find_notes_by_title(session, project_name, "project")
-            if not matches:
+            _project, payload, bootstrap = await _resolve_project_payload(
+                session,
+                project_name,
+                session_id=f"discord:story:{interaction.id}",
+            )
+            if not payload:
                 await interaction.followup.send(f"Project not found: {project_name}")
                 return
 
-            payload = await build_project_story_payload(session, matches[0].id)
-
+        reboot = bootstrap.get("reboot_brief") or {}
         embed = discord.Embed(
             title=payload["project"]["title"],
-            description=payload["project"]["content"] or "No project summary yet.",
+            description=reboot.get("where_it_stands") or payload["project"]["content"] or "No project summary yet.",
             color=discord.Color.blue(),
         )
+        if reboot.get("what_changed"):
+            embed.add_field(name="What Changed", value=str(reboot["what_changed"])[:1024], inline=False)
+        if reboot.get("what_is_left"):
+            embed.add_field(name="What's Left", value=str(reboot["what_is_left"])[:1024], inline=False)
         if payload["repos"]:
             embed.add_field(
                 name="Repos",
                 value="\n".join(repo["name"] for repo in payload["repos"][:5]),
+                inline=False,
+            )
+        if reboot.get("open_loops"):
+            embed.add_field(
+                name="Open Loops",
+                value="\n".join(f"- {item}" for item in reboot["open_loops"][:5]),
                 inline=False,
             )
         if payload["recent_activity"]:

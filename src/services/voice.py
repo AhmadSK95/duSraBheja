@@ -90,7 +90,7 @@ async def refresh_voice_profile(
     source_items = await session.execute(
         select(SourceItem, SyncSource.source_type)
         .join(SyncSource, SourceItem.sync_source_id == SyncSource.id)
-        .where(SyncSource.source_type.in_(("gmail", "google_keep", "apple_notes")))
+        .where(SyncSource.source_type.in_(("gmail", "drive", "google_keep", "apple_notes")))
         .order_by(SourceItem.happened_at.desc().nullslast(), SourceItem.created_at.desc())
         .limit(limit * 2)
     )

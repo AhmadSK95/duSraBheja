@@ -222,9 +222,14 @@ def register(mcp: FastMCP):
             )
             project_note_id = None
             if project_name:
-                matches = await store.find_notes_by_title(session, project_name, "project")
-                if matches:
-                    project_note_id = matches[0].id
+                project = await resolve_project(
+                    session,
+                    project_hint=project_name,
+                    source_refs=[project_name],
+                    create_if_missing=False,
+                )
+                if project:
+                    project_note_id = project.id
             reminder = await store_reminder(
                 session,
                 raw_text=text,

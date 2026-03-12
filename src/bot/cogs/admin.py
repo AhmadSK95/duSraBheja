@@ -1,4 +1,4 @@
-"""Admin Cog — /status, /stats slash commands."""
+"""Admin Cog — status, stats, and safe cleanup slash commands."""
 
 import logging
 
@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import func, select
 
+from src.bot.cleanup import collect_target_channels, purge_bot_messages
 from src.database import async_session
 from src.models import Artifact, Classification, Note, AuditLog, ReviewQueue
 
@@ -62,6 +63,62 @@ class AdminCog(commands.Cog):
             embed.description = "No classifications yet. Drop something in #inbox!"
 
         await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="cleanup-bot-posts", description="Delete this bot's posts from a channel for testing")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(
+        channel="Channel to clean. Defaults to the current channel.",
+        dry_run="Preview how many bot posts would be deleted without deleting them.",
+        include_threads="Also clean active threads under the chosen channel.",
+        history_limit="How many recent messages to scan. Leave empty to scan the full history.",
+    )
+    async def cleanup_bot_posts(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+        dry_run: bool = True,
+        include_threads: bool = True,
+        history_limit: app_commands.Range[int, 1, 5000] | None = None,
+    ):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        if not interaction.guild or not self.bot.user:
+            await interaction.followup.send("This command only works inside a server.", ephemeral=True)
+            return
+
+        target_channel = channel or interaction.channel
+        if not isinstance(target_channel, discord.TextChannel):
+            await interaction.followup.send("Pick a standard text channel for cleanup.", ephemeral=True)
+            return
+
+        channels = await collect_target_channels(
+            interaction.guild,
+            channel_names=[target_channel.name],
+            include_threads=include_threads,
+            include_archived_threads=False,
+        )
+        result = await purge_bot_messages(
+            channels=[item for item in channels if isinstance(item, (discord.TextChannel, discord.Thread))],
+            bot_user_id=self.bot.user.id,
+            dry_run=dry_run,
+            history_limit=history_limit,
+        )
+
+        embed = discord.Embed(
+            title="Bot Post Cleanup",
+            description="Dry run only." if dry_run else "Bot-authored posts removed.",
+            color=discord.Color.orange() if dry_run else discord.Color.red(),
+        )
+        embed.add_field(name="Messages Matched", value=str(result["messages_deleted"]), inline=True)
+        embed.add_field(name="Messages Scanned", value=str(result["messages_scanned"]), inline=True)
+        embed.add_field(name="Channels Scanned", value=str(result["channels_scanned"]), inline=True)
+        details = []
+        for item in result["channels"][:8]:
+            suffix = f" ({', '.join(item['errors'])})" if item["errors"] else ""
+            details.append(f"- {item['channel_name']}: {item['deleted_count']}{suffix}")
+        if details:
+            embed.add_field(name="Channels", value="\n".join(details), inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

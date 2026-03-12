@@ -121,6 +121,16 @@ async def get_or_create_project_note(
     content: str | None = None,
     tags: list[str] | None = None,
 ) -> Note:
+    exact = await session.execute(
+        select(Note).where(
+            Note.category == "project",
+            func.lower(Note.title) == title.strip().lower(),
+        )
+    )
+    existing = exact.scalar_one_or_none()
+    if existing:
+        return existing
+
     matches = await find_notes_by_title(session, title, "project")
     if matches:
         return matches[0]

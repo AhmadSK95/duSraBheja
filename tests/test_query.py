@@ -71,5 +71,6 @@ async def test_query_brain_returns_separate_brain_and_web_sources(monkeypatch) -
 
     assert result["brain_sources"][0]["title"] == "duSraBheja local snapshot"
     assert result["web_sources"][0]["title"] == "External guide"
-    assert "Web context:" in result["answer"]
+    assert "From your brain:" in result["answer"]
+    assert "From the web:" in result["answer"]
     assert "From your brain:\nFrom your brain" not in result["answer"]

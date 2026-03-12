@@ -53,6 +53,17 @@ QUERY_STOPWORDS = {
     "yesterday",
 }
 
+PERSONAL_QUERY_HINTS = (
+    "my ",
+    "did i ",
+    "what did i",
+    "which project",
+    "what changed on",
+    "where did i leave",
+    "reminder",
+    "notes",
+)
+
 
 def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
     if requested_mode in QUERY_MODES:
@@ -81,6 +92,15 @@ def parse_since_boundary(question: str, now: datetime) -> datetime | None:
     if match:
         return datetime.fromisoformat(f"{match.group(1)}T00:00:00+00:00")
     return None
+
+
+def should_use_web_enrichment(question: str, *, resolved_mode: str, project_payload: dict | None) -> bool:
+    if resolved_mode in {"sources", "timeline", "changed_since"}:
+        return False
+    lowered = (question or "").strip().lower()
+    if project_payload and any(hint in lowered for hint in PERSONAL_QUERY_HINTS):
+        return False
+    return True
 
 
 def candidate_lookup_phrases(question: str) -> list[str]:
@@ -400,7 +420,7 @@ async def query_brain(
     )
     web_sources: list[dict] = []
     web_answer = None
-    if include_web:
+    if include_web and should_use_web_enrichment(question, resolved_mode=resolved_mode, project_payload=project_payload):
         web_payload = await answer_question_with_web(
             question=question,
             context_hints=[
@@ -415,8 +435,10 @@ async def query_brain(
     final_answer = result["text"]
     if web_answer:
         final_answer = (
+            "From your brain:\n"
             f"{result['text']}\n\n"
-            f"Web context:\n{web_answer}"
+            "From the web:\n"
+            f"{web_answer}"
         )
     return {
         "mode": resolved_mode,

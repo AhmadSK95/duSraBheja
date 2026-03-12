@@ -199,7 +199,21 @@ async def ingest_source_entries(
         )
         await publish_story_entry(
             session,
-            actor_type="connector" if source_type in {"gmail", "drive", "google_keep", "apple_notes", "github"} else "agent",
+            actor_type=(
+                "connector"
+                if source_type
+                in {
+                    "gmail",
+                    "drive",
+                    "google_keep",
+                    "apple_notes",
+                    "github",
+                    "youtube_history",
+                    "google_search_history",
+                    "ott_history",
+                }
+                else "agent"
+            ),
             actor_name=device_name or source_name,
             subject_type=story_fields["subject_type"],
             subject_ref=story_fields["subject_ref"] or (project_note.title if project_note else entry.get("project_ref")),
