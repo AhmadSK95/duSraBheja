@@ -16,6 +16,7 @@ from src.lib import store
 RECENT_WINDOW_DAYS = 14
 DORMANT_WINDOW_DAYS = 30
 MAX_ASSESSED_PROJECTS = 5
+LOW_SIGNAL_ENTRY_TYPES = {"context_dump", "repo_snapshot"}
 
 
 def _utcnow() -> datetime:
@@ -104,6 +105,7 @@ def _score_project(
         if happened:
             source_dates.append(happened)
 
+    meaningful_events = [entry for entry in events if _is_meaningful_project_event(entry)]
     open_loops = [entry for entry in events if getattr(entry, "open_question", None)]
     blocker_events = [
         entry
@@ -117,15 +119,19 @@ def _score_project(
         for reminder in reminders
         if reminder.next_fire_at and reminder.next_fire_at <= (_utcnow() + timedelta(days=2))
     ]
+    corroborated = bool(sessions or planners or reminders or meaningful_events)
 
     feature_scores = {
-        "git": min(1.0, len(repos) * 0.12 + repo_snapshots * 0.22 + len(source_items[:6]) * 0.03),
+        "git": min(1.0, len(repos) * 0.1 + repo_snapshots * 0.14 + len(source_items[:6]) * 0.02),
         "conversations": min(1.0, len(sessions) * 0.22 + len([e for e in events if e.entry_type == "conversation_session"]) * 0.1),
-        "story": min(1.0, len(events) * 0.08 + len(open_loops) * 0.08),
+        "story": min(1.0, len(meaningful_events) * 0.1 + len(open_loops) * 0.08),
         "planning": min(1.0, len(planners) * 0.35),
         "reminders": min(1.0, len(reminders) * 0.18 + len(due_soon) * 0.25),
         "blockers": min(1.0, len(blocker_events) * 0.2),
     }
+    if repo_snapshots and not corroborated:
+        feature_scores["git"] = min(feature_scores["git"], 0.18)
+        feature_scores["story"] = min(feature_scores["story"], 0.12)
     active_score = round(
         feature_scores["git"] * 0.32
         + feature_scores["conversations"] * 0.24
@@ -134,12 +140,17 @@ def _score_project(
         + feature_scores["reminders"] * 0.12,
         3,
     )
+    if repo_snapshots and not corroborated:
+        active_score = min(active_score, 0.29)
     return {
         "feature_scores": feature_scores,
         "active_score": active_score,
         "open_loops": open_loops,
         "blocker_events": blocker_events,
         "source_dates": source_dates,
+        "meaningful_events": meaningful_events,
+        "repo_snapshots": repo_snapshots,
+        "corroborated": corroborated,
     }
 
 
@@ -148,6 +159,20 @@ def _project_mentions_in_planner(project_title: str, planner_note) -> bool:
     planner_projects = [str(item).strip().lower() for item in metadata.get("planner_projects") or []]
     title = project_title.strip().lower()
     return title in planner_projects or title in (planner_note.content or "").lower()
+
+
+def _is_meaningful_project_event(entry) -> bool:
+    entry_type = getattr(entry, "entry_type", "") or ""
+    actor_type = getattr(entry, "actor_type", "") or ""
+    if entry_type in {"conversation_session", "session_closeout", "progress_update", "decision", "research_thread", "synapse", "blind_spot", "voice_refresh", "knowledge_refresh"}:
+        return True
+    if getattr(entry, "open_question", None) or getattr(entry, "decision", None) or getattr(entry, "impact", None) or getattr(entry, "outcome", None):
+        return True
+    if actor_type == "agent":
+        return True
+    if actor_type == "connector" and entry_type in LOW_SIGNAL_ENTRY_TYPES:
+        return False
+    return entry_type not in LOW_SIGNAL_ENTRY_TYPES
 
 
 def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
@@ -256,6 +281,8 @@ async def _compute_metrics(
     if reminders:
         why_active_parts.append(f"{len(reminders)} active reminders")
     why_not_active_parts = []
+    if score_payload["repo_snapshots"] and not score_payload["corroborated"]:
+        why_not_active_parts.append("recent signals are mostly collector snapshots")
     if not sessions:
         why_not_active_parts.append("little recent agent reasoning")
     if not planners:

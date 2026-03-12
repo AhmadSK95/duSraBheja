@@ -91,6 +91,36 @@ docker compose up -d                   # Start all services
 docker compose logs -f brain-bot       # Follow bot logs
 ```
 
+## Agent Session Loop
+
+Every Claude Code or Codex session should start by rebooting from the brain and end by publishing a closeout.
+
+Start:
+
+```bash
+./.venv/bin/python scripts/brain_session.py bootstrap \
+  --agent-kind claude \
+  --project-hint duSraBheja
+```
+
+Close out:
+
+```bash
+./.venv/bin/python scripts/brain_session.py closeout \
+  --agent-kind claude \
+  --session-id <session-id> \
+  --project-ref duSraBheja \
+  --summary "<what changed>"
+```
+
+If MCP is connected, prefer the shared tools:
+
+- `bootstrap_session`
+- `publish_progress`
+- `publish_session_closeout`
+- `resolve_project_identity`
+- `query_brain_mode`
+
 ## Deployment
 
 - **Droplet**: 104.131.63.231

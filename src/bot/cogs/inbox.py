@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from discord.ext import commands
 
 from src.agents.retriever import answer_question
+from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
 from src.lib.store import get_artifact, get_review_by_thread, resolve_review, set_review_thread, update_artifact
@@ -21,16 +22,21 @@ class InboxCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._listener_task: asyncio.Task | None = None
+        self._startup_replay_task: asyncio.Task | None = None
         self._listener_stop = asyncio.Event()
 
     async def cog_load(self):
         self._listener_stop.clear()
         self._listener_task = asyncio.create_task(self._listen_notifications())
+        if settings.startup_replay_enabled:
+            self._startup_replay_task = asyncio.create_task(self._run_startup_replay())
 
     def cog_unload(self):
         self._listener_stop.set()
         if self._listener_task:
             self._listener_task.cancel()
+        if self._startup_replay_task:
+            self._startup_replay_task.cancel()
 
     def _is_inbox_channel(self, channel: discord.TextChannel) -> bool:
         return channel.name == settings.inbox_channel_name
@@ -61,10 +67,9 @@ class InboxCog(commands.Cog):
             await self._handle_ask_message(message)
             return
 
-        # Handle #planner images (store only, no action)
+        # Handle #planner captures (text and images both become planner notes/cards)
         if isinstance(message.channel, discord.TextChannel) and self._is_planner_channel(message.channel):
-            if message.attachments:
-                await self._handle_planner_image(message)
+            await self._handle_planner_capture(message)
             return
 
     async def _handle_inbox_message(self, message: discord.Message):
@@ -94,8 +99,8 @@ class InboxCog(commands.Cog):
 
         log.info(f"Enqueued inbox message {message.id} ({len(attachments)} attachments)")
 
-    async def _handle_planner_image(self, message: discord.Message):
-        """Store planner images without further processing."""
+    async def _handle_planner_capture(self, message: discord.Message):
+        """Store planner text or images and force them through the planner flow."""
         await message.add_reaction("\U0001f4c5")
 
         attachments = [
@@ -109,16 +114,19 @@ class InboxCog(commands.Cog):
             if att.content_type and att.content_type.startswith("image/")
         ]
 
-        if attachments:
-            from src.worker.main import enqueue_ingest
+        if not attachments and not (message.content or "").strip():
+            return
 
-            await enqueue_ingest(
-                discord_message_id=str(message.id),
-                discord_channel_id=str(message.channel.id),
-                text=message.content or f"[{message.channel.name} image]",
-                attachments=attachments,
-                force_category="daily_planner" if message.channel.name == "daily-planner" else "weekly_planner",
-            )
+        from src.worker.main import enqueue_ingest
+
+        await enqueue_ingest(
+            discord_message_id=str(message.id),
+            discord_channel_id=str(message.channel.id),
+            text=message.content or f"[{message.channel.name} image]",
+            attachments=attachments,
+            force_category="daily_planner" if message.channel.name == "daily-planner" else "weekly_planner",
+        )
+        log.info("Enqueued planner capture %s from #%s", message.id, message.channel.name)
 
     async def _handle_thread_reply(self, message: discord.Message):
         """Handle user replies in review threads."""
@@ -237,6 +245,19 @@ class InboxCog(commands.Cog):
             )
             await pubsub.aclose()
             await redis.aclose()
+
+    async def _run_startup_replay(self):
+        await self.bot.wait_until_ready()
+        try:
+            stats = await replay_discord_history(
+                self.bot,
+                history_limit=settings.startup_replay_history_limit or None,
+            )
+            log.info("Startup replay stats: %s", stats.as_dict())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Startup replay failed")
 
     async def _handle_artifact_processed(self, payload: dict):
         channel_id = payload.get("discord_channel_id")

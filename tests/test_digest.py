@@ -78,7 +78,7 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
             FakeEntry(
                 id="entry-1",
                 title="Imported local snapshot",
-                entry_type="context_dump",
+                entry_type="progress_update",
                 actor_name="macbook",
                 happened_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
                 project_note_id="project-1",
@@ -106,6 +106,15 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
         return FakePreference(sections={"headline": True})
 
     async def fake_list_story_connections(session, limit=20):
+        return []
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_recompute_project_states(session):
+        return []
+
+    async def fake_search_youtube_learning_queries(*, topics):
         return []
 
     fake_store = SimpleNamespace(
@@ -175,3 +184,93 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
     assert payload["pending_reviews"][0]["question"] == "Is this a project or a note?"
     assert payload["video_recommendations"][0]["search_query"] == "rag critique walkthrough"
     assert payload["improvement_focus"][0]["title"] == "Tighten digest"
+
+
+def test_build_daily_digest_payload_skips_collector_only_stale_projects(monkeypatch) -> None:
+    async def fake_list_notes(session, category=None, limit=25, status="active"):
+        if category in {"task", "resource"}:
+            return []
+        return []
+
+    async def fake_list_recent_activity(session, limit=25, project_note_id=None):
+        return [
+            FakeEntry(
+                id="entry-collector",
+                title="hadoop local snapshot",
+                entry_type="context_dump",
+                actor_name="macbook",
+                happened_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+                project_note_id="project-stale",
+            )
+        ]
+
+    async def fake_get_pending_reviews(session):
+        return []
+
+    async def fake_get_note(session, note_id):
+        if note_id == "project-active":
+            return FakeNote("project-active", "duSraBheja", content="Current project")
+        if note_id == "project-stale":
+            return FakeNote("project-stale", "hadoop-single-node-cluster", content="Old local repo")
+        return None
+
+    async def fake_list_reminders(session, status="active", limit=50):
+        return []
+
+    async def fake_list_project_state_snapshots(session, limit=25, statuses=None):
+        return [FakeSnapshot("project-active", 0.88)]
+
+    async def fake_upsert_digest_preference(session, profile_name, timezone_name, sections, metadata_):
+        return FakePreference(sections=sections)
+
+    async def fake_get_digest_preference(session, profile_name="default"):
+        return FakePreference(sections={"headline": True})
+
+    async def fake_list_story_connections(session, limit=20):
+        return []
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_recompute_project_states(session):
+        return []
+
+    async def fake_search_youtube_learning_queries(*, topics):
+        return []
+
+    fake_store = SimpleNamespace(
+        list_notes=fake_list_notes,
+        list_recent_activity=fake_list_recent_activity,
+        get_pending_reviews=fake_get_pending_reviews,
+        get_note=fake_get_note,
+        list_reminders=fake_list_reminders,
+        list_project_state_snapshots=fake_list_project_state_snapshots,
+        upsert_digest_preference=fake_upsert_digest_preference,
+        get_digest_preference=fake_get_digest_preference,
+        list_story_connections=fake_list_story_connections,
+        get_voice_profile=fake_get_voice_profile,
+    )
+    monkeypatch.setattr(digest_service, "store", fake_store)
+    monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(digest_service, "search_youtube_learning_queries", fake_search_youtube_learning_queries)
+
+    async def fake_compose_digest_sections(session, *, digest_date, trigger, context_text):
+        return {
+            "headline": "Morning brief",
+            "narrative": "Focused on current work only.",
+            "recommended_tasks": [],
+            "project_assessments": [],
+            "writing_topics": [],
+            "video_recommendations": [],
+            "brain_teasers": [],
+            "improvement_focus": [],
+            "low_confidence_sections": [],
+        }
+
+    monkeypatch.setattr(digest_service, "compose_digest_sections", fake_compose_digest_sections)
+
+    payload = asyncio.run(
+        digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 11))
+    )
+
+    assert [item["title"] for item in payload["projects"]] == ["duSraBheja"]

@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     knowledge_max_projects_per_run: int = 3
     cognition_refresh_hours: int = 4
     voice_refresh_hour: int = 5
+    startup_replay_enabled: bool = True
+    startup_replay_history_limit: int = 0
+    startup_replay_author_ids: str = ""
+    startup_replay_channel_names: str = "inbox,daily-planner,weekly-planner"
 
     # Collector
     collector_device_name: str = "macbook"

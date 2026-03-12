@@ -8,6 +8,7 @@ from discord.ext import commands
 from sqlalchemy import func, select
 
 from src.bot.cleanup import collect_target_channels, purge_bot_messages
+from src.bot.replay import replay_discord_history
 from src.database import async_session
 from src.models import Artifact, Classification, Note, AuditLog, ReviewQueue
 
@@ -118,6 +119,39 @@ class AdminCog(commands.Cog):
             details.append(f"- {item['channel_name']}: {item['deleted_count']}{suffix}")
         if details:
             embed.add_field(name="Channels", value="\n".join(details), inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="replay-ingestion", description="Replay your Discord posts so receipts and planner cards are rebuilt")
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(
+        history_limit="How many recent messages per replay channel to scan. Leave empty to scan the full history.",
+    )
+    async def replay_ingestion(
+        self,
+        interaction: discord.Interaction,
+        history_limit: app_commands.Range[int, 1, 5000] | None = None,
+    ):
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        stats = await replay_discord_history(
+            self.bot,
+            history_limit=history_limit,
+        )
+        embed = discord.Embed(
+            title="Discord Replay",
+            description="Scanned the configured brain channels and repaired missing ingestion outputs.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Scanned", value=str(stats.scanned_messages), inline=True)
+        embed.add_field(name="Queued New", value=str(stats.queued_new), inline=True)
+        embed.add_field(name="Requeued Existing", value=str(stats.requeued_existing), inline=True)
+        embed.add_field(name="Skipped Existing", value=str(stats.skipped_existing), inline=True)
+        if stats.channel_counts:
+            embed.add_field(
+                name="Channels",
+                value="\n".join(f"- {name}: {count}" for name, count in stats.channel_counts.items()),
+                inline=False,
+            )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 

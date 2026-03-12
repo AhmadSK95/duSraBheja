@@ -17,6 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - allows unit tests without app 
     store = None
 
 log = logging.getLogger("brain.digest")
+LOW_SIGNAL_PROJECT_ENTRY_TYPES = {"context_dump", "repo_snapshot"}
 
 
 def _shorten(value: str | None, limit: int = 220) -> str:
@@ -205,6 +206,20 @@ def _story_signal_item(entry) -> dict:
     }
 
 
+def _is_meaningful_project_update(entry) -> bool:
+    entry_type = getattr(entry, "entry_type", "") or ""
+    actor_type = getattr(entry, "actor_type", "") or ""
+    if entry_type in {"conversation_session", "session_closeout", "progress_update", "decision", "research_thread", "synapse", "blind_spot", "knowledge_refresh", "voice_refresh"}:
+        return True
+    if getattr(entry, "decision", None) or getattr(entry, "impact", None) or getattr(entry, "outcome", None) or getattr(entry, "open_question", None):
+        return True
+    if actor_type == "agent":
+        return True
+    if actor_type == "connector" and entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
+        return False
+    return entry_type not in LOW_SIGNAL_PROJECT_ENTRY_TYPES
+
+
 def _build_digest_context(
     *,
     digest_date: date,
@@ -374,18 +389,19 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
                     }
                 )
         else:
-            project_updates.setdefault(str(entry.project_note_id), []).append(
-                {
-                    "title": entry.title,
-                    "entry_type": entry.entry_type,
-                    "happened_at": str(entry.happened_at),
-                    "decision": getattr(entry, "decision", None),
-                    "impact": getattr(entry, "impact", None),
-                    "open_question": getattr(entry, "open_question", None),
-                }
-            )
+            if _is_meaningful_project_update(entry):
+                project_updates.setdefault(str(entry.project_note_id), []).append(
+                    {
+                        "title": entry.title,
+                        "entry_type": entry.entry_type,
+                        "happened_at": str(entry.happened_at),
+                        "decision": getattr(entry, "decision", None),
+                        "impact": getattr(entry, "impact", None),
+                        "open_question": getattr(entry, "open_question", None),
+                    }
+                )
             project = await store.get_note(session, entry.project_note_id)
-            if project:
+            if project and _is_meaningful_project_update(entry):
                 active_project_map[str(project.id)] = project
 
     snapshot_map = {str(snapshot.project_note_id): snapshot for snapshot in snapshots}
