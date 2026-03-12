@@ -197,7 +197,7 @@ def _build_digest_context(
         for task in tasks[:10]
     )
     lines.extend(["", "Projects:"])
-    for project in projects[:8]:
+    for project in projects[:6]:
         lines.append(
             "- "
             f"{project.title} | status={getattr(project, 'status', 'active')} | "
@@ -213,11 +213,11 @@ def _build_digest_context(
         lines.extend(["", "Resources:"])
         lines.extend(
             f"- {resource.title}: {_shorten(getattr(resource, 'content', None), 180) or 'no summary'}"
-            for resource in resources[:6]
+            for resource in resources[:5]
         )
     if recent_activity:
         lines.extend(["", "Recent Activity:"])
-        for entry in recent_activity[:10]:
+        for entry in recent_activity[:8]:
             lines.append(
                 " - "
                 f"{entry.title} | actor={entry.actor_name} | type={entry.entry_type} | "
@@ -230,10 +230,10 @@ def _build_digest_context(
         lines.extend(f"- {review.question}" for review in pending_reviews[:5])
     if open_loops:
         lines.extend(["", "Open Loops:"])
-        lines.extend(f"- {item.get('open_question') or item.get('title')}" for item in open_loops[:8])
+        lines.extend(f"- {item.get('open_question') or item.get('title')}" for item in open_loops[:6])
     if story_connections:
         lines.extend(["", "Cross-Project Connections:"])
-        lines.extend(f"- {item['subject_ref']} ({item['mentions']} mentions)" for item in story_connections[:8])
+        lines.extend(f"- {item['subject_ref']} ({item['mentions']} mentions)" for item in story_connections[:6])
     lines.extend(
         [
             "",

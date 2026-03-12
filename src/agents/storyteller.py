@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.base import agent_call
 from src.config import settings
-from src.lib.llm_json import parse_json_object
+from src.lib.llm_json import LLMJSONError, parse_json_object
 
 STORY_EVENT_SYSTEM_PROMPT = """You convert project/activity context into a grounded story event.
 
@@ -192,4 +192,18 @@ Return the JSON operating brief."""
         response_text = response_text.strip("`")
         if response_text.lower().startswith("json"):
             response_text = response_text[4:].strip()
-    return parse_json_object(response_text)
+    try:
+        return parse_json_object(response_text)
+    except LLMJSONError:
+        repair = await agent_call(
+            session,
+            agent_name="storyteller",
+            action="repair_digest_json",
+            prompt=f"Repair this into valid JSON using the original required schema only:\n\n{response_text}",
+            system=DIGEST_SYSTEM_PROMPT,
+            model=settings.sonnet_model,
+            max_tokens=2200,
+            temperature=0.0,
+            trace_id=trace_id,
+        )
+        return parse_json_object(repair["text"])
