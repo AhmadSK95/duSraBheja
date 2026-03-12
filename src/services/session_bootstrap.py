@@ -15,6 +15,35 @@ from src.services.source_ingest import ingest_source_entries
 from src.services.story import build_project_story_payload
 
 
+BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES = {"context_dump", "repo_snapshot", "knowledge_refresh", "voice_refresh"}
+BOOTSTRAP_PRIORITY = {
+    "session_closeout": 5,
+    "conversation_session": 4,
+    "progress_update": 4,
+    "decision": 4,
+    "research_thread": 3,
+    "blind_spot": 3,
+    "synapse": 2,
+}
+
+
+def _bootstrap_activity_rank(item: dict) -> tuple[int, str]:
+    entry_type = str(item.get("entry_type") or "")
+    happened_at = str(item.get("happened_at") or "")
+    return (BOOTSTRAP_PRIORITY.get(entry_type, 1), happened_at)
+
+
+def _relevant_bootstrap_activity(project_payload: dict | None) -> list[dict]:
+    recent_activity = list((project_payload or {}).get("recent_activity") or [])
+    filtered = [
+        item
+        for item in recent_activity
+        if str(item.get("entry_type") or "") not in BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES
+    ]
+    filtered.sort(key=_bootstrap_activity_rank, reverse=True)
+    return filtered
+
+
 async def build_session_bootstrap(
     session: AsyncSession,
     *,
@@ -51,23 +80,43 @@ async def build_session_bootstrap(
                 questions.append(str(item))
         web_brief = await research_topic_brief(topic=subject, questions=questions[:4])
 
+    snapshot = (project_payload or {}).get("snapshot") or {}
+    relevant_activity = _relevant_bootstrap_activity(project_payload)
+    recent_titles = [str(item.get("title") or "").strip() for item in relevant_activity if item.get("title")]
+    open_loops = [
+        str(item.get("open_question") or "").strip()
+        for item in relevant_activity
+        if item.get("open_question")
+    ]
+    blockers = list(snapshot.get("blockers") or [])
+    if not blockers:
+        blockers = [
+            str(item.get("constraint") or "").strip()
+            for item in relevant_activity
+            if item.get("constraint")
+        ][:6]
+    where_it_stands = (
+        snapshot.get("implemented")
+        or ((project_payload or {}).get("project") or {}).get("content")
+        or (recent_titles[0] if recent_titles else None)
+    )
+    what_changed = " | ".join(recent_titles[:2]) if recent_titles else snapshot.get("what_changed")
+    what_is_left = snapshot.get("remaining") or (open_loops[0] if open_loops else None)
+
     return {
         "agent_kind": agent_kind,
         "session_id": session_id,
         "project": project_payload["project"] if project_payload else None,
         "reboot_brief": {
-            "where_it_stands": ((project_payload or {}).get("snapshot") or {}).get("implemented"),
-            "what_changed": ((project_payload or {}).get("snapshot") or {}).get("what_changed"),
-            "what_is_left": ((project_payload or {}).get("snapshot") or {}).get("remaining"),
-            "blockers": ((project_payload or {}).get("snapshot") or {}).get("blockers") or [],
-            "open_loops": [
-                item.get("open_question") or item.get("title")
-                for item in ((project_payload or {}).get("recent_activity") or [])[:6]
-                if item.get("open_question") or item.get("title")
-            ],
+            "where_it_stands": where_it_stands,
+            "what_changed": what_changed,
+            "what_is_left": what_is_left,
+            "blockers": blockers[:8],
+            "open_loops": open_loops[:6] or recent_titles[:6],
             "related_repos": [item["name"] for item in ((project_payload or {}).get("repos") or [])[:5] if item.get("name")],
         },
         "recent_sessions": ((project_payload or {}).get("conversation_sessions") or [])[:5],
+        "recent_activity": relevant_activity[:6],
         "reminders": ((project_payload or {}).get("reminders") or [])[:8],
         "connections": ((project_payload or {}).get("connections") or [])[:8],
         "brain_sources": brain_sources,

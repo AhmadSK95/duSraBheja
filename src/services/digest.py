@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - allows unit tests without app 
 
 log = logging.getLogger("brain.digest")
 LOW_SIGNAL_PROJECT_ENTRY_TYPES = {"context_dump", "repo_snapshot"}
+INDIRECT_PROJECT_ENTRY_TYPES = {"knowledge_refresh", "voice_refresh"}
 
 
 def _shorten(value: str | None, limit: int = 220) -> str:
@@ -209,7 +210,9 @@ def _story_signal_item(entry) -> dict:
 def _is_meaningful_project_update(entry) -> bool:
     entry_type = getattr(entry, "entry_type", "") or ""
     actor_type = getattr(entry, "actor_type", "") or ""
-    if entry_type in {"conversation_session", "session_closeout", "progress_update", "decision", "research_thread", "synapse", "blind_spot", "knowledge_refresh", "voice_refresh"}:
+    if entry_type in INDIRECT_PROJECT_ENTRY_TYPES and actor_type in {"connector", "system"}:
+        return False
+    if entry_type in {"conversation_session", "session_closeout", "progress_update", "decision", "research_thread", "synapse", "blind_spot"}:
         return True
     if getattr(entry, "decision", None) or getattr(entry, "impact", None) or getattr(entry, "outcome", None) or getattr(entry, "open_question", None):
         return True
