@@ -33,6 +33,10 @@ def _default_digest_sections() -> dict:
         "changed_since_yesterday": True,
         "project_status": True,
         "recommended_tasks": True,
+        "new_synapses": True,
+        "brain_learning": True,
+        "blind_spots": True,
+        "voice_alignment": True,
         "youtube_recommendations": True,
         "brain_teasers": True,
         "reminders_due_today": True,
@@ -191,6 +195,16 @@ def _normalize_topic_items(items: list[dict] | None, fallback: list[dict], *, ti
     return normalized, titles
 
 
+def _story_signal_item(entry) -> dict:
+    return {
+        "id": str(entry.id),
+        "title": entry.title,
+        "summary": _shorten(getattr(entry, "summary", None) or getattr(entry, "body_markdown", None), 220),
+        "project_ref": getattr(entry, "subject_ref", None),
+        "happened_at": str(entry.happened_at),
+    }
+
+
 def _build_digest_context(
     *,
     digest_date: date,
@@ -205,6 +219,10 @@ def _build_digest_context(
     story_connections: list[dict],
     project_updates: dict[str, list[dict]],
     reminders_due_today: list,
+    synapses: list[dict],
+    brain_learnings: list[dict],
+    blind_spots: list[dict],
+    voice_profile: dict | None,
 ) -> str:
     lines = [
         f"Digest date: {digest_date.isoformat()}",
@@ -269,12 +287,32 @@ def _build_digest_context(
     if story_connections:
         lines.extend(["", "Cross-Project Connections:"])
         lines.extend(f"- {item['subject_ref']} ({item['mentions']} mentions)" for item in story_connections[:6])
+    if synapses:
+        lines.extend(["", "New Synapses:"])
+        lines.extend(f"- {item['title']}: {item['summary'] or 'Fresh connection'}" for item in synapses[:6])
+    if brain_learnings:
+        lines.extend(["", "Brain Learning:"])
+        lines.extend(f"- {item['title']}: {item['summary'] or 'Fresh learning signal'}" for item in brain_learnings[:6])
+    if blind_spots:
+        lines.extend(["", "Blind Spots:"])
+        lines.extend(f"- {item['title']}: {item['summary'] or 'Evidence gap'}" for item in blind_spots[:6])
+    if voice_profile:
+        lines.extend(
+            [
+                "",
+                "Voice Profile:",
+                f"- Summary: {voice_profile.get('summary') or 'unknown'}",
+                f"- Tone: {', '.join(voice_profile.get('traits', {}).get('tone') or []) or 'unknown'}",
+                f"- Priorities: {', '.join(voice_profile.get('traits', {}).get('priorities') or []) or 'unknown'}",
+            ]
+        )
     lines.extend(
         [
             "",
             "Instructions:",
             "- Recommend strong tasks for today.",
             "- Assess active projects with what is implemented, what is left, and what looks weak.",
+            "- Surface cross-project synapses, external learning, and blind spots that matter right now.",
             "- Suggest five writing topics.",
             "- Suggest five YouTube watch ideas that fit Ahmad's active domains and current project gaps.",
             "- Generate five smart brain teasers.",
@@ -304,13 +342,27 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     pending_reviews = await store.get_pending_reviews(session)
     reminders = await store.list_reminders(session, status="active", limit=50)
     snapshots = await store.list_project_state_snapshots(session, limit=25)
+    get_voice_profile = getattr(store, "get_voice_profile", None)
+    voice_profile_record = await get_voice_profile(session, "ahmad-default") if get_voice_profile else None
 
     recent_cutoff = digest_date - timedelta(days=7)
     project_updates: dict[str, list[dict]] = {}
     open_loops = []
+    synapses: list[dict] = []
+    brain_learnings: list[dict] = []
+    blind_spots: list[dict] = []
     active_project_map: dict[str, object] = {}
     for entry in recent_activity:
         if entry.happened_at.date() < recent_cutoff:
+            continue
+        if entry.entry_type == "synapse":
+            synapses.append(_story_signal_item(entry))
+            continue
+        if entry.entry_type in {"knowledge_refresh", "research_thread", "voice_refresh"}:
+            brain_learnings.append(_story_signal_item(entry))
+            continue
+        if entry.entry_type == "blind_spot":
+            blind_spots.append(_story_signal_item(entry))
             continue
         if not entry.project_note_id:
             if getattr(entry, "open_question", None):
@@ -397,6 +449,15 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         }
         for project in projects[:2]
     ] or [{"title": "Clarify current focus", "why": "The brain still needs clearer active-project prioritization."}]
+    voice_profile = (
+        {
+            "summary": voice_profile_record.summary,
+            "traits": voice_profile_record.traits,
+            "style_anchors": voice_profile_record.style_anchors[:3],
+        }
+        if voice_profile_record
+        else None
+    )
 
     headline = f"{digest_date.isoformat()} operating brief"
     narrative = "The brain has fresh signals, but the higher-order brief is still converging."
@@ -421,6 +482,10 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         story_connections=connection_summaries,
         project_updates=project_updates,
         reminders_due_today=reminders_due_today,
+        synapses=synapses,
+        brain_learnings=brain_learnings,
+        blind_spots=blind_spots,
+        voice_profile=voice_profile,
     )
 
     try:
@@ -530,6 +595,9 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             for review in pending_reviews[:10]
         ],
         "open_loops": open_loops[:10],
+        "synapses": synapses[:5],
+        "brain_learnings": brain_learnings[:5],
+        "blind_spots": blind_spots[:5],
         "story_connections": connection_summaries[:10],
         "writing_topics": writing_topics[:5],
         "writing_topic_items": writing_topic_items[:5],
@@ -544,6 +612,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             for reminder in reminders_due_today[:10]
         ],
         "improvement_focus": improvement_focus[:5],
+        "voice_profile": voice_profile,
         "low_confidence_sections": low_confidence_sections,
         "digest_preferences": digest_preference.sections if digest_preference else _default_digest_sections(),
         "narration_script": narrative,

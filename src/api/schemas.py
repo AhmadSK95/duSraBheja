@@ -36,6 +36,8 @@ class CollectorEntryPayload(BaseModel):
     source_links: list[str] = Field(default_factory=list)
     external_url: str | None = None
     happened_at: datetime | None = None
+    raw_body_markdown: str | None = None
+    is_sensitive: bool = False
     metadata: dict = Field(default_factory=dict)
     repo: CollectorRepoPayload | None = None
 
@@ -54,6 +56,7 @@ class QueryRequest(BaseModel):
     mode: str | None = None
     category: str | None = None
     use_opus: bool = False
+    include_web: bool = True
 
 
 class ReminderCreateRequest(BaseModel):
@@ -84,3 +87,26 @@ class SyncRunResponse(BaseModel):
     items_seen: int | None = None
     items_imported: int | None = None
     reason: str | None = None
+
+
+class AgentSessionBootstrapRequest(BaseModel):
+    agent_kind: str
+    session_id: str
+    cwd: str | None = None
+    project_hint: str | None = None
+    task_hint: str | None = None
+    include_web: bool = True
+
+
+class AgentSessionCloseoutRequest(BaseModel):
+    agent_kind: str
+    session_id: str
+    cwd: str | None = None
+    project_ref: str | None = None
+    summary: str = Field(min_length=3)
+    decisions: list[str] = Field(default_factory=list)
+    changes: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    source_links: list[str] = Field(default_factory=list)
+    transcript_excerpt: str | None = None
+

@@ -5,6 +5,9 @@ from mcp.server.fastmcp import FastMCP
 from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
 from src.lib import store
+from src.services.identity import resolve_project
+from src.services.session_bootstrap import build_session_bootstrap
+from src.services.story import build_project_story_payload
 
 
 def register(mcp: FastMCP):
@@ -18,51 +21,29 @@ def register(mcp: FastMCP):
             project_name: Name of the project to get context for
         """
         async with async_session() as session:
-            # Find the project note
-            projects = await store.find_notes_by_title(session, project_name, "project")
-            if not projects:
+            project = await resolve_project(
+                session,
+                project_hint=project_name,
+                source_refs=[project_name],
+                create_if_missing=False,
+            )
+            if not project:
                 return {"error": f"Project '{project_name}' not found"}
-
-            project = projects[0]
-
-            # Get related tasks
-            tasks = await store.list_notes(session, category="task", limit=20)
-            # Filter tasks that mention the project name
-            related_tasks = [
-                {"id": str(t.id), "title": t.title, "status": t.status, "priority": t.priority}
-                for t in tasks
-                if project_name.lower() in (t.title + (t.content or "")).lower()
-            ]
-
-            # Get related ideas
-            ideas = await store.list_notes(session, category="idea", limit=20)
-            related_ideas = [
-                {"id": str(i.id), "title": i.title}
-                for i in ideas
-                if project_name.lower() in (i.title + (i.content or "")).lower()
-            ]
-
-            # Get related people
-            people = await store.list_notes(session, category="people", limit=20)
-            related_people = [
-                {"id": str(p.id), "title": p.title}
-                for p in people
-                if project_name.lower() in (p.content or "").lower()
-            ]
-
+            story_payload = await build_project_story_payload(session, project.id)
+            reboot_brief = await build_session_bootstrap(
+                session,
+                agent_kind="mcp",
+                session_id=f"context:{project.id}",
+                project_hint=project.title,
+                include_web=False,
+            )
             return {
-                "project": {
-                    "id": str(project.id),
-                    "title": project.title,
-                    "content": project.content,
-                    "status": project.status,
-                    "tags": list(project.tags or []),
-                    "created_at": str(project.created_at),
-                    "updated_at": str(project.updated_at),
-                },
-                "tasks": related_tasks[:10],
-                "ideas": related_ideas[:5],
-                "people": related_people[:5],
+                "project": story_payload["project"] if story_payload else {"id": str(project.id), "title": project.title},
+                "snapshot": story_payload.get("snapshot") if story_payload else None,
+                "recent_activity": story_payload.get("recent_activity", [])[:8] if story_payload else [],
+                "connections": story_payload.get("connections", [])[:8] if story_payload else [],
+                "reboot_brief": reboot_brief.get("reboot_brief"),
+                "voice_profile": reboot_brief.get("voice_profile"),
             }
 
     @mcp.tool()

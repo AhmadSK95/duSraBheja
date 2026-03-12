@@ -131,6 +131,7 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
     connections = await store.list_story_connections(session, project_note_id=project_note_id, limit=10)
     sessions = await store.list_conversation_sessions(session, project_note_id=project_note_id, limit=10)
     reminders = await store.list_project_reminders(session, project_note_id=project_note_id, status="active", limit=10)
+    aliases = await store.list_project_aliases(session, project_note_id=project_note_id, limit=25)
 
     project = story["project"]
     return {
@@ -174,6 +175,18 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
                 "is_primary": repo.is_primary,
             }
             for repo in story["repos"]
+        ],
+        "aliases": [
+            {
+                "id": str(alias.id),
+                "alias": alias.alias,
+                "normalized_alias": alias.normalized_alias,
+                "source_type": alias.source_type,
+                "source_ref": alias.source_ref,
+                "confidence": alias.confidence,
+                "is_manual": alias.is_manual,
+            }
+            for alias in aliases
         ],
         "recent_activity": [
             {

@@ -13,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import settings
 from src.lib import store
 from src.agents.storyteller import extract_story_event
+from src.services.identity import ensure_project_aliases, resolve_project
 from src.services.indexing import index_artifact
 from src.services.project_state import recompute_project_states
+from src.services.source_ingest import ingest_source_entries
 from src.services.story import publish_story_entry
 
 log = logging.getLogger("brain.services.sync")
@@ -42,183 +44,31 @@ async def import_collector_payload(
     emit_sync_event: bool = True,
     entries: list[dict],
 ) -> dict:
-    sync_source = await store.upsert_sync_source(
+    enriched_entries = []
+    for entry in entries:
+        enriched = dict(entry)
+        if not enriched.get("content_hash"):
+            enriched["content_hash"] = _hash_payload(
+                "|".join(
+                    str(part or "")
+                    for part in (
+                        enriched.get("project_ref"),
+                        enriched.get("title"),
+                        enriched.get("body_markdown"),
+                        enriched.get("summary"),
+                    )
+                )
+            )
+        enriched_entries.append(enriched)
+    return await ingest_source_entries(
         session,
         source_type=source_type,
-        name=source_name,
-        status="active",
-        config={"device_name": device_name},
+        source_name=source_name,
+        mode=mode,
+        device_name=device_name,
+        emit_sync_event=emit_sync_event,
+        entries=enriched_entries,
     )
-    sync_run = await store.start_sync_run(session, sync_source_id=sync_source.id, mode=mode)
-
-    imported = 0
-    projects_touched: set[str] = set()
-    project_note_ids_touched: set[str] = set()
-    for entry in entries:
-        project_ref = entry.get("project_ref")
-        title = entry.get("title") or project_ref or "Collector update"
-        body_markdown = entry.get("body_markdown") or ""
-        payload_hash = entry.get("content_hash") or _hash_payload(f"{project_ref}|{title}|{body_markdown}")
-        happened_at = entry.get("happened_at")
-        happened_dt = _parse_datetime(happened_at) if happened_at else None
-
-        project_note = None
-        if project_ref:
-            projects_touched.add(project_ref)
-            project_note = await store.get_or_create_project_note(session, project_ref)
-            project_note_ids_touched.add(str(project_note.id))
-            if entry.get("repo"):
-                await store.upsert_project_repo(
-                    session,
-                    project_note_id=project_note.id,
-                    repo_name=entry["repo"].get("name") or project_ref,
-                    repo_owner=entry["repo"].get("owner"),
-                    repo_url=entry["repo"].get("url"),
-                    branch=entry["repo"].get("branch"),
-                    local_path=entry["repo"].get("local_path"),
-                    is_primary=entry["repo"].get("is_primary", False),
-                )
-
-        source_item = await store.get_source_item_by_external_id(
-            session,
-            sync_source_id=sync_source.id,
-            external_id=entry.get("external_id") or payload_hash,
-        )
-        if source_item and source_item.content_hash == payload_hash:
-            continue
-
-        artifact = await store.create_artifact(
-            session,
-            content_type="text",
-            raw_text=body_markdown,
-            summary=title,
-            source=source_type,
-            metadata_={
-                "entry_type": entry.get("entry_type", "context_dump"),
-                "device_name": device_name,
-                "project_ref": project_ref,
-                "source_type": source_type,
-                "collector_metadata": entry.get("metadata", {}),
-            },
-        )
-        await store.create_classification(
-            session,
-            artifact_id=artifact.id,
-            category=entry.get("category") or ("project" if project_ref else "note"),
-            confidence=1.0,
-            entities=[],
-            tags=entry.get("tags", []),
-            priority="medium",
-            suggested_action=None,
-            model_used=source_type,
-            tokens_used=0,
-            cost_usd=0,
-            is_final=True,
-        )
-        try:
-            await index_artifact(session, artifact.id)
-        except Exception as exc:
-            log.warning("Failed to index imported artifact %s: %s", artifact.id, exc)
-        source_item, created = await store.upsert_source_item(
-            session,
-            sync_source_id=sync_source.id,
-            external_id=entry.get("external_id") or payload_hash,
-            title=title,
-            summary=entry.get("summary"),
-            payload=entry,
-            content_hash=payload_hash,
-            external_url=entry.get("external_url"),
-            project_note_id=project_note.id if project_note else None,
-            artifact_id=artifact.id,
-            happened_at=happened_dt,
-        )
-        story_fields = await _extract_story_fields(
-            session,
-            source_type=source_type,
-            title=title,
-            body_markdown=body_markdown,
-            project_ref=project_ref,
-            actor_name=device_name,
-        )
-        await publish_story_entry(
-            session,
-            actor_type="collector" if source_type == "collector" else "agent",
-            actor_name=device_name,
-            subject_type=story_fields["subject_type"],
-            subject_ref=story_fields["subject_ref"] or project_ref,
-            entry_type=story_fields["entry_type"] or entry.get("entry_type", "context_dump"),
-            title=story_fields["title"] or title,
-            body_markdown=body_markdown,
-            project_ref=project_ref,
-            summary=story_fields["summary"] or entry.get("summary"),
-            decision=story_fields["decision"],
-            rationale=story_fields["rationale"],
-            constraint=story_fields["constraint"],
-            outcome=story_fields["outcome"],
-            impact=story_fields["impact"],
-            open_question=story_fields["open_question"],
-            evidence_refs=story_fields["evidence_refs"],
-            tags=story_fields["tags"] or entry.get("tags", []),
-            source_links=entry.get("source_links", []),
-            source=source_type,
-            category=entry.get("category", "note"),
-            metadata_=entry.get("metadata"),
-            happened_at=happened_dt,
-            artifact_id=artifact.id,
-            source_item_id=source_item.id,
-        )
-        metadata = entry.get("metadata") or {}
-        if entry.get("entry_type") == "conversation_session" and source_type in {"codex_history", "claude_history"}:
-            await store.upsert_conversation_session(
-                session,
-                source_item_id=source_item.id,
-                project_note_id=project_note.id if project_note else None,
-                agent_kind=str(metadata.get("agent_kind") or source_type.replace("_history", "")),
-                session_id=str(metadata.get("session_id") or source_item.external_id),
-                parent_session_id=metadata.get("parent_session_id"),
-                cwd=metadata.get("cwd"),
-                title_hint=metadata.get("title_hint"),
-                transcript_blob_ref=None,
-                transcript_excerpt=(metadata.get("redacted_transcript") or "")[:4000] or None,
-                participants=list(metadata.get("participants") or []),
-                turn_count=int(metadata.get("turn_count") or 0),
-                started_at=_parse_datetime(metadata.get("started_at")),
-                ended_at=_parse_datetime(metadata.get("ended_at")) or happened_dt,
-                metadata_=metadata,
-            )
-        if created:
-            imported += 1
-
-    await store.finish_sync_run(
-        session,
-        sync_run.id,
-        status="completed",
-        items_seen=len(entries),
-        items_imported=imported,
-    )
-    await store.touch_sync_source(session, sync_source.id)
-    result = {
-        "status": "completed",
-        "sync_source_id": str(sync_source.id),
-        "sync_run_id": str(sync_run.id),
-        "items_seen": len(entries),
-        "items_imported": imported,
-        "source_name": source_name,
-        "source_type": source_type,
-        "device_name": device_name,
-        "mode": mode,
-        "projects_touched": sorted(projects_touched),
-    }
-    if project_note_ids_touched:
-        await recompute_project_states(
-            session,
-            project_note_ids=[uuid.UUID(value) for value in sorted(project_note_ids_touched)],
-        )
-    if emit_sync_event:
-        await _publish_sync_event(result)
-    if imported and emit_sync_event:
-        await _trigger_story_pulse(reason=f"{source_type}:{mode}", metadata=result)
-    return result
 
 
 async def run_github_sync(session: AsyncSession) -> dict:
@@ -276,8 +126,24 @@ async def run_github_sync(session: AsyncSession) -> dict:
                 except Exception as exc:
                     log.warning("Failed to expand GitHub details for %s: %s", repo["full_name"], exc)
 
-            project_note = await store.get_or_create_project_note(session, repo["name"])
+            project_note = await resolve_project(
+                session,
+                project_hint=repo["name"],
+                repo_name=repo["name"],
+                source_refs=[repo["full_name"], repo.get("html_url")],
+                create_if_missing=True,
+            )
+            if not project_note:
+                continue
             project_note_ids_touched.add(str(project_note.id))
+            await ensure_project_aliases(
+                session,
+                project_note_id=project_note.id,
+                title=project_note.title,
+                aliases=[repo["name"], repo["full_name"], repo.get("html_url")],
+                source_type="github",
+                source_ref=repo["full_name"],
+            )
             await store.upsert_project_repo(
                 session,
                 project_note_id=project_note.id,

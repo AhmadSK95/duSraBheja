@@ -56,9 +56,11 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_token: str = ""
+    app_base_url: str = "http://127.0.0.1:8000"
 
     # Blob storage
     blob_storage_path: str = "/data/blobs"
+    encryption_master_key: str = ""
 
     # Daily digest
     digest_cron_hour: int = 8
@@ -66,6 +68,8 @@ class Settings(BaseSettings):
     digest_story_pulse_cooldown_minutes: int = 15
     knowledge_refresh_hours: int = 6
     knowledge_max_projects_per_run: int = 3
+    cognition_refresh_hours: int = 4
+    voice_refresh_hour: int = 5
 
     # Collector
     collector_device_name: str = "macbook"
@@ -80,6 +84,9 @@ class Settings(BaseSettings):
     agent_history_state_path: str = "~/.brain-collector/agent-history-state.json"
     agent_history_idle_seconds: int = 300
     agent_history_poll_seconds: int = 900
+    apple_notes_export_path: str = "~/.brain-collector/apple-notes"
+    apple_notes_state_path: str = "~/.brain-collector/apple-notes-state.json"
+    apple_notes_exclude_folders: str = ""
 
     # Story retrieval
     story_max_events: int = 25

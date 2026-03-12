@@ -21,18 +21,26 @@ from src.models import (
     Note,
     OAuthCredential,
     ProjectRepo,
+    ProjectAlias,
     ProjectStateSnapshot,
+    ProtectedContent,
     ReviewQueue,
     Reminder,
     SourceItem,
     StoryConnection,
     SyncRun,
     SyncSource,
+    VoiceProfile,
 )
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_alias(alias: str | None) -> str:
+    cleaned = (alias or "").strip().lower()
+    return "".join(ch if ch.isalnum() else "-" for ch in cleaned).strip("-")
 
 
 async def create_artifact(session: AsyncSession, **kwargs) -> Artifact:
@@ -192,7 +200,88 @@ async def list_active_project_aliases(session: AsyncSession, limit: int = 25) ->
                     seen.add(key)
                     aliases.append(value)
 
+    alias_result = await session.execute(
+        select(ProjectAlias).order_by(ProjectAlias.updated_at.desc(), ProjectAlias.created_at.desc()).limit(limit * 3)
+    )
+    for alias in alias_result.scalars():
+        cleaned = (alias.alias or "").strip()
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            seen.add(key)
+            aliases.append(cleaned)
+
     return aliases[: limit * 2]
+
+
+async def upsert_project_alias(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    alias: str,
+    source_type: str | None = None,
+    source_ref: str | None = None,
+    confidence: float = 0.8,
+    is_manual: bool = False,
+    metadata_: dict | None = None,
+) -> ProjectAlias:
+    normalized_alias = _normalize_alias(alias)
+    result = await session.execute(
+        select(ProjectAlias).where(ProjectAlias.normalized_alias == normalized_alias)
+    )
+    project_alias = result.scalar_one_or_none()
+    if project_alias:
+        project_alias.project_note_id = project_note_id
+        project_alias.alias = alias
+        project_alias.source_type = source_type
+        project_alias.source_ref = source_ref
+        project_alias.confidence = confidence
+        project_alias.is_manual = is_manual
+        project_alias.metadata_ = metadata_ or {}
+        project_alias.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(project_alias)
+        return project_alias
+
+    project_alias = ProjectAlias(
+        project_note_id=project_note_id,
+        alias=alias,
+        normalized_alias=normalized_alias,
+        source_type=source_type,
+        source_ref=source_ref,
+        confidence=confidence,
+        is_manual=is_manual,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(project_alias)
+    await session.commit()
+    await session.refresh(project_alias)
+    return project_alias
+
+
+async def resolve_project_alias(session: AsyncSession, alias: str) -> ProjectAlias | None:
+    normalized_alias = _normalize_alias(alias)
+    if not normalized_alias:
+        return None
+    result = await session.execute(
+        select(ProjectAlias).where(ProjectAlias.normalized_alias == normalized_alias)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_project_aliases(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID | None = None,
+    limit: int = 100,
+) -> list[ProjectAlias]:
+    query = select(ProjectAlias)
+    if project_note_id:
+        query = query.where(ProjectAlias.project_note_id == project_note_id)
+    query = query.order_by(ProjectAlias.is_manual.desc(), ProjectAlias.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
 async def update_note(session: AsyncSession, note_id: uuid.UUID, **kwargs) -> Note | None:
@@ -683,6 +772,177 @@ async def get_project_repo_mappings(session: AsyncSession, project_note_id: uuid
 async def get_oauth_credentials(session: AsyncSession, provider: str) -> list[OAuthCredential]:
     result = await session.execute(select(OAuthCredential).where(OAuthCredential.provider == provider))
     return list(result.scalars().all())
+
+
+async def get_latest_oauth_credential(
+    session: AsyncSession,
+    provider: str,
+    *,
+    account_email: str | None = None,
+) -> OAuthCredential | None:
+    query = select(OAuthCredential).where(OAuthCredential.provider == provider)
+    if account_email:
+        query = query.where(OAuthCredential.account_email == account_email)
+    query = query.order_by(OAuthCredential.updated_at.desc(), OAuthCredential.created_at.desc()).limit(1)
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def upsert_oauth_credential(
+    session: AsyncSession,
+    *,
+    provider: str,
+    account_email: str | None = None,
+    scopes: list[str] | None = None,
+    encrypted_refresh_token: str | None = None,
+    encrypted_access_token: str | None = None,
+    expires_at: datetime | None = None,
+    metadata_: dict | None = None,
+) -> OAuthCredential:
+    credential = await get_latest_oauth_credential(session, provider, account_email=account_email)
+    if credential:
+        credential.account_email = account_email
+        credential.scopes = scopes or []
+        if encrypted_refresh_token is not None:
+            credential.encrypted_refresh_token = encrypted_refresh_token
+        if encrypted_access_token is not None:
+            credential.encrypted_access_token = encrypted_access_token
+        credential.expires_at = expires_at
+        credential.metadata_ = metadata_ or {}
+        credential.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(credential)
+        return credential
+
+    credential = OAuthCredential(
+        provider=provider,
+        account_email=account_email,
+        scopes=scopes or [],
+        encrypted_refresh_token=encrypted_refresh_token,
+        encrypted_access_token=encrypted_access_token,
+        expires_at=expires_at,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(credential)
+    await session.commit()
+    await session.refresh(credential)
+    return credential
+
+
+async def delete_oauth_credentials(session: AsyncSession, provider: str) -> int:
+    result = await session.execute(delete(OAuthCredential).where(OAuthCredential.provider == provider))
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def get_protected_content(
+    session: AsyncSession,
+    *,
+    source_type: str,
+    source_ref: str,
+    content_kind: str = "body",
+) -> ProtectedContent | None:
+    result = await session.execute(
+        select(ProtectedContent).where(
+            ProtectedContent.source_type == source_type,
+            ProtectedContent.source_ref == source_ref,
+            ProtectedContent.content_kind == content_kind,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_protected_content(
+    session: AsyncSession,
+    *,
+    source_type: str,
+    source_ref: str,
+    content_kind: str,
+    ciphertext: str,
+    nonce: str,
+    checksum: str,
+    preview_text: str | None = None,
+    metadata_: dict | None = None,
+) -> ProtectedContent:
+    protected = await get_protected_content(
+        session,
+        source_type=source_type,
+        source_ref=source_ref,
+        content_kind=content_kind,
+    )
+    values = {
+        "ciphertext": ciphertext,
+        "nonce": nonce,
+        "checksum": checksum,
+        "preview_text": preview_text,
+        "metadata_": metadata_ or {},
+        "updated_at": _utcnow(),
+    }
+    if protected:
+        for key, value in values.items():
+            setattr(protected, key, value)
+        await session.commit()
+        await session.refresh(protected)
+        return protected
+
+    protected = ProtectedContent(
+        source_type=source_type,
+        source_ref=source_ref,
+        content_kind=content_kind,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(protected)
+    await session.commit()
+    await session.refresh(protected)
+    return protected
+
+
+async def get_voice_profile(session: AsyncSession, profile_name: str = "ahmad-default") -> VoiceProfile | None:
+    result = await session.execute(select(VoiceProfile).where(VoiceProfile.profile_name == profile_name))
+    return result.scalar_one_or_none()
+
+
+async def upsert_voice_profile(
+    session: AsyncSession,
+    *,
+    profile_name: str,
+    summary: str | None,
+    traits: dict | None,
+    style_anchors: list[dict] | None,
+    source_refs: list[dict] | None,
+    metadata_: dict | None = None,
+) -> VoiceProfile:
+    profile = await get_voice_profile(session, profile_name)
+    values = {
+        "summary": summary,
+        "traits": traits or {},
+        "style_anchors": style_anchors or [],
+        "source_refs": source_refs or [],
+        "metadata_": metadata_ or {},
+        "last_refreshed_at": _utcnow(),
+        "updated_at": _utcnow(),
+    }
+    if profile:
+        profile.version += 1
+        for key, value in values.items():
+            setattr(profile, key, value)
+        await session.commit()
+        await session.refresh(profile)
+        return profile
+
+    profile = VoiceProfile(
+        profile_name=profile_name,
+        version=1,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(profile)
+    await session.commit()
+    await session.refresh(profile)
+    return profile
 
 
 async def upsert_conversation_session(

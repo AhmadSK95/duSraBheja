@@ -591,13 +591,21 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
     if result.get("mode"):
         embed.add_field(name="Mode", value=str(result["mode"]).replace("_", " ").title(), inline=True)
 
-    sources = result.get("sources") or []
-    if sources:
+    brain_sources = result.get("brain_sources") or []
+    if brain_sources:
         source_lines = [
             f"[{i}] {src['category']}: {src['title']} ({src['similarity']:.0%})"
-            for i, src in enumerate(sources[:5], 1)
+            for i, src in enumerate(brain_sources[:5], 1)
         ]
-        embed.add_field(name="Sources", value="\n".join(source_lines), inline=False)
+        embed.add_field(name="From Your Brain", value="\n".join(source_lines), inline=False)
+
+    web_sources = result.get("web_sources") or []
+    if web_sources:
+        web_lines = [
+            f"[{i}] {src.get('title') or src.get('source_hint') or 'Web result'}"
+            for i, src in enumerate(web_sources[:4], 1)
+        ]
+        embed.add_field(name="From The Web", value="\n".join(web_lines), inline=False)
 
     embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
     embed.add_field(name="Model", value=model_label, inline=True)
@@ -659,6 +667,17 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
             name="Open Loops",
             value=_format_digest_entries(
                 [item.get("open_question") or item.get("title") or "Open loop" for item in payload["open_loops"][:5]]
+            ),
+            inline=False,
+        )
+    if payload.get("synapses"):
+        primary.add_field(
+            name="New Synapses",
+            value=_format_digest_entries(
+                [
+                    f"{item.get('title')} — {item.get('summary') or item.get('project_ref') or 'Fresh cross-project connection'}"
+                    for item in payload["synapses"][:5]
+                ]
             ),
             inline=False,
         )
@@ -735,6 +754,44 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
         if connection_lines:
             secondary.add_field(name="Connections", value=_format_digest_entries(connection_lines), inline=False)
             has_secondary_fields = True
+
+    if payload.get("brain_learnings"):
+        secondary.add_field(
+            name="What The Brain Learned",
+            value=_format_digest_entries(
+                [f"{item.get('title')} — {item.get('summary') or 'Fresh external learning'}" for item in payload["brain_learnings"][:5]]
+            ),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    if payload.get("blind_spots"):
+        secondary.add_field(
+            name="Blind Spots",
+            value=_format_digest_entries(
+                [f"{item.get('title')} — {item.get('summary') or 'Missing evidence'}" for item in payload["blind_spots"][:5]]
+            ),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    voice_profile = payload.get("voice_profile") or {}
+    if voice_profile:
+        tone = ", ".join((voice_profile.get("traits") or {}).get("tone") or []) or "unknown"
+        priorities = ", ".join((voice_profile.get("traits") or {}).get("priorities") or []) or "unknown"
+        secondary.add_field(
+            name="Voice Alignment",
+            value=_format_digest_entries(
+                [
+                    f"Summary: {voice_profile.get('summary') or 'No profile yet'}",
+                    f"Tone: {tone}",
+                    f"Priorities: {priorities}",
+                ],
+                limit=3,
+            ),
+            inline=False,
+        )
+        has_secondary_fields = True
 
     if payload.get("reason"):
         primary.set_footer(text=f"Trigger: {payload['reason']}")

@@ -23,6 +23,8 @@ JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
 JOB_GENERATE_SCHEDULED_DIGEST_TICK = "src.worker.tasks.digest.generate_scheduled_digest_tick"
 JOB_PROCESS_DUE_REMINDERS = "src.worker.tasks.reminders.process_due_reminders"
 JOB_GENERATE_KNOWLEDGE_REFRESH = "src.worker.tasks.knowledge.generate_knowledge_refresh"
+JOB_REFRESH_VOICE_PROFILE = "src.worker.tasks.voice.refresh_voice_profile_task"
+JOB_RUN_CONTINUOUS_COGNITION = "src.worker.tasks.cognition.run_continuous_cognition_task"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
@@ -110,6 +112,8 @@ class WorkerSettings:
         JOB_GENERATE_SCHEDULED_DIGEST_TICK,
         JOB_PROCESS_DUE_REMINDERS,
         JOB_GENERATE_KNOWLEDGE_REFRESH,
+        JOB_REFRESH_VOICE_PROFILE,
+        JOB_RUN_CONTINUOUS_COGNITION,
     ]
 
     cron_jobs = [
@@ -127,6 +131,16 @@ class WorkerSettings:
             JOB_GENERATE_KNOWLEDGE_REFRESH,
             hour=set(range(0, 24, max(1, settings.knowledge_refresh_hours))),
             minute=15,
+        ),
+        cron(
+            JOB_RUN_CONTINUOUS_COGNITION,
+            hour=set(range(0, 24, max(1, settings.cognition_refresh_hours))),
+            minute=35,
+        ),
+        cron(
+            JOB_REFRESH_VOICE_PROFILE,
+            hour={settings.voice_refresh_hour},
+            minute=45,
         ),
     ]
 

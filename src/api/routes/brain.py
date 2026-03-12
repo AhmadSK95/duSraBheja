@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.schemas import (
+    AgentSessionBootstrapRequest,
+    AgentSessionCloseoutRequest,
     CollectorIngestRequest,
     ManualIngestRequest,
     ProjectStateRefreshRequest,
@@ -23,10 +25,13 @@ from src.lib.embeddings import embed_text
 from src.lib.store import get_note, vector_search
 from src.lib import store
 from src.services.digest import generate_or_refresh_digest
+from src.services.identity import resolve_project
 from src.services.query import query_brain
 from src.services.reminders import store_reminder
 from src.services.project_state import recompute_project_states
+from src.services.session_bootstrap import build_session_bootstrap, record_session_closeout
 from src.services.story import build_project_brief_payload, build_project_story_payload
+from src.services.voice import refresh_voice_profile
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
 
@@ -76,6 +81,16 @@ async def run_source_sync(source: str) -> SyncRunResponse:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Collector sync is push-based. Use POST /api/ingest/collector.",
+            )
+        if source == "apple_notes":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Apple Notes sync is collector-based. Use POST /api/ingest/collector with source_type=apple_notes.",
+            )
+        if source in {"gmail", "drive", "google_keep"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google ingestion is not enabled in this build. Use local exports if you want a one-time import later.",
             )
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown source: {source}")
@@ -156,6 +171,7 @@ async def query_route(payload: QueryRequest) -> dict:
             mode=payload.mode,
             category=payload.category,
             use_opus=payload.use_opus,
+            include_web=payload.include_web,
         )
 
 
@@ -190,9 +206,14 @@ async def create_reminder_route(payload: ReminderCreateRequest) -> dict:
         )
         project_note_id = None
         if payload.project_name:
-            matches = await store.find_notes_by_title(session, payload.project_name, "project")
-            if matches:
-                project_note_id = matches[0].id
+            project = await resolve_project(
+                session,
+                project_hint=payload.project_name,
+                source_refs=[payload.project_name],
+                create_if_missing=False,
+            )
+            if project:
+                project_note_id = project.id
         reminder = await store_reminder(
             session,
             raw_text=payload.text,
@@ -231,3 +252,41 @@ async def generate_morning_digest_route() -> dict:
     async with async_session() as session:
         payload = await generate_or_refresh_digest(session, digest_date=digest_date, trigger="manual")
     return payload
+
+
+@router.post("/voice/refresh", dependencies=[Depends(require_api_token)])
+async def refresh_voice_profile_route() -> dict:
+    async with async_session() as session:
+        return await refresh_voice_profile(session)
+
+
+@router.post("/agent/session/bootstrap", dependencies=[Depends(require_api_token)])
+async def agent_session_bootstrap_route(payload: AgentSessionBootstrapRequest) -> dict:
+    async with async_session() as session:
+        return await build_session_bootstrap(
+            session,
+            agent_kind=payload.agent_kind,
+            session_id=payload.session_id,
+            cwd=payload.cwd,
+            project_hint=payload.project_hint,
+            task_hint=payload.task_hint,
+            include_web=payload.include_web,
+        )
+
+
+@router.post("/agent/session/closeout", dependencies=[Depends(require_api_token)])
+async def agent_session_closeout_route(payload: AgentSessionCloseoutRequest) -> dict:
+    async with async_session() as session:
+        return await record_session_closeout(
+            session,
+            agent_kind=payload.agent_kind,
+            session_id=payload.session_id,
+            cwd=payload.cwd,
+            project_ref=payload.project_ref,
+            summary=payload.summary,
+            decisions=payload.decisions,
+            changes=payload.changes,
+            open_questions=payload.open_questions,
+            source_links=payload.source_links,
+            transcript_excerpt=payload.transcript_excerpt,
+        )

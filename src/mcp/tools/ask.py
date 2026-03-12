@@ -33,6 +33,8 @@ def register(mcp: FastMCP):
         return {
             "answer": result["answer"],
             "sources": result["sources"],
+            "brain_sources": result.get("brain_sources", []),
+            "web_sources": result.get("web_sources", []),
             "confidence": result["confidence"],
             "mode": result.get("mode"),
         }

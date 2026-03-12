@@ -13,6 +13,8 @@ from src.config import settings
 from src.constants import QUERY_MODES
 from src.lib import store
 from src.lib.embeddings import embed_text
+from src.services.identity import resolve_project
+from src.services.openai_web import answer_question_with_web
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
 
@@ -112,9 +114,14 @@ def candidate_lookup_phrases(question: str) -> list[str]:
 
 async def resolve_project_payload(session: AsyncSession, question: str) -> dict | None:
     for phrase in candidate_lookup_phrases(question):
-        matches = await store.find_notes_by_title(session, phrase, "project")
-        if matches:
-            return await build_project_story_payload(session, matches[0].id)
+        project = await resolve_project(
+            session,
+            project_hint=phrase,
+            source_refs=[phrase],
+            create_if_missing=False,
+        )
+        if project:
+            return await build_project_story_payload(session, project.id)
     return None
 
 
@@ -286,6 +293,7 @@ async def query_brain(
     mode: str | None = None,
     category: str | None = None,
     use_opus: bool = False,
+    include_web: bool = True,
     now: datetime | None = None,
 ) -> dict:
     trace_id = uuid.uuid4()
@@ -334,6 +342,7 @@ async def query_brain(
         )
 
     sources = await collect_sources(session, question, category=category, limit=8)
+    voice_profile = await store.get_voice_profile(session, "ahmad-default")
 
     if resolved_mode == "sources":
         if not sources:
@@ -347,6 +356,8 @@ async def query_brain(
             "mode": resolved_mode,
             "answer": answer,
             "sources": [{k: v for k, v in item.items() if k != "content"} for item in sources],
+            "brain_sources": [{k: v for k, v in item.items() if k != "content"} for item in sources],
+            "web_sources": [],
             "events": [],
             "confidence": "medium" if sources else "low",
             "model": "deterministic",
@@ -358,6 +369,8 @@ async def query_brain(
             "mode": resolved_mode,
             "answer": "I don't have enough grounded story context about that yet.",
             "sources": [],
+            "brain_sources": [],
+            "web_sources": [],
             "events": [],
             "confidence": "low",
             "model": "none",
@@ -374,15 +387,46 @@ async def query_brain(
     result = await narrate_from_context(
         session,
         question=question,
-        context_text=context_text,
+        context_text=(
+            context_text
+            + (
+                f"\n\nVoice Profile:\nSummary: {voice_profile.summary}\nTraits: {voice_profile.traits}"
+                if voice_profile
+                else ""
+            )
+        ),
         use_opus=use_opus,
         trace_id=trace_id,
     )
+    web_sources: list[dict] = []
+    web_answer = None
+    if include_web:
+        web_payload = await answer_question_with_web(
+            question=question,
+            context_hints=[
+                project_payload["project"]["title"] if project_payload else None,
+                ((project_payload or {}).get("snapshot") or {}).get("remaining"),
+            ],
+        )
+        if web_payload:
+            web_sources = list(web_payload.get("sources") or [])[:5]
+            web_answer = web_payload.get("answer")
     confidence = "high" if project_payload and (events or project_payload.get("snapshot")) else "medium" if events or sources else "low"
+    final_answer = result["text"]
+    if web_answer:
+        final_answer = (
+            f"{result['text']}\n\n"
+            f"Web context:\n{web_answer}"
+        )
     return {
         "mode": resolved_mode,
-        "answer": result["text"],
-        "sources": [{k: v for k, v in item.items() if k != "content"} for item in sources],
+        "answer": final_answer,
+        "sources": [
+            *[{k: v for k, v in item.items() if k != "content"} for item in sources],
+            *web_sources,
+        ],
+        "brain_sources": [{k: v for k, v in item.items() if k != "content"} for item in sources],
+        "web_sources": web_sources,
         "events": [
             {
                 "id": str(event.id),

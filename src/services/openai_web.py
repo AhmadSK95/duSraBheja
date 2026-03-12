@@ -54,3 +54,25 @@ async def research_topic_brief(*, topic: str, questions: list[str]) -> dict | No
         return parse_json_object(response.output_text)
     except (openai.OpenAIError, LLMJSONError, json.JSONDecodeError, AttributeError):
         return None
+
+
+async def answer_question_with_web(*, question: str, context_hints: list[str] | None = None) -> dict | None:
+    if not settings.openai_api_key or not question:
+        return None
+
+    hint_text = " | ".join(item for item in (context_hints or []) if item)
+    prompt = (
+        "Return ONLY valid JSON with this exact shape: "
+        '{"answer":"grounded answer","sources":[{"title":"title","url":"https://example.com","source_hint":"why it matters"}]}. '
+        "Use live web search. Keep the answer concise and factual. "
+        f"Question: {question}. Context hints: {hint_text}"
+    )
+    try:
+        response = await client.responses.create(
+            model=settings.openai_web_search_model,
+            tools=[{"type": "web_search_preview"}],
+            input=prompt,
+        )
+        return parse_json_object(response.output_text)
+    except (openai.OpenAIError, LLMJSONError, json.JSONDecodeError, AttributeError):
+        return None

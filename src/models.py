@@ -110,6 +110,7 @@ class Note(Base):
     conversation_sessions = relationship("ConversationSession", back_populates="project_note")
     project_state_snapshot = relationship("ProjectStateSnapshot", back_populates="project_note", uselist=False)
     reminders = relationship("Reminder", back_populates="project_note", foreign_keys="Reminder.project_note_id")
+    aliases = relationship("ProjectAlias", back_populates="project_note", cascade="all, delete")
 
     __table_args__ = (
         Index("idx_notes_category", "category"),
@@ -367,6 +368,72 @@ class OAuthCredential(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     __table_args__ = (Index("idx_oauth_provider", "provider"),)
+
+
+class ProjectAlias(Base):
+    __tablename__ = "project_aliases"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    alias = Column(String, nullable=False)
+    normalized_alias = Column(String, nullable=False)
+    source_type = Column(String, nullable=True)
+    source_ref = Column(String, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.8)
+    is_manual = Column(Boolean, nullable=False, default=False)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    project_note = relationship("Note", back_populates="aliases")
+
+    __table_args__ = (
+        UniqueConstraint("normalized_alias"),
+        Index("idx_project_alias_project", "project_note_id"),
+        Index("idx_project_alias_source", "source_type", "source_ref"),
+    )
+
+
+class ProtectedContent(Base):
+    __tablename__ = "protected_contents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_type = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    content_kind = Column(String, nullable=False, default="body")
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String, nullable=False)
+    checksum = Column(String, nullable=False)
+    preview_text = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_type", "source_ref", "content_kind"),
+        Index("idx_protected_content_source", "source_type", "source_ref"),
+    )
+
+
+class VoiceProfile(Base):
+    __tablename__ = "voice_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_name = Column(String, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    summary = Column(Text, nullable=True)
+    traits = Column(JSONB, default=dict)
+    style_anchors = Column(JSONB, default=list)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    last_refreshed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("profile_name"),
+        Index("idx_voice_profiles_name", "profile_name"),
+    )
 
 
 class ConversationSession(Base):

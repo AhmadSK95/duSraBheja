@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from src.collector import apple_notes as apple_notes_collector
 from src.collector.main import (
     build_context_workspace_snapshot,
     build_repo_snapshot,
@@ -130,3 +131,31 @@ def test_run_git_returns_empty_string_on_timeout(tmp_path: Path, monkeypatch) ->
 
     assert run_git(["status"], cwd=repo) == ""
     assert kill_calls == [(12345, 9)]
+
+
+def test_apple_notes_export_entries_are_sensitive_and_dedupe(tmp_path: Path) -> None:
+    export_root = tmp_path / "apple-notes"
+    notes = [
+        {
+            "id": "note-1",
+            "title": "Launch checklist",
+            "account": "iCloud",
+            "folder": "duSraBheja",
+            "body": "<div>password: hunter2</div><div>Ship the reboot flow</div>",
+            "created_at": "2026-03-10T10:00:00Z",
+            "updated_at": "2026-03-11T11:00:00Z",
+        }
+    ]
+
+    apple_notes_collector.snapshot_notes(notes, export_root)
+    entries, state = apple_notes_collector.collect_exported_entries(export_root, {}, "sync")
+
+    assert len(entries) == 1
+    assert entries[0]["is_sensitive"] is True
+    assert "<redacted>" in entries[0]["body_markdown"]
+    assert "hunter2" in entries[0]["raw_body_markdown"]
+
+    repeat_entries, repeat_state = apple_notes_collector.collect_exported_entries(export_root, state, "sync")
+
+    assert repeat_entries == []
+    assert repeat_state["entries"] == state["entries"]
