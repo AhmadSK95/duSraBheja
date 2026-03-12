@@ -90,7 +90,7 @@ def test_bootstrap_prefers_recent_agent_activity_over_knowledge_refresh(monkeypa
     assert payload["reboot_brief"]["what_changed"] == (
         "Codex closeout: ranking repair | Startup replay now rebuilds planner cards"
     )
-    assert payload["reboot_brief"]["what_is_left"] == "Verify the live digest"
+    assert payload["reboot_brief"]["what_is_left"] == "Does the fresh digest now focus on current work?"
     assert payload["reboot_brief"]["open_loops"] == ["Does the fresh digest now focus on current work?"]
     assert payload["recent_activity"][0]["entry_type"] == "session_closeout"
     assert all("Knowledge Base:" not in item for item in payload["reboot_brief"]["open_loops"])

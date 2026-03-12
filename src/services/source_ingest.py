@@ -241,7 +241,7 @@ async def ingest_source_entries(
             title=story_fields["title"] or title,
             body_markdown=safe_body,
             project_ref=project_note.title if project_note else entry.get("project_ref"),
-            summary=story_fields["summary"] or summary or safe_body[:280],
+            summary=summary or story_fields["summary"] or safe_body[:280],
             decision=entry.get("decision") or story_fields["decision"],
             rationale=entry.get("rationale") or story_fields["rationale"],
             constraint=entry.get("constraint") or story_fields["constraint"],

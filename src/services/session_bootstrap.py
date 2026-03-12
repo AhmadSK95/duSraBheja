@@ -44,6 +44,18 @@ def _relevant_bootstrap_activity(project_payload: dict | None) -> list[dict]:
     return filtered
 
 
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
 async def build_session_bootstrap(
     session: AsyncSession,
     *,
@@ -82,12 +94,12 @@ async def build_session_bootstrap(
 
     snapshot = (project_payload or {}).get("snapshot") or {}
     relevant_activity = _relevant_bootstrap_activity(project_payload)
-    recent_titles = [str(item.get("title") or "").strip() for item in relevant_activity if item.get("title")]
-    open_loops = [
+    recent_titles = _dedupe_strings([str(item.get("title") or "").strip() for item in relevant_activity if item.get("title")])
+    open_loops = _dedupe_strings([
         str(item.get("open_question") or "").strip()
         for item in relevant_activity
         if item.get("open_question")
-    ]
+    ])
     blockers = list(snapshot.get("blockers") or [])
     if not blockers:
         blockers = [
@@ -101,7 +113,7 @@ async def build_session_bootstrap(
         or (recent_titles[0] if recent_titles else None)
     )
     what_changed = " | ".join(recent_titles[:2]) if recent_titles else snapshot.get("what_changed")
-    what_is_left = snapshot.get("remaining") or (open_loops[0] if open_loops else None)
+    what_is_left = (open_loops[0] if open_loops else None) or snapshot.get("remaining")
 
     return {
         "agent_kind": agent_kind,

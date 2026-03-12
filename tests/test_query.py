@@ -10,6 +10,8 @@ from src.services import query as query_service
 def test_detect_query_mode_prefers_explicit_story_modes() -> None:
     assert query_service.detect_query_mode("What is the latest on dataGenie?") == "latest"
     assert query_service.detect_query_mode("What are my active projects right now?") == "active_projects"
+    assert query_service.detect_query_mode("Bring me up to speed on duSraBheja", "answer") == "latest"
+    assert query_service.detect_query_mode("Where did I leave off on duSraBheja?") == "latest"
     assert query_service.detect_query_mode("timeline for duSraBheja") == "timeline"
     assert query_service.detect_query_mode("what changed since yesterday on duSraBheja") == "changed_since"
     assert query_service.detect_query_mode("show sources for dataGenie blockers") == "sources"
@@ -96,6 +98,10 @@ async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -
                 "blockers": [],
                 "holes": [],
                 "feature_scores": {"freshness": 1.0, "planning": 0.5},
+                "repo_count": 1,
+                "session_count": 3,
+                "planner_mentions": 1,
+                "reminder_count": 0,
             }
         ]
 
@@ -105,13 +111,14 @@ async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -
     async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
         assert "Active Project Board:" in context_text
         assert "duSraBheja" in context_text
+        assert "evidence_counts=repos:1, sessions:3, planners:1, reminders:0" in context_text
         return {"text": "duSraBheja is the clearest current focus.", "model": "test-model", "cost_usd": 0}
 
     monkeypatch.setattr(query_service, "build_active_projects_overview", fake_build_active_projects_overview)
     monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
     monkeypatch.setattr(query_service, "narrate_from_context", fake_narrate_from_context)
 
-    result = await query_service.query_brain(object(), question="What are my active projects right now?")
+    result = await query_service.query_brain(object(), question="What are my active projects right now?", mode="answer")
 
     assert result["mode"] == "active_projects"
     assert result["brain_sources"][0]["title"] == "duSraBheja"

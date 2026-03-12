@@ -71,11 +71,21 @@ ACTIVE_PROJECT_QUERY_HINTS = (
     "what are ahmad current active projects",
     "which projects am i working on",
     "what am i working on right now",
+    "what am i actively working on",
+    "which projects are actually active",
+    "what projects matter right now",
+)
+REBOOT_QUERY_HINTS = (
+    "where did i leave off",
+    "pick up where i left off",
+    "bring me up to speed",
+    "catch me up on",
+    "reboot me on",
 )
 
 
 def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
-    if requested_mode in QUERY_MODES:
+    if requested_mode in QUERY_MODES and requested_mode != "answer":
         return requested_mode
 
     lowered = (question or "").lower()
@@ -89,6 +99,8 @@ def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
         return "timeline"
     if "changed since" in lowered or "since yesterday" in lowered or "what changed" in lowered:
         return "changed_since"
+    if any(phrase in lowered for phrase in REBOOT_QUERY_HINTS):
+        return "latest"
     if "latest" in lowered or "recent" in lowered or "status" in lowered or "what's the latest" in lowered:
         return "latest"
     return "answer"
@@ -332,6 +344,7 @@ async def build_active_projects_overview(session: AsyncSession, *, limit: int = 
         feature_scores = dict(snapshot.feature_scores or {})
         if is_low_signal_project_name(project.title) and feature_scores.get("git", 0) < 0.25 and feature_scores.get("planning", 0) < 0.2:
             continue
+        metadata = dict(snapshot.metadata_ or {})
         rows.append(
             {
                 "id": str(project.id),
@@ -348,6 +361,10 @@ async def build_active_projects_overview(session: AsyncSession, *, limit: int = 
                 "blockers": list(snapshot.blockers or []),
                 "holes": list(snapshot.holes or []),
                 "feature_scores": feature_scores,
+                "repo_count": int(metadata.get("repo_count") or 0),
+                "session_count": int(metadata.get("session_count") or 0),
+                "planner_mentions": int(metadata.get("planner_mentions") or 0),
+                "reminder_count": int(metadata.get("reminder_count") or 0),
             }
         )
     rows.sort(
@@ -372,6 +389,11 @@ def format_active_projects_context(projects: list[dict]) -> str:
         lines.extend(
             [
                 f"- {item['title']} | status={item['status']} | score={item['active_score']:.2f} | last_signal={item['last_signal_at'] or 'unknown'}",
+                "  - evidence_counts="
+                f"repos:{item.get('repo_count', 0)}"
+                f", sessions:{item.get('session_count', 0)}"
+                f", planners:{item.get('planner_mentions', 0)}"
+                f", reminders:{item.get('reminder_count', 0)}",
                 f"  - what_changed={item.get('what_changed') or 'unknown'}",
                 f"  - implemented={item.get('implemented') or 'unknown'}",
                 f"  - remaining={item.get('remaining') or 'unknown'}",
