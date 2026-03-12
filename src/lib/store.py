@@ -219,9 +219,18 @@ async def vector_search(
     """Cosine similarity search on chunks with note/classification category filtering."""
     embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
     normalized_category = normalize_category(category) if category else None
+    category_filter = ""
+    params = {
+        "embedding": embedding_str,
+        "min_similarity": min_similarity,
+        "limit": limit,
+    }
+    if normalized_category is not None:
+        category_filter = "AND COALESCE(n.category, cls.category) = :category"
+        params["category"] = normalized_category
 
     sql = text(
-        """
+        f"""
         SELECT
             c.id,
             c.content,
@@ -240,21 +249,13 @@ async def vector_search(
            AND cls.is_final = TRUE
         WHERE c.embedding IS NOT NULL
           AND 1 - (c.embedding <=> CAST(:embedding AS vector)) > :min_similarity
-          AND (:category IS NULL OR COALESCE(n.category, cls.category) = :category)
+          {category_filter}
         ORDER BY c.embedding <=> CAST(:embedding AS vector)
         LIMIT :limit
         """
     )
 
-    result = await session.execute(
-        sql,
-        {
-            "embedding": embedding_str,
-            "min_similarity": min_similarity,
-            "limit": limit,
-            "category": normalized_category,
-        },
-    )
+    result = await session.execute(sql, params)
     return [dict(row) for row in result.mappings().all()]
 
 
