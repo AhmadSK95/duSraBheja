@@ -10,6 +10,7 @@ def test_detect_query_mode_prefers_explicit_story_modes() -> None:
     assert query_service.detect_query_mode("timeline for duSraBheja") == "timeline"
     assert query_service.detect_query_mode("what changed since yesterday on duSraBheja") == "changed_since"
     assert query_service.detect_query_mode("show sources for dataGenie blockers") == "sources"
+    assert query_service.detect_query_mode("review project duSraBheja and tell me the holes") == "project_review"
 
 
 def test_parse_since_boundary_supports_yesterday_and_dates() -> None:

@@ -65,6 +65,10 @@ Return ONLY valid JSON with this exact shape:
 {
   "headline": "one-line headline",
   "narrative": "short operating brief in Ahmad's voice",
+  "improvement_focus": [
+    {"title": "where Ahmad can improve by working here", "why": "why this matters now"}
+  ],
+  "low_confidence_sections": ["section names that still feel weak"],
   "recommended_tasks": [
     {"title": "task", "why": "why it matters now", "project_ref": "project or null"}
   ],
@@ -95,7 +99,30 @@ Rules:
 - Project assessments should say what is built, what is left, and where the holes are.
 - For video_recommendations, never invent a direct YouTube URL or fake creator attribution. If you do not have grounded links, output useful YouTube search ideas instead.
 - Brain teasers can be generated, but make them thoughtful and relevant to the current work when possible.
+- If a section is weak because evidence is thin, say so and add that section name to low_confidence_sections.
 - Keep lists tight: up to 10 tasks, 5 project assessments, 5 writing topics, 5 video recommendations, 5 brain teasers.
+"""
+
+PROJECT_STATE_SYSTEM_PROMPT = """You convert grounded project evidence into a durable project state snapshot.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "implemented": "what is already built, proven, or clearly in place",
+  "remaining": "what is left, uncertain, or still moving",
+  "blockers": ["explicit blockers or constraints"],
+  "risks": ["meaningful risks or blind spots"],
+  "holes": ["misses, weak spots, or things Ahmad is probably not looking at enough"],
+  "what_changed": "what changed recently",
+  "why_active": "why this project should count as active right now",
+  "why_not_active": "why it may not deserve active focus right now",
+  "confidence": 0.0
+}
+
+Rules:
+- Stay factual and grounded in the evidence.
+- Separate what is implemented from what is merely discussed.
+- If evidence is thin, say that explicitly in remaining/holes and lower confidence.
+- Prefer specific weaknesses over generic criticism.
 """
 
 
@@ -207,3 +234,35 @@ Return the JSON operating brief."""
             trace_id=trace_id,
         )
         return parse_json_object(repair["text"])
+
+
+async def assess_project_state(
+    session: AsyncSession,
+    *,
+    project_name: str,
+    context_text: str,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Project: {project_name}
+
+Evidence:
+{context_text}
+
+Return the JSON project state snapshot."""
+    result = await agent_call(
+        session,
+        agent_name="storyteller",
+        action="assess_project_state",
+        prompt=prompt,
+        system=PROJECT_STATE_SYSTEM_PROMPT,
+        model=settings.opus_model,
+        max_tokens=1600,
+        temperature=0.15,
+        trace_id=trace_id,
+    )
+    response_text = result["text"].strip()
+    if response_text.startswith("```"):
+        response_text = response_text.strip("`")
+        if response_text.lower().startswith("json"):
+            response_text = response_text[4:].strip()
+    return parse_json_object(response_text)

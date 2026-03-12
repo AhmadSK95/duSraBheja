@@ -18,6 +18,7 @@ from src.lib.store import (
 )
 from src.models import Classification
 from src.services.planner import build_planner_payload, merge_weekly_rollup
+from src.services.reminders import store_reminder
 from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
 
 log = logging.getLogger("brain-worker.librarian")
@@ -65,6 +66,14 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     classification,
                     planner_payload,
                 )
+                reminder = None
+            elif classification.category == "reminder":
+                note_id, note_title, note_content, reminder = await _upsert_reminder_note(
+                    session,
+                    artifact,
+                    artifact_note,
+                    classification,
+                )
             else:
                 note_id, note_title, note_content = await _upsert_canonical_note(
                     session,
@@ -73,6 +82,7 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     artifact.raw_text,
                     artifact_note,
                 )
+                reminder = None
 
             if artifact_note is None:
                 await create_link(
@@ -126,6 +136,14 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "category_channel": CATEGORY_CHANNELS.get(classification.category),
                     "planner": planner_payload["card"] if planner_payload else None,
                     "weekly_rollup": weekly_rollup,
+                    "reminder": (
+                        {
+                            "title": reminder.title,
+                            "next_fire_at": str(reminder.next_fire_at) if reminder and reminder.next_fire_at else None,
+                        }
+                        if reminder
+                        else None
+                    ),
                 },
             )
             from src.worker.main import enqueue_story_pulse_digest
@@ -246,6 +264,54 @@ async def _upsert_canonical_note(session, classification, classification_data: d
         log.info("Created note %s: %s", note_id, result["title"])
 
     return note_id, result["title"], result["content"]
+
+
+async def _upsert_reminder_note(session, artifact, artifact_note, classification):
+    title = artifact.summary or artifact.raw_text[:120]
+    project_note_id = None
+    for entity in classification.entities or []:
+        if entity.get("type") != "project":
+            continue
+        matches = await find_notes_by_title(session, entity.get("value"), "project")
+        if matches:
+            project_note_id = matches[0].id
+            break
+
+    if artifact_note:
+        await update_note(
+            session,
+            artifact_note.id,
+            category="reminder",
+            title=title,
+            content=artifact.raw_text,
+            tags=list(classification.tags or []),
+            priority=classification.priority or "medium",
+            discord_channel_id=artifact.discord_channel_id,
+        )
+        note = artifact_note
+    else:
+        note = await create_note(
+            session,
+            category="reminder",
+            title=title,
+            content=artifact.raw_text,
+            tags=list(classification.tags or []),
+            priority=classification.priority or "medium",
+            discord_channel_id=artifact.discord_channel_id,
+        )
+
+    reminder = await store_reminder(
+        session,
+        raw_text=artifact.raw_text,
+        note_id=note.id,
+        project_note_id=project_note_id,
+        discord_channel_id=artifact.discord_channel_id,
+    )
+    metadata = dict(note.metadata_ or {})
+    metadata["reminder_id"] = str(reminder.id)
+    metadata["next_fire_at"] = str(reminder.next_fire_at) if reminder.next_fire_at else None
+    await update_note(session, note.id, metadata_=metadata, remind_at=reminder.next_fire_at)
+    return note.id, note.title, note.content, reminder
 
 
 async def _upsert_weekly_rollup(session, artifact_uuid: uuid.UUID, planner_note_id, planner_payload: dict):

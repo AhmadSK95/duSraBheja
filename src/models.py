@@ -107,6 +107,9 @@ class Note(Base):
     journal_entries = relationship("JournalEntry", back_populates="project_note")
     source_items = relationship("SourceItem", back_populates="project_note")
     repos = relationship("ProjectRepo", back_populates="project_note")
+    conversation_sessions = relationship("ConversationSession", back_populates="project_note")
+    project_state_snapshot = relationship("ProjectStateSnapshot", back_populates="project_note", uselist=False)
+    reminders = relationship("Reminder", back_populates="project_note", foreign_keys="Reminder.project_note_id")
 
     __table_args__ = (
         Index("idx_notes_category", "category"),
@@ -364,3 +367,139 @@ class OAuthCredential(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     __table_args__ = (Index("idx_oauth_provider", "provider"),)
+
+
+class ConversationSession(Base):
+    __tablename__ = "conversation_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_item_id = Column(UUID(as_uuid=True), ForeignKey("source_items.id", ondelete="CASCADE"), nullable=False)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    agent_kind = Column(String, nullable=False)
+    session_id = Column(String, nullable=False)
+    parent_session_id = Column(String, nullable=True)
+    cwd = Column(String, nullable=True)
+    title_hint = Column(String, nullable=True)
+    transcript_blob_ref = Column(String, nullable=True)
+    transcript_excerpt = Column(Text, nullable=True)
+    participants = Column(ARRAY(String), default=list)
+    turn_count = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    source_item = relationship("SourceItem")
+    project_note = relationship("Note", back_populates="conversation_sessions")
+
+    __table_args__ = (
+        UniqueConstraint("source_item_id"),
+        Index("idx_conversation_sessions_project", "project_note_id"),
+        Index("idx_conversation_sessions_agent", "agent_kind"),
+        Index("idx_conversation_sessions_ended", "ended_at"),
+    )
+
+
+class ProjectStateSnapshot(Base):
+    __tablename__ = "project_state_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    active_score = Column(Float, nullable=False, default=0.0)
+    status = Column(String, nullable=False, default="uncertain")
+    manual_state = Column(String, nullable=False, default="normal")
+    confidence = Column(Float, nullable=False, default=0.0)
+    implemented = Column(Text, nullable=True)
+    remaining = Column(Text, nullable=True)
+    blockers = Column(JSONB, default=list)
+    risks = Column(JSONB, default=list)
+    holes = Column(JSONB, default=list)
+    what_changed = Column(Text, nullable=True)
+    why_active = Column(Text, nullable=True)
+    why_not_active = Column(Text, nullable=True)
+    last_signal_at = Column(DateTime(timezone=True), nullable=True)
+    feature_scores = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    project_note = relationship("Note", back_populates="project_state_snapshot")
+
+    __table_args__ = (
+        UniqueConstraint("project_note_id"),
+        Index("idx_project_snapshots_status", "status"),
+        Index("idx_project_snapshots_score", "active_score"),
+        Index("idx_project_snapshots_signal", "last_signal_at"),
+    )
+
+
+class StoryConnection(Base):
+    __tablename__ = "story_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_ref = Column(String, nullable=False)
+    target_ref = Column(String, nullable=False)
+    relation = Column(String, nullable=False, default="co_signal")
+    source_project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    target_project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    weight = Column(Float, nullable=False, default=0.0)
+    evidence_count = Column(Integer, nullable=False, default=0)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_ref", "target_ref", "relation"),
+        Index("idx_story_connections_source", "source_ref"),
+        Index("idx_story_connections_target", "target_ref"),
+        Index("idx_story_connections_weight", "weight"),
+    )
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=True)
+    timezone = Column(String, nullable=False, default="America/New_York")
+    recurrence_kind = Column(String, nullable=False, default="once")
+    recurrence_rule = Column(JSONB, default=dict)
+    next_fire_at = Column(DateTime(timezone=True), nullable=True)
+    last_fired_at = Column(DateTime(timezone=True), nullable=True)
+    last_acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    delivery_channel = Column(String, nullable=False, default="discord")
+    discord_channel_id = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="active")
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    note = relationship("Note", foreign_keys=[note_id])
+    project_note = relationship("Note", foreign_keys=[project_note_id], back_populates="reminders")
+
+    __table_args__ = (
+        Index("idx_reminders_next_fire", "next_fire_at"),
+        Index("idx_reminders_status", "status"),
+        Index("idx_reminders_project", "project_note_id"),
+    )
+
+
+class DigestPreference(Base):
+    __tablename__ = "digest_preferences"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_name = Column(String, nullable=False)
+    timezone = Column(String, nullable=False, default="America/New_York")
+    sections = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("profile_name"),
+        Index("idx_digest_preferences_profile", "profile_name"),
+    )

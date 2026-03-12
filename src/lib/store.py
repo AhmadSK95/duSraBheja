@@ -13,14 +13,19 @@ from src.models import (
     Artifact,
     Classification,
     Chunk,
+    ConversationSession,
+    DigestPreference,
     Digest,
     JournalEntry,
     Link,
     Note,
     OAuthCredential,
     ProjectRepo,
+    ProjectStateSnapshot,
     ReviewQueue,
+    Reminder,
     SourceItem,
+    StoryConnection,
     SyncRun,
     SyncSource,
 )
@@ -132,6 +137,30 @@ async def list_notes(
     if category:
         query = query.where(Note.category == normalize_category(category))
     query = query.order_by(Note.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def list_project_notes(session: AsyncSession, *, limit: int = 200) -> list[Note]:
+    result = await session.execute(
+        select(Note)
+        .where(Note.category == "project")
+        .order_by(Note.updated_at.desc(), Note.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_recent_planner_notes(
+    session: AsyncSession,
+    *,
+    since: datetime | None = None,
+    limit: int = 50,
+) -> list[Note]:
+    query = select(Note).where(Note.category.in_(("daily_planner", "weekly_planner")))
+    if since:
+        query = query.where(Note.updated_at >= since)
+    query = query.order_by(Note.updated_at.desc(), Note.created_at.desc()).limit(limit)
     result = await session.execute(query)
     return list(result.scalars().all())
 
@@ -654,3 +683,469 @@ async def get_project_repo_mappings(session: AsyncSession, project_note_id: uuid
 async def get_oauth_credentials(session: AsyncSession, provider: str) -> list[OAuthCredential]:
     result = await session.execute(select(OAuthCredential).where(OAuthCredential.provider == provider))
     return list(result.scalars().all())
+
+
+async def upsert_conversation_session(
+    session: AsyncSession,
+    *,
+    source_item_id: uuid.UUID,
+    agent_kind: str,
+    session_id: str,
+    project_note_id: uuid.UUID | None = None,
+    parent_session_id: str | None = None,
+    cwd: str | None = None,
+    title_hint: str | None = None,
+    transcript_blob_ref: str | None = None,
+    transcript_excerpt: str | None = None,
+    participants: list[str] | None = None,
+    turn_count: int = 0,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+    metadata_: dict | None = None,
+) -> tuple[ConversationSession, bool]:
+    result = await session.execute(
+        select(ConversationSession).where(ConversationSession.source_item_id == source_item_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if conversation:
+        conversation.project_note_id = project_note_id
+        conversation.agent_kind = agent_kind
+        conversation.session_id = session_id
+        conversation.parent_session_id = parent_session_id
+        conversation.cwd = cwd
+        conversation.title_hint = title_hint
+        conversation.transcript_blob_ref = transcript_blob_ref
+        conversation.transcript_excerpt = transcript_excerpt
+        conversation.participants = participants or []
+        conversation.turn_count = turn_count
+        conversation.started_at = started_at
+        conversation.ended_at = ended_at
+        conversation.metadata_ = metadata_ or {}
+        conversation.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(conversation)
+        return conversation, False
+
+    conversation = ConversationSession(
+        source_item_id=source_item_id,
+        project_note_id=project_note_id,
+        agent_kind=agent_kind,
+        session_id=session_id,
+        parent_session_id=parent_session_id,
+        cwd=cwd,
+        title_hint=title_hint,
+        transcript_blob_ref=transcript_blob_ref,
+        transcript_excerpt=transcript_excerpt,
+        participants=participants or [],
+        turn_count=turn_count,
+        started_at=started_at,
+        ended_at=ended_at,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(conversation)
+    await session.commit()
+    await session.refresh(conversation)
+    return conversation, True
+
+
+async def list_conversation_sessions(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID | None = None,
+    since: datetime | None = None,
+    limit: int = 50,
+) -> list[ConversationSession]:
+    query = select(ConversationSession)
+    if project_note_id:
+        query = query.where(ConversationSession.project_note_id == project_note_id)
+    if since:
+        query = query.where(
+            or_(
+                ConversationSession.ended_at >= since,
+                ConversationSession.updated_at >= since,
+            )
+        )
+    query = query.order_by(
+        ConversationSession.ended_at.desc().nullslast(),
+        ConversationSession.updated_at.desc(),
+    ).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_project_state_snapshot(
+    session: AsyncSession,
+    project_note_id: uuid.UUID,
+) -> ProjectStateSnapshot | None:
+    result = await session.execute(
+        select(ProjectStateSnapshot).where(ProjectStateSnapshot.project_note_id == project_note_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_project_state_snapshot(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    active_score: float,
+    status: str,
+    confidence: float,
+    implemented: str | None = None,
+    remaining: str | None = None,
+    blockers: list[str] | None = None,
+    risks: list[str] | None = None,
+    holes: list[str] | None = None,
+    what_changed: str | None = None,
+    why_active: str | None = None,
+    why_not_active: str | None = None,
+    last_signal_at: datetime | None = None,
+    feature_scores: dict | None = None,
+    metadata_: dict | None = None,
+    manual_state: str | None = None,
+) -> ProjectStateSnapshot:
+    snapshot = await get_project_state_snapshot(session, project_note_id)
+    values = {
+        "active_score": active_score,
+        "status": status,
+        "confidence": confidence,
+        "implemented": implemented,
+        "remaining": remaining,
+        "blockers": blockers or [],
+        "risks": risks or [],
+        "holes": holes or [],
+        "what_changed": what_changed,
+        "why_active": why_active,
+        "why_not_active": why_not_active,
+        "last_signal_at": last_signal_at,
+        "feature_scores": feature_scores or {},
+        "metadata_": metadata_ or {},
+        "updated_at": _utcnow(),
+    }
+    if manual_state is not None:
+        values["manual_state"] = manual_state
+    if snapshot:
+        for key, value in values.items():
+            setattr(snapshot, key, value)
+        await session.commit()
+        await session.refresh(snapshot)
+        return snapshot
+
+    snapshot = ProjectStateSnapshot(
+        project_note_id=project_note_id,
+        manual_state=manual_state or "normal",
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(snapshot)
+    await session.commit()
+    await session.refresh(snapshot)
+    return snapshot
+
+
+async def list_project_state_snapshots(
+    session: AsyncSession,
+    *,
+    statuses: list[str] | None = None,
+    limit: int = 25,
+) -> list[ProjectStateSnapshot]:
+    query = select(ProjectStateSnapshot)
+    if statuses:
+        query = query.where(ProjectStateSnapshot.status.in_(statuses))
+    query = query.order_by(ProjectStateSnapshot.active_score.desc(), ProjectStateSnapshot.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def set_project_manual_state(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    manual_state: str,
+) -> ProjectStateSnapshot:
+    snapshot = await get_project_state_snapshot(session, project_note_id)
+    if snapshot:
+        snapshot.manual_state = manual_state
+        snapshot.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(snapshot)
+        return snapshot
+    return await upsert_project_state_snapshot(
+        session,
+        project_note_id=project_note_id,
+        active_score=0.0,
+        status="uncertain",
+        confidence=0.0,
+        manual_state=manual_state,
+    )
+
+
+async def upsert_story_connection(
+    session: AsyncSession,
+    *,
+    source_ref: str,
+    target_ref: str,
+    relation: str = "co_signal",
+    source_project_note_id: uuid.UUID | None = None,
+    target_project_note_id: uuid.UUID | None = None,
+    weight: float = 0.0,
+    evidence_count: int = 0,
+    metadata_: dict | None = None,
+) -> StoryConnection:
+    result = await session.execute(
+        select(StoryConnection).where(
+            StoryConnection.source_ref == source_ref,
+            StoryConnection.target_ref == target_ref,
+            StoryConnection.relation == relation,
+        )
+    )
+    connection = result.scalar_one_or_none()
+    if connection:
+        connection.source_project_note_id = source_project_note_id
+        connection.target_project_note_id = target_project_note_id
+        connection.weight = weight
+        connection.evidence_count = evidence_count
+        connection.metadata_ = metadata_ or {}
+        connection.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(connection)
+        return connection
+
+    connection = StoryConnection(
+        source_ref=source_ref,
+        target_ref=target_ref,
+        relation=relation,
+        source_project_note_id=source_project_note_id,
+        target_project_note_id=target_project_note_id,
+        weight=weight,
+        evidence_count=evidence_count,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(connection)
+    await session.commit()
+    await session.refresh(connection)
+    return connection
+
+
+async def list_story_connections(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID | None = None,
+    limit: int = 25,
+) -> list[StoryConnection]:
+    query = select(StoryConnection)
+    if project_note_id:
+        query = query.where(
+            or_(
+                StoryConnection.source_project_note_id == project_note_id,
+                StoryConnection.target_project_note_id == project_note_id,
+            )
+        )
+    query = query.order_by(StoryConnection.weight.desc(), StoryConnection.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def replace_story_connections_for_project(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    project_ref: str,
+    connections: list[dict],
+) -> list[StoryConnection]:
+    await session.execute(
+        delete(StoryConnection).where(
+            or_(
+                StoryConnection.source_project_note_id == project_note_id,
+                StoryConnection.target_project_note_id == project_note_id,
+            ),
+            StoryConnection.relation == "co_signal",
+        )
+    )
+    await session.commit()
+
+    saved: list[StoryConnection] = []
+    for item in connections:
+        target_ref = item.get("target_ref")
+        if not target_ref or target_ref == project_ref:
+            continue
+        ordered = sorted([project_ref, target_ref], key=str.lower)
+        saved.append(
+            await upsert_story_connection(
+                session,
+                source_ref=ordered[0],
+                target_ref=ordered[1],
+                relation="co_signal",
+                source_project_note_id=project_note_id if ordered[0] == project_ref else item.get("target_project_note_id"),
+                target_project_note_id=project_note_id if ordered[1] == project_ref else item.get("target_project_note_id"),
+                weight=float(item.get("weight") or 0.0),
+                evidence_count=int(item.get("evidence_count") or 0),
+                metadata_=item.get("metadata") or {},
+            )
+        )
+    return saved
+
+
+async def clear_story_connections(session: AsyncSession, *, relation: str = "co_signal") -> None:
+    await session.execute(delete(StoryConnection).where(StoryConnection.relation == relation))
+    await session.commit()
+
+
+async def upsert_reminder(
+    session: AsyncSession,
+    *,
+    title: str,
+    timezone_name: str,
+    recurrence_kind: str,
+    recurrence_rule: dict,
+    next_fire_at: datetime | None,
+    note_id: uuid.UUID | None = None,
+    project_note_id: uuid.UUID | None = None,
+    body: str | None = None,
+    delivery_channel: str = "discord",
+    discord_channel_id: str | None = None,
+    status: str = "active",
+    metadata_: dict | None = None,
+) -> Reminder:
+    result = await session.execute(
+        select(Reminder).where(
+            Reminder.title == title,
+            Reminder.project_note_id == project_note_id,
+            Reminder.delivery_channel == delivery_channel,
+            Reminder.status.in_(("active", "paused")),
+        )
+    )
+    reminder = result.scalar_one_or_none()
+    values = {
+        "body": body,
+        "timezone": timezone_name,
+        "recurrence_kind": recurrence_kind,
+        "recurrence_rule": recurrence_rule,
+        "next_fire_at": next_fire_at,
+        "note_id": note_id,
+        "project_note_id": project_note_id,
+        "delivery_channel": delivery_channel,
+        "discord_channel_id": discord_channel_id,
+        "status": status,
+        "metadata_": metadata_ or {},
+        "updated_at": _utcnow(),
+    }
+    if reminder:
+        for key, value in values.items():
+            setattr(reminder, key, value)
+        await session.commit()
+        await session.refresh(reminder)
+        return reminder
+
+    reminder = Reminder(
+        title=title,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(reminder)
+    await session.commit()
+    await session.refresh(reminder)
+    return reminder
+
+
+async def list_due_reminders(
+    session: AsyncSession,
+    *,
+    due_before: datetime,
+    limit: int = 50,
+) -> list[Reminder]:
+    result = await session.execute(
+        select(Reminder)
+        .where(
+            Reminder.status == "active",
+            Reminder.next_fire_at.is_not(None),
+            Reminder.next_fire_at <= due_before,
+        )
+        .order_by(Reminder.next_fire_at.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def update_reminder(session: AsyncSession, reminder_id: uuid.UUID, **kwargs) -> Reminder | None:
+    kwargs.setdefault("updated_at", _utcnow())
+    await session.execute(update(Reminder).where(Reminder.id == reminder_id).values(**kwargs))
+    await session.commit()
+    result = await session.execute(select(Reminder).where(Reminder.id == reminder_id))
+    return result.scalar_one_or_none()
+
+
+async def list_reminders(
+    session: AsyncSession,
+    *,
+    status: str = "active",
+    limit: int = 50,
+) -> list[Reminder]:
+    result = await session.execute(
+        select(Reminder)
+        .where(Reminder.status == status)
+        .order_by(Reminder.next_fire_at.asc().nullslast(), Reminder.updated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_project_reminders(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    status: str = "active",
+    limit: int = 50,
+) -> list[Reminder]:
+    result = await session.execute(
+        select(Reminder)
+        .where(
+            Reminder.project_note_id == project_note_id,
+            Reminder.status == status,
+        )
+        .order_by(Reminder.next_fire_at.asc().nullslast(), Reminder.updated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_digest_preference(session: AsyncSession, profile_name: str = "default") -> DigestPreference | None:
+    result = await session.execute(
+        select(DigestPreference).where(DigestPreference.profile_name == profile_name)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_digest_preference(
+    session: AsyncSession,
+    *,
+    profile_name: str,
+    timezone_name: str,
+    sections: dict,
+    metadata_: dict | None = None,
+) -> DigestPreference:
+    preference = await get_digest_preference(session, profile_name)
+    if preference:
+        preference.timezone = timezone_name
+        preference.sections = sections
+        preference.metadata_ = metadata_ or {}
+        preference.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(preference)
+        return preference
+
+    preference = DigestPreference(
+        profile_name=profile_name,
+        timezone=timezone_name,
+        sections=sections,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(preference)
+    await session.commit()
+    await session.refresh(preference)
+    return preference

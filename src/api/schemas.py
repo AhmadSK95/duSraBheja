@@ -25,6 +25,7 @@ class CollectorRepoPayload(BaseModel):
 
 class CollectorEntryPayload(BaseModel):
     external_id: str | None = None
+    content_hash: str | None = None
     project_ref: str | None = None
     title: str
     body_markdown: str = ""
@@ -53,6 +54,16 @@ class QueryRequest(BaseModel):
     mode: str | None = None
     category: str | None = None
     use_opus: bool = False
+
+
+class ReminderCreateRequest(BaseModel):
+    text: str = Field(min_length=3)
+    project_name: str | None = None
+    discord_channel_id: str | None = None
+
+
+class ProjectStateRefreshRequest(BaseModel):
+    project_ids: list[str] = Field(default_factory=list)
 
 
 class SyncReportRequest(BaseModel):

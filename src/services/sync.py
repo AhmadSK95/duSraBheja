@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime
+import uuid
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from src.config import settings
 from src.lib import store
 from src.agents.storyteller import extract_story_event
 from src.services.indexing import index_artifact
+from src.services.project_state import recompute_project_states
 from src.services.story import publish_story_entry
 
 log = logging.getLogger("brain.services.sync")
@@ -20,6 +22,14 @@ log = logging.getLogger("brain.services.sync")
 
 def _hash_payload(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(value)
 
 
 async def import_collector_payload(
@@ -43,18 +53,20 @@ async def import_collector_payload(
 
     imported = 0
     projects_touched: set[str] = set()
+    project_note_ids_touched: set[str] = set()
     for entry in entries:
         project_ref = entry.get("project_ref")
         title = entry.get("title") or project_ref or "Collector update"
         body_markdown = entry.get("body_markdown") or ""
         payload_hash = entry.get("content_hash") or _hash_payload(f"{project_ref}|{title}|{body_markdown}")
         happened_at = entry.get("happened_at")
-        happened_dt = datetime.fromisoformat(happened_at) if happened_at else None
+        happened_dt = _parse_datetime(happened_at) if happened_at else None
 
         project_note = None
         if project_ref:
             projects_touched.add(project_ref)
             project_note = await store.get_or_create_project_note(session, project_ref)
+            project_note_ids_touched.add(str(project_note.id))
             if entry.get("repo"):
                 await store.upsert_project_repo(
                     session,
@@ -155,6 +167,25 @@ async def import_collector_payload(
             artifact_id=artifact.id,
             source_item_id=source_item.id,
         )
+        metadata = entry.get("metadata") or {}
+        if entry.get("entry_type") == "conversation_session" and source_type in {"codex_history", "claude_history"}:
+            await store.upsert_conversation_session(
+                session,
+                source_item_id=source_item.id,
+                project_note_id=project_note.id if project_note else None,
+                agent_kind=str(metadata.get("agent_kind") or source_type.replace("_history", "")),
+                session_id=str(metadata.get("session_id") or source_item.external_id),
+                parent_session_id=metadata.get("parent_session_id"),
+                cwd=metadata.get("cwd"),
+                title_hint=metadata.get("title_hint"),
+                transcript_blob_ref=None,
+                transcript_excerpt=(metadata.get("redacted_transcript") or "")[:4000] or None,
+                participants=list(metadata.get("participants") or []),
+                turn_count=int(metadata.get("turn_count") or 0),
+                started_at=_parse_datetime(metadata.get("started_at")),
+                ended_at=_parse_datetime(metadata.get("ended_at")) or happened_dt,
+                metadata_=metadata,
+            )
         if created:
             imported += 1
 
@@ -178,6 +209,11 @@ async def import_collector_payload(
         "mode": mode,
         "projects_touched": sorted(projects_touched),
     }
+    if project_note_ids_touched:
+        await recompute_project_states(
+            session,
+            project_note_ids=[uuid.UUID(value) for value in sorted(project_note_ids_touched)],
+        )
     if emit_sync_event:
         await _publish_sync_event(result)
     if imported and emit_sync_event:
@@ -214,6 +250,7 @@ async def run_github_sync(session: AsyncSession) -> dict:
 
     imported = 0
     items_seen = 0
+    project_note_ids_touched: set[str] = set()
     async with httpx.AsyncClient(base_url=settings.github_api_base_url, headers=headers, timeout=30) as client:
         repos_resp = await client.get("/user/repos", params={"per_page": 100, "sort": "updated"})
         repos_resp.raise_for_status()
@@ -221,26 +258,60 @@ async def run_github_sync(session: AsyncSession) -> dict:
         items_seen += len(repos)
 
         for repo in repos:
+            owner = (repo.get("owner") or {}).get("login")
+            recent_commits = []
+            open_pulls = []
+            open_issues = []
+            if owner:
+                try:
+                    commits_resp = await client.get(f"/repos/{owner}/{repo['name']}/commits", params={"per_page": 5})
+                    if commits_resp.is_success:
+                        recent_commits = commits_resp.json()
+                    pulls_resp = await client.get(f"/repos/{owner}/{repo['name']}/pulls", params={"state": "open", "per_page": 5})
+                    if pulls_resp.is_success:
+                        open_pulls = pulls_resp.json()
+                    issues_resp = await client.get(f"/repos/{owner}/{repo['name']}/issues", params={"state": "open", "per_page": 5})
+                    if issues_resp.is_success:
+                        open_issues = [item for item in issues_resp.json() if "pull_request" not in item]
+                except Exception as exc:
+                    log.warning("Failed to expand GitHub details for %s: %s", repo["full_name"], exc)
+
             project_note = await store.get_or_create_project_note(session, repo["name"])
+            project_note_ids_touched.add(str(project_note.id))
             await store.upsert_project_repo(
                 session,
                 project_note_id=project_note.id,
                 repo_name=repo["name"],
-                repo_owner=(repo.get("owner") or {}).get("login"),
+                repo_owner=owner,
                 repo_url=repo.get("html_url"),
                 branch=repo.get("default_branch"),
                 local_path=None,
                 is_primary=True,
             )
 
-            summary = f"Repo {repo['name']} updated at {repo.get('pushed_at') or repo.get('updated_at')}"
+            commit_summary = ", ".join(
+                item.get("commit", {}).get("message", "").splitlines()[0]
+                for item in recent_commits[:3]
+                if item.get("commit", {}).get("message")
+            )
+            summary = (
+                f"Repo {repo['name']} updated at {repo.get('pushed_at') or repo.get('updated_at')}. "
+                f"Open PRs: {len(open_pulls)}. Open issues: {len(open_issues)}. "
+                f"Recent commits: {commit_summary or 'none'}"
+            )
             artifact = await store.create_artifact(
                 session,
                 content_type="text",
                 raw_text=summary,
                 summary=repo["full_name"],
                 source="github",
-                metadata_={"repo": repo["full_name"], "default_branch": repo.get("default_branch")},
+                metadata_={
+                    "repo": repo["full_name"],
+                    "default_branch": repo.get("default_branch"),
+                    "recent_commits": recent_commits,
+                    "open_pulls": open_pulls,
+                    "open_issues": open_issues,
+                },
             )
             await store.create_classification(
                 session,
@@ -262,7 +333,12 @@ async def run_github_sync(session: AsyncSession) -> dict:
                 external_id=f"repo:{repo['full_name']}",
                 title=repo["full_name"],
                 summary=summary,
-                payload=repo,
+                payload={
+                    "repo": repo,
+                    "recent_commits": recent_commits,
+                    "open_pulls": open_pulls,
+                    "open_issues": open_issues,
+                },
                 content_hash=_hash_payload(repo["full_name"] + str(repo.get("pushed_at"))),
                 external_url=repo.get("html_url"),
                 project_note_id=project_note.id,
@@ -306,6 +382,11 @@ async def run_github_sync(session: AsyncSession) -> dict:
         "source_type": "github",
         "mode": "sync",
     }
+    if project_note_ids_touched:
+        await recompute_project_states(
+            session,
+            project_note_ids=[uuid.UUID(value) for value in sorted(project_note_ids_touched)],
+        )
     await _publish_sync_event(result)
     if imported:
         await _trigger_story_pulse(reason="github:sync", metadata=result)

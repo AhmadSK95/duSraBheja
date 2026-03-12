@@ -19,6 +19,10 @@ _DAY_NAME_PATTERN = re.compile(
     r"\b(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
     re.IGNORECASE,
 )
+_DAY_HEADER_PATTERN = re.compile(
+    r"^\s*(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 _WEEK_SCOPE_PATTERN = re.compile(r"\b(weekly|week of|this week|next week)\b", re.IGNORECASE)
 _DAY_SCOPE_PATTERN = re.compile(r"\b(today|daily|tomorrow|agenda|plan for today)\b", re.IGNORECASE)
 
@@ -84,8 +88,11 @@ def detect_planner_scope(text: str, entities: list[dict] | None = None) -> str |
     seen_days: set[str] = set()
     for match in _DAY_NAME_PATTERN.finditer(lowered):
         seen_days.add(match.group(1)[:3].lower())
+    day_headers = len(list(_DAY_HEADER_PATTERN.finditer(text or "")))
 
-    if explicit_week or len(dates) >= 2 or len(seen_days) >= 2:
+    if len(dates) == 1 and not explicit_week and day_headers <= 1:
+        return "daily_planner"
+    if explicit_week or len(dates) >= 2 or day_headers >= 2 or len(seen_days) >= 3:
         return "weekly_planner"
     if len(dates) == 1 or len(seen_days) == 1 or explicit_day:
         return "daily_planner"

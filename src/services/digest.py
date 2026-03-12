@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 from src.agents.storyteller import compose_digest_sections
+from src.config import settings
+from src.services.openai_web import search_youtube_learning_queries
+from src.services.project_state import recompute_project_states
 
 try:
     from src.lib import store
@@ -20,6 +24,20 @@ def _shorten(value: str | None, limit: int = 220) -> str:
     if len(text) <= limit:
         return text
     return f"{text[: limit - 1].rstrip()}…"
+
+
+def _default_digest_sections() -> dict:
+    return {
+        "headline": True,
+        "top_active_projects": True,
+        "changed_since_yesterday": True,
+        "project_status": True,
+        "recommended_tasks": True,
+        "youtube_recommendations": True,
+        "brain_teasers": True,
+        "reminders_due_today": True,
+        "improvement_focus": True,
+    }
 
 
 def _fallback_brain_teasers(digest_date: date) -> list[dict]:
@@ -179,12 +197,14 @@ def _build_digest_context(
     trigger: str,
     tasks: list,
     projects: list,
+    project_snapshots: dict[str, object],
     resources: list,
     recent_activity: list,
     pending_reviews: list,
     open_loops: list[dict],
     story_connections: list[dict],
     project_updates: dict[str, list[dict]],
+    reminders_due_today: list,
 ) -> str:
     lines = [
         f"Digest date: {digest_date.isoformat()}",
@@ -198,11 +218,20 @@ def _build_digest_context(
     )
     lines.extend(["", "Projects:"])
     for project in projects[:6]:
+        snapshot = project_snapshots.get(str(project.id))
         lines.append(
             "- "
-            f"{project.title} | status={getattr(project, 'status', 'active')} | "
+            f"{project.title} | status={getattr(snapshot, 'status', None) or getattr(project, 'status', 'active')} | "
             f"summary={_shorten(getattr(project, 'content', None), 240) or 'none'}"
         )
+        if snapshot:
+            lines.append(
+                "  - "
+                f"active_score={getattr(snapshot, 'active_score', 0):.2f} | "
+                f"implemented={_shorten(getattr(snapshot, 'implemented', None), 180) or 'unknown'} | "
+                f"remaining={_shorten(getattr(snapshot, 'remaining', None), 180) or 'unknown'} | "
+                f"holes={_shorten(', '.join(getattr(snapshot, 'holes', []) or []), 180) or 'none'}"
+            )
         for update in project_updates.get(str(project.id), [])[:3]:
             lines.append(
                 "  - "
@@ -228,6 +257,12 @@ def _build_digest_context(
     if pending_reviews:
         lines.extend(["", "Pending Reviews:"])
         lines.extend(f"- {review.question}" for review in pending_reviews[:5])
+    if reminders_due_today:
+        lines.extend(["", "Reminders Due Today:"])
+        for reminder in reminders_due_today[:8]:
+            lines.append(
+                f"- {reminder.title} | next_fire={reminder.next_fire_at.isoformat() if reminder.next_fire_at else 'none'}"
+            )
     if open_loops:
         lines.extend(["", "Open Loops:"])
         lines.extend(f"- {item.get('open_question') or item.get('title')}" for item in open_loops[:6])
@@ -241,8 +276,9 @@ def _build_digest_context(
             "- Recommend strong tasks for today.",
             "- Assess active projects with what is implemented, what is left, and what looks weak.",
             "- Suggest five writing topics.",
-            "- Suggest five YouTube watch ideas as search queries unless grounded links exist.",
+            "- Suggest five YouTube watch ideas that fit Ahmad's active domains and current project gaps.",
             "- Generate five smart brain teasers.",
+            "- Include one or two improvement-focus suggestions based on where Ahmad should work next.",
         ]
     )
     return "\n".join(lines)
@@ -252,15 +288,26 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     if store is None:
         raise RuntimeError("store module is unavailable")
 
+    await store.upsert_digest_preference(
+        session,
+        profile_name="default",
+        timezone_name="America/New_York",
+        sections=_default_digest_sections(),
+        metadata_={},
+    )
+    digest_preference = await store.get_digest_preference(session, "default")
+
+    await recompute_project_states(session)
     tasks = await store.list_notes(session, category="task", limit=10)
     resources = await store.list_notes(session, category="resource", limit=10)
-    recent_activity = await store.list_recent_activity(session, limit=20)
+    recent_activity = await store.list_recent_activity(session, limit=30)
     pending_reviews = await store.get_pending_reviews(session)
+    reminders = await store.list_reminders(session, status="active", limit=50)
+    snapshots = await store.list_project_state_snapshots(session, limit=25)
 
     recent_cutoff = digest_date - timedelta(days=7)
     project_updates: dict[str, list[dict]] = {}
     open_loops = []
-    subject_counter: dict[str, int] = {}
     active_project_map: dict[str, object] = {}
     for entry in recent_activity:
         if entry.happened_at.date() < recent_cutoff:
@@ -288,53 +335,92 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             project = await store.get_note(session, entry.project_note_id)
             if project:
                 active_project_map[str(project.id)] = project
-        subject_ref = getattr(entry, "subject_ref", None)
-        if subject_ref:
-            subject_counter[subject_ref] = subject_counter.get(subject_ref, 0) + 1
 
-    projects = list(active_project_map.values())
-    if len(projects) < 10:
-        fallback_projects = await store.list_notes(session, category="project", limit=15)
+    snapshot_map = {str(snapshot.project_note_id): snapshot for snapshot in snapshots}
+    projects = []
+    for snapshot in snapshots:
+        project = await store.get_note(session, snapshot.project_note_id)
+        if not project:
+            continue
+        if snapshot.status not in {"active", "warming_up", "blocked"} and snapshot.manual_state != "pinned":
+            continue
+        active_project_map[str(project.id)] = project
+        projects.append(project)
+    if len(projects) < 8:
         existing_ids = {str(project.id) for project in projects}
-        for project in fallback_projects:
+        for project in active_project_map.values():
             if str(project.id) in existing_ids:
                 continue
             projects.append(project)
             existing_ids.add(str(project.id))
-            if len(projects) >= 10:
+            if len(projects) >= 8:
                 break
 
+    connections = await store.list_story_connections(session, limit=20)
     connection_summaries = [
-        {"subject_ref": subject_ref, "mentions": count}
-        for subject_ref, count in sorted(subject_counter.items(), key=lambda item: item[1], reverse=True)
-        if count > 1
+        {
+            "subject_ref": f"{item.source_ref} <-> {item.target_ref}",
+            "mentions": item.evidence_count,
+        }
+        for item in connections[:10]
+    ]
+    digest_zone = ZoneInfo(settings.digest_timezone)
+    reminders_due_today = [
+        reminder
+        for reminder in reminders
+        if reminder.next_fire_at and reminder.next_fire_at.astimezone(digest_zone).date() == digest_date
     ]
 
     fallback_tasks = _fallback_task_recommendations(tasks, open_loops, projects)
-    fallback_projects = _fallback_project_assessments(projects, project_updates)
+    fallback_projects = []
+    for project in projects[:5]:
+        snapshot = snapshot_map.get(str(project.id))
+        fallback_projects.append(
+            {
+                "project": project.title,
+                "where_it_stands": _shorten(getattr(snapshot, "implemented", None) or getattr(project, "content", None) or "Active but still sparse."),
+                "implemented": _shorten(getattr(snapshot, "implemented", None) or "Need stronger implementation evidence."),
+                "left": _shorten(getattr(snapshot, "remaining", None) or "Need clearer remaining-work signal."),
+                "holes": _shorten(", ".join(getattr(snapshot, "holes", []) or []) or "Need clearer critique coverage."),
+                "next_step": _shorten(getattr(snapshot, "what_changed", None) or f"Push {project.title} with one concrete move."),
+            }
+        )
     fallback_topics = _fallback_writing_topics(projects, open_loops)
     fallback_videos = _fallback_video_recommendations(projects, connection_summaries)
     fallback_teasers = _fallback_brain_teasers(digest_date)
+    fallback_improvements = [
+        {
+            "title": f"Sharpen {project.title}",
+            "why": _shorten(
+                (getattr(snapshot_map.get(str(project.id)), "holes", []) or ["This project still has unclear weak spots."])[0]
+            ),
+        }
+        for project in projects[:2]
+    ] or [{"title": "Clarify current focus", "why": "The brain still needs clearer active-project prioritization."}]
 
     headline = f"{digest_date.isoformat()} operating brief"
-    narrative = "The brain has fresh signals, but the higher-order brief is still sparse."
+    narrative = "The brain has fresh signals, but the higher-order brief is still converging."
     recommended_tasks = fallback_tasks
     project_assessments = fallback_projects
     writing_topic_items = fallback_topics
     video_recommendations = fallback_videos
     brain_teasers = fallback_teasers
+    improvement_focus = fallback_improvements
+    low_confidence_sections: list[str] = []
 
     context_text = _build_digest_context(
         digest_date=digest_date,
         trigger=trigger,
         tasks=tasks,
         projects=projects,
+        project_snapshots=snapshot_map,
         resources=resources,
         recent_activity=recent_activity,
         pending_reviews=pending_reviews,
         open_loops=open_loops,
         story_connections=connection_summaries,
         project_updates=project_updates,
+        reminders_due_today=reminders_due_today,
     )
 
     try:
@@ -346,6 +432,10 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         )
         headline = _shorten(str(composed.get("headline") or headline), 180)
         narrative = _shorten(str(composed.get("narrative") or narrative), 1800)
+        improvement_focus, _ = _normalize_topic_items(
+            composed.get("improvement_focus"),
+            fallback_improvements,
+        )
         recommended_tasks, _ = _normalize_topic_items(
             composed.get("recommended_tasks"),
             fallback_tasks,
@@ -367,11 +457,29 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             composed.get("brain_teasers"),
             fallback_teasers,
         )
+        low_confidence_sections = [
+            str(item).strip()
+            for item in composed.get("low_confidence_sections") or []
+            if str(item).strip()
+        ]
     except Exception as exc:  # pragma: no cover - fallback path
         log.warning("Falling back to deterministic digest sections: %s", exc)
         writing_topics = [item["title"] for item in writing_topic_items]
+        low_confidence_sections = ["narrative", "youtube_recommendations"]
     else:
         writing_topics = [item["title"] for item in writing_topic_items]
+
+    live_video_recommendations = await search_youtube_learning_queries(
+        topics=[
+            *(project.title for project in projects[:5]),
+            *(item.get("title") for item in improvement_focus[:2] if item.get("title")),
+            *(item.get("project") for item in project_assessments[:3] if item.get("project")),
+        ]
+    )
+    if live_video_recommendations:
+        video_recommendations = live_video_recommendations
+    else:
+        low_confidence_sections = sorted(set([*low_confidence_sections, "youtube_recommendations"]))
 
     return {
         "digest_date": digest_date.isoformat(),
@@ -391,7 +499,11 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             {
                 "id": str(project.id),
                 "title": project.title,
-                "status": getattr(project, "status", "active"),
+                "status": getattr(snapshot_map.get(str(project.id)), "status", None) or getattr(project, "status", "active"),
+                "active_score": getattr(snapshot_map.get(str(project.id)), "active_score", 0),
+                "implemented": getattr(snapshot_map.get(str(project.id)), "implemented", None),
+                "remaining": getattr(snapshot_map.get(str(project.id)), "remaining", None),
+                "holes": getattr(snapshot_map.get(str(project.id)), "holes", []) or [],
                 "updates": project_updates.get(str(project.id), [])[:5],
             }
             for project in projects
@@ -423,6 +535,17 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         "writing_topic_items": writing_topic_items[:5],
         "video_recommendations": video_recommendations[:5],
         "brain_teasers": brain_teasers[:5],
+        "reminders_due_today": [
+            {
+                "id": str(reminder.id),
+                "title": reminder.title,
+                "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+            }
+            for reminder in reminders_due_today[:10]
+        ],
+        "improvement_focus": improvement_focus[:5],
+        "low_confidence_sections": low_confidence_sections,
+        "digest_preferences": digest_preference.sections if digest_preference else _default_digest_sections(),
         "narration_script": narrative,
     }
 

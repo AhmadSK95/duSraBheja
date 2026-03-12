@@ -127,6 +127,10 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
     story = await store.get_project_story(session, project_note_id)
     if not story:
         return None
+    snapshot = await store.get_project_state_snapshot(session, project_note_id)
+    connections = await store.list_story_connections(session, project_note_id=project_note_id, limit=10)
+    sessions = await store.list_conversation_sessions(session, project_note_id=project_note_id, limit=10)
+    reminders = await store.list_project_reminders(session, project_note_id=project_note_id, status="active", limit=10)
 
     project = story["project"]
     return {
@@ -139,6 +143,26 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
             "tags": list(project.tags or []),
             "updated_at": str(project.updated_at),
         },
+        "snapshot": (
+            {
+                "active_score": snapshot.active_score,
+                "status": snapshot.status,
+                "manual_state": snapshot.manual_state,
+                "confidence": snapshot.confidence,
+                "implemented": snapshot.implemented,
+                "remaining": snapshot.remaining,
+                "blockers": snapshot.blockers or [],
+                "risks": snapshot.risks or [],
+                "holes": snapshot.holes or [],
+                "what_changed": snapshot.what_changed,
+                "why_active": snapshot.why_active,
+                "why_not_active": snapshot.why_not_active,
+                "last_signal_at": str(snapshot.last_signal_at) if snapshot.last_signal_at else None,
+                "feature_scores": snapshot.feature_scores or {},
+            }
+            if snapshot
+            else None
+        ),
         "repos": [
             {
                 "id": str(repo.id),
@@ -193,6 +217,40 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
             }
             for link in story["related_links"]
         ],
+        "connections": [
+            {
+                "source_ref": item.source_ref,
+                "target_ref": item.target_ref,
+                "relation": item.relation,
+                "weight": item.weight,
+                "evidence_count": item.evidence_count,
+            }
+            for item in connections
+        ],
+        "conversation_sessions": [
+            {
+                "id": str(item.id),
+                "agent_kind": item.agent_kind,
+                "session_id": item.session_id,
+                "parent_session_id": item.parent_session_id,
+                "cwd": item.cwd,
+                "title_hint": item.title_hint,
+                "turn_count": item.turn_count,
+                "started_at": str(item.started_at) if item.started_at else None,
+                "ended_at": str(item.ended_at) if item.ended_at else None,
+            }
+            for item in sessions
+        ],
+        "reminders": [
+            {
+                "id": str(item.id),
+                "title": item.title,
+                "next_fire_at": str(item.next_fire_at) if item.next_fire_at else None,
+                "recurrence_kind": item.recurrence_kind,
+                "status": item.status,
+            }
+            for item in reminders
+        ],
     }
 
 
@@ -208,10 +266,14 @@ async def build_project_brief_payload(session: AsyncSession, project_note_id: uu
     return {
         "project_id": payload["project"]["id"],
         "title": payload["project"]["title"],
-        "status": payload["project"]["status"],
+        "status": (payload.get("snapshot") or {}).get("status") or payload["project"]["status"],
         "summary": payload["project"]["content"] or payload["project"]["title"],
         "latest_updates": recent_titles,
         "repo_names": repo_names,
         "recent_sources": source_titles,
         "tags": payload["project"]["tags"],
+        "active_score": (payload.get("snapshot") or {}).get("active_score"),
+        "implemented": (payload.get("snapshot") or {}).get("implemented"),
+        "remaining": (payload.get("snapshot") or {}).get("remaining"),
+        "holes": (payload.get("snapshot") or {}).get("holes") or [],
     }

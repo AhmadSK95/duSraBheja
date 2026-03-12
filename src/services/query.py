@@ -13,6 +13,7 @@ from src.config import settings
 from src.constants import QUERY_MODES
 from src.lib import store
 from src.lib.embeddings import embed_text
+from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
 
 QUERY_STOPWORDS = {
@@ -38,6 +39,10 @@ QUERY_STOPWORDS = {
     "status",
     "the",
     "timeline",
+    "review",
+    "best",
+    "missing",
+    "holes",
     "to",
     "update",
     "updates",
@@ -52,6 +57,8 @@ def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
         return requested_mode
 
     lowered = (question or "").lower()
+    if any(phrase in lowered for phrase in ("best approach", "what's missing", "what is missing", "holes", "review project", "review this project", "is this the best")):
+        return "project_review"
     if "show sources" in lowered or lowered.startswith("sources") or lowered.startswith("show me sources"):
         return "sources"
     if "timeline" in lowered or "story of" in lowered or "walk me through" in lowered:
@@ -143,19 +150,51 @@ def format_story_context(
 
     if project_payload:
         project = project_payload["project"]
+        snapshot = project_payload.get("snapshot") or {}
         sections.extend(
             [
                 "",
                 f"Project: {project['title']}",
-                f"Status: {project['status']}",
+                f"Status: {snapshot.get('status') or project['status']}",
                 f"Summary: {project['content'] or 'No canonical summary.'}",
             ]
         )
+        if snapshot:
+            sections.extend(
+                [
+                    f"Active Score: {snapshot.get('active_score')}",
+                    f"Implemented: {snapshot.get('implemented') or 'unknown'}",
+                    f"Remaining: {snapshot.get('remaining') or 'unknown'}",
+                    f"Holes: {', '.join(snapshot.get('holes') or []) or 'none'}",
+                    f"Risks: {', '.join(snapshot.get('risks') or []) or 'none'}",
+                    f"What Changed: {snapshot.get('what_changed') or 'unknown'}",
+                    f"Why Active: {snapshot.get('why_active') or 'unknown'}",
+                    f"Why Not Active: {snapshot.get('why_not_active') or 'unknown'}",
+                ]
+            )
         repos = project_payload.get("repos") or []
         if repos:
             repo_lines = ", ".join(repo["name"] for repo in repos[:5] if repo.get("name"))
             if repo_lines:
                 sections.append(f"Repos: {repo_lines}")
+        connections = project_payload.get("connections") or []
+        if connections:
+            sections.append("Connections:")
+            for item in connections[:5]:
+                partner = item["target_ref"] if item["source_ref"] == project["title"] else item["source_ref"]
+                sections.append(f" - {partner} | relation={item['relation']} | weight={item['weight']}")
+        reminder_items = project_payload.get("reminders") or []
+        if reminder_items:
+            sections.append("Reminders:")
+            for item in reminder_items[:5]:
+                sections.append(f" - {item['title']} | next_fire={item.get('next_fire_at') or 'none'}")
+        conversation_sessions = project_payload.get("conversation_sessions") or []
+        if conversation_sessions:
+            sections.append("Conversation Sessions:")
+            for item in conversation_sessions[:5]:
+                sections.append(
+                    f" - {item.get('agent_kind')} | title_hint={item.get('title_hint') or 'none'} | ended={item.get('ended_at') or 'unknown'}"
+                )
         project_sources = project_payload.get("sources") or []
         if project_sources:
             sections.append("Project Sources:")
@@ -255,16 +294,19 @@ async def query_brain(
     since_boundary = parse_since_boundary(question, current_time) if resolved_mode == "changed_since" else None
 
     project_payload = await resolve_project_payload(session, question)
+    if project_payload and not project_payload.get("snapshot"):
+        await recompute_project_states(session, project_note_ids=[uuid.UUID(project_payload["project"]["id"])])
+        project_payload = await build_project_story_payload(session, uuid.UUID(project_payload["project"]["id"]))
     subject_ref = project_payload["project"]["title"] if project_payload else await resolve_subject_ref(session, question)
     project_note_id = uuid.UUID(project_payload["project"]["id"]) if project_payload else None
 
     event_limit = settings.story_max_events
-    if resolved_mode == "latest":
+    if resolved_mode in {"latest", "project_review"}:
         events = await store.list_story_events(
             session,
             project_note_id=project_note_id,
             subject_ref=subject_ref,
-            limit=min(8, event_limit),
+            limit=min(10, event_limit),
         )
     elif resolved_mode == "timeline":
         events = await store.list_story_events(
@@ -336,7 +378,7 @@ async def query_brain(
         use_opus=use_opus,
         trace_id=trace_id,
     )
-    confidence = "high" if project_payload and events else "medium" if events or sources else "low"
+    confidence = "high" if project_payload and (events or project_payload.get("snapshot")) else "medium" if events or sources else "low"
     return {
         "mode": resolved_mode,
         "answer": result["text"],

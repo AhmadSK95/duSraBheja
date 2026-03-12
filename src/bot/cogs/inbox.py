@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 
 import discord
 from redis.asyncio import Redis
@@ -151,6 +152,24 @@ class InboxCog(commands.Cog):
                 )
             return
 
+        if _looks_like_reminder_request(question):
+            from src.worker.main import enqueue_ingest
+
+            await message.add_reaction("\U0001f4cc")
+            await enqueue_ingest(
+                discord_message_id=None,
+                discord_channel_id=str(message.channel.id),
+                text=question,
+                attachments=[],
+                force_category="reminder",
+                source="ask-brain",
+            )
+            await message.reply(
+                "Captured that as a reminder request. I’ll store it and schedule the Discord reminder.",
+                mention_author=False,
+            )
+            return
+
         await message.add_reaction("\U0001f914")
         try:
             async with message.channel.typing():
@@ -182,6 +201,7 @@ class InboxCog(commands.Cog):
             "brain:artifact_failed",
             "brain:digest_ready",
             "brain:sync_completed",
+            "brain:reminder_due",
         )
         try:
             while not self._listener_stop.is_set():
@@ -202,6 +222,8 @@ class InboxCog(commands.Cog):
                     await self._handle_digest_ready(payload)
                 elif channel_name == "brain:sync_completed":
                     await self._handle_sync_completed(payload)
+                elif channel_name == "brain:reminder_due":
+                    await self._handle_reminder_due(payload)
         except asyncio.CancelledError:
             raise
         finally:
@@ -211,6 +233,7 @@ class InboxCog(commands.Cog):
                 "brain:artifact_failed",
                 "brain:digest_ready",
                 "brain:sync_completed",
+                "brain:reminder_due",
             )
             await pubsub.aclose()
             await redis.aclose()
@@ -411,6 +434,29 @@ class InboxCog(commands.Cog):
             embed,
         )
 
+    async def _handle_reminder_due(self, payload: dict):
+        embed = discord.Embed(
+            title="Brain Reminder",
+            description=payload.get("title") or "Reminder due.",
+            color=discord.Color.orange(),
+        )
+        if payload.get("body"):
+            embed.add_field(name="Details", value=str(payload["body"])[:1024], inline=False)
+        if payload.get("project_ref"):
+            embed.add_field(name="Project", value=str(payload["project_ref"]), inline=True)
+        if payload.get("next_fire_at"):
+            embed.add_field(name="Next", value=str(payload["next_fire_at"]), inline=True)
+
+        channel_name = settings.daily_digest_channel_name
+        if payload.get("discord_channel_id"):
+            guild = self.bot.get_guild(settings.discord_guild_id)
+            if guild:
+                channel = guild.get_channel(int(payload["discord_channel_id"]))
+                if isinstance(channel, discord.TextChannel):
+                    await channel.send(embed=embed)
+                    return
+        await post_to_channel(self.bot, settings.discord_guild_id, channel_name, embed)
+
     async def _store_artifact_outputs(
         self,
         artifact_id: str,
@@ -467,6 +513,15 @@ def _format_list(values: list[str], *, limit: int = 6) -> str:
     if not trimmed:
         return "None"
     return "\n".join(f"- {value[:120]}" for value in trimmed)
+
+
+def _looks_like_reminder_request(text: str) -> bool:
+    lowered = (text or "").lower()
+    return bool(
+        lowered.startswith("remind me")
+        or lowered.startswith("set a reminder")
+        or re.search(r"\bevery\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
+    )
 
 
 def _format_digest_entries(values: list[str], *, limit: int = 5, max_line: int = 180) -> str:
@@ -607,6 +662,20 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
             ),
             inline=False,
         )
+    if payload.get("reminders_due_today"):
+        primary.add_field(
+            name="Due Today",
+            value=_format_digest_entries(
+                [f"{item.get('title')} — {item.get('next_fire_at') or 'today'}" for item in payload["reminders_due_today"][:5]]
+            ),
+            inline=False,
+        )
+    if payload.get("low_confidence_sections"):
+        primary.add_field(
+            name="Low Confidence",
+            value=_format_digest_entries([str(item) for item in payload["low_confidence_sections"][:5]]),
+            inline=False,
+        )
 
     secondary = discord.Embed(title="Brain Curator", color=discord.Color.blurple())
     has_secondary_fields = False
@@ -636,6 +705,15 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
         secondary.add_field(
             name="Brain Teasers",
             value=_format_digest_entries([f"{item.get('title')}: {item.get('prompt')}" for item in brain_teasers[:5]]),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    improvement_focus = payload.get("improvement_focus") or []
+    if improvement_focus:
+        secondary.add_field(
+            name="Improve By Working Here",
+            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in improvement_focus[:5]]),
             inline=False,
         )
         has_secondary_fields = True

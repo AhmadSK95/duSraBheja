@@ -46,6 +46,9 @@ async def generate_daily_digest(
             "writing_topic_items": payload.get("writing_topic_items", []),
             "video_recommendations": payload.get("video_recommendations", []),
             "brain_teasers": payload.get("brain_teasers", []),
+            "reminders_due_today": payload.get("reminders_due_today", []),
+            "improvement_focus": payload.get("improvement_focus", []),
+            "low_confidence_sections": payload.get("low_confidence_sections", []),
         },
     )
     return payload

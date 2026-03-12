@@ -21,12 +21,15 @@ JOB_GENERATE_EMBEDDINGS = "src.worker.tasks.embed.generate_embeddings"
 JOB_PROCESS_LIBRARIAN = "src.worker.tasks.librarian.process_librarian"
 JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
 JOB_GENERATE_SCHEDULED_DIGEST_TICK = "src.worker.tasks.digest.generate_scheduled_digest_tick"
+JOB_PROCESS_DUE_REMINDERS = "src.worker.tasks.reminders.process_due_reminders"
+JOB_GENERATE_KNOWLEDGE_REFRESH = "src.worker.tasks.knowledge.generate_knowledge_refresh"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
 EVENT_ARTIFACT_FAILED = "brain:artifact_failed"
 EVENT_DIGEST_READY = "brain:digest_ready"
 EVENT_SYNC_COMPLETED = "brain:sync_completed"
+EVENT_REMINDER_DUE = "brain:reminder_due"
 
 
 async def get_pool() -> ArqRedis:
@@ -105,6 +108,8 @@ class WorkerSettings:
         JOB_PROCESS_LIBRARIAN,
         JOB_GENERATE_DAILY_DIGEST,
         JOB_GENERATE_SCHEDULED_DIGEST_TICK,
+        JOB_PROCESS_DUE_REMINDERS,
+        JOB_GENERATE_KNOWLEDGE_REFRESH,
     ]
 
     cron_jobs = [
@@ -112,7 +117,17 @@ class WorkerSettings:
             JOB_GENERATE_SCHEDULED_DIGEST_TICK,
             hour=set(range(24)),
             minute=0,
-        )
+        ),
+        cron(
+            JOB_PROCESS_DUE_REMINDERS,
+            hour=set(range(24)),
+            minute=set(range(60)),
+        ),
+        cron(
+            JOB_GENERATE_KNOWLEDGE_REFRESH,
+            hour=set(range(0, 24, max(1, settings.knowledge_refresh_hours))),
+            minute=15,
+        ),
     ]
 
     max_jobs = 5

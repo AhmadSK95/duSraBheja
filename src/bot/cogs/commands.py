@@ -11,8 +11,11 @@ from src.database import async_session
 from src.bot.cogs.inbox import build_answer_embed, build_digest_embeds
 from src.lib.store import find_notes_by_title, get_pending_reviews
 from src.services.digest import generate_or_refresh_digest
+from src.services.reminders import store_reminder
 from src.services.query import query_brain
+from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
+from src.lib import store
 
 log = logging.getLogger("brain-bot.commands")
 
@@ -91,6 +94,101 @@ class CommandsCog(commands.Cog):
         async with async_session() as session:
             result = await query_brain(session, question=question, mode="sources")
         await interaction.followup.send(embed=build_answer_embed(question, result))
+
+    @app_commands.command(name="project", description="Show the current project state snapshot")
+    async def project(self, interaction: discord.Interaction, subject: str):
+        await interaction.response.defer(thinking=True)
+        async with async_session() as session:
+            matches = await find_notes_by_title(session, subject, "project")
+            if not matches:
+                await interaction.followup.send(f"Project not found: {subject}")
+                return
+            await recompute_project_states(session, project_note_ids=[matches[0].id])
+            payload = await build_project_story_payload(session, matches[0].id)
+
+        snapshot = payload.get("snapshot") or {}
+        embed = discord.Embed(
+            title=payload["project"]["title"],
+            description=snapshot.get("implemented") or payload["project"]["content"] or "No project summary yet.",
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="Status", value=(snapshot.get("status") or payload["project"]["status"]).title(), inline=True)
+        embed.add_field(name="Active Score", value=f"{snapshot.get('active_score', 0):.2f}", inline=True)
+        embed.add_field(name="Confidence", value=f"{snapshot.get('confidence', 0):.0%}", inline=True)
+        if snapshot.get("remaining"):
+            embed.add_field(name="Left", value=str(snapshot["remaining"])[:1024], inline=False)
+        if snapshot.get("holes"):
+            embed.add_field(name="Holes", value="\n".join(f"- {item}" for item in snapshot["holes"][:5]), inline=False)
+        if payload.get("connections"):
+            embed.add_field(
+                name="Connections",
+                value="\n".join(
+                    f"- {(item['target_ref'] if item['source_ref'] == payload['project']['title'] else item['source_ref'])}"
+                    for item in payload["connections"][:5]
+                ),
+                inline=False,
+            )
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="review-project", description="Critique the current approach for a project")
+    async def review_project(self, interaction: discord.Interaction, subject: str, deep: bool = True):
+        await interaction.response.defer(thinking=True)
+        question = f"Review project {subject}. What is implemented, what is left, is this the best approach, and what holes or misses exist?"
+        async with async_session() as session:
+            result = await query_brain(session, question=question, mode="project_review", use_opus=deep)
+        await interaction.followup.send(embed=build_answer_embed(question, result))
+
+    @app_commands.command(name="pin-project", description="Pin a project so the brain treats it as active")
+    async def pin_project(self, interaction: discord.Interaction, subject: str):
+        await interaction.response.defer(thinking=True)
+        async with async_session() as session:
+            matches = await find_notes_by_title(session, subject, "project")
+            if not matches:
+                await interaction.followup.send(f"Project not found: {subject}")
+                return
+            await store.set_project_manual_state(session, project_note_id=matches[0].id, manual_state="pinned")
+            await recompute_project_states(session, project_note_ids=[matches[0].id])
+        await interaction.followup.send(f"Pinned project: {subject}")
+
+    @app_commands.command(name="ignore-project", description="Mark a project as ignored or dormant")
+    async def ignore_project(self, interaction: discord.Interaction, subject: str):
+        await interaction.response.defer(thinking=True)
+        async with async_session() as session:
+            matches = await find_notes_by_title(session, subject, "project")
+            if not matches:
+                await interaction.followup.send(f"Project not found: {subject}")
+                return
+            await store.set_project_manual_state(session, project_note_id=matches[0].id, manual_state="ignored")
+            await recompute_project_states(session, project_note_ids=[matches[0].id])
+        await interaction.followup.send(f"Ignoring project for active-focus ranking: {subject}")
+
+    @app_commands.command(name="remind", description="Create a recurring or one-time reminder")
+    async def remind(self, interaction: discord.Interaction, text: str, project_name: str | None = None):
+        await interaction.response.defer(thinking=True)
+        async with async_session() as session:
+            note = await store.create_note(
+                session,
+                category="reminder",
+                title=text[:120],
+                content=text,
+                priority="medium",
+                discord_channel_id=str(interaction.channel_id),
+            )
+            project_note_id = None
+            if project_name:
+                matches = await find_notes_by_title(session, project_name, "project")
+                if matches:
+                    project_note_id = matches[0].id
+            reminder = await store_reminder(
+                session,
+                raw_text=text,
+                note_id=note.id,
+                project_note_id=project_note_id,
+                discord_channel_id=str(interaction.channel_id),
+            )
+        await interaction.followup.send(
+            f"Reminder stored: {reminder.title} at {reminder.next_fire_at.isoformat() if reminder.next_fire_at else 'unscheduled'}"
+        )
 
     @app_commands.command(name="remember", description="Save a quick note to your brain")
     @app_commands.describe(

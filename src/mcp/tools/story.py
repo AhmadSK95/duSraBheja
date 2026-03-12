@@ -4,6 +4,9 @@ from mcp.server.fastmcp import FastMCP
 
 from src.database import async_session
 from src.lib import store
+from src.services.project_state import recompute_project_states
+from src.services.query import query_brain
+from src.services.reminders import store_reminder
 from src.services.story import (
     build_project_story_payload,
     publish_story_entry,
@@ -98,3 +101,63 @@ def register(mcp: FastMCP):
                 }
                 for entry in entries
             ]
+
+    @mcp.tool()
+    async def query_brain_mode(question: str, mode: str = "answer", deep: bool = False) -> dict:
+        """Query the brain in answer/latest/timeline/changed_since/sources/project_review mode."""
+        async with async_session() as session:
+            return await query_brain(session, question=question, mode=mode, use_opus=deep)
+
+    @mcp.tool()
+    async def recompute_project_states_tool(project_name: str | None = None) -> dict:
+        """Refresh stored project state snapshots."""
+        async with async_session() as session:
+            project_ids = None
+            if project_name:
+                matches = await store.find_notes_by_title(session, project_name, "project")
+                if not matches:
+                    return {"error": f"Project '{project_name}' not found"}
+                project_ids = [matches[0].id]
+            snapshots = await recompute_project_states(session, project_note_ids=project_ids)
+            return {
+                "status": "completed",
+                "projects": [
+                    {
+                        "project_note_id": str(item.project_note_id),
+                        "status": item.status,
+                        "active_score": item.active_score,
+                    }
+                    for item in snapshots
+                ],
+            }
+
+    @mcp.tool()
+    async def create_reminder(text: str, project_name: str | None = None, discord_channel_id: str | None = None) -> dict:
+        """Store a reminder and schedule the next Discord notification."""
+        async with async_session() as session:
+            note = await store.create_note(
+                session,
+                category="reminder",
+                title=text[:120],
+                content=text,
+                priority="medium",
+                discord_channel_id=discord_channel_id,
+            )
+            project_note_id = None
+            if project_name:
+                matches = await store.find_notes_by_title(session, project_name, "project")
+                if matches:
+                    project_note_id = matches[0].id
+            reminder = await store_reminder(
+                session,
+                raw_text=text,
+                note_id=note.id,
+                project_note_id=project_note_id,
+                discord_channel_id=discord_channel_id,
+            )
+        return {
+            "status": "stored",
+            "reminder_id": str(reminder.id),
+            "title": reminder.title,
+            "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+        }

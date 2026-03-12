@@ -9,7 +9,10 @@ build/
 .eggs/
 
 # Virtual environments
+.venv
 .venv/
+.venv.py39.bak
+.venv.py39.bak/
 venv/
 env/
 
@@ -47,3 +50,8 @@ alembic/versions/__pycache__/
 # Misc
 *.log
 *.pid
+.agent/
+.agents/
+.claude/
+Users/
+tmp/

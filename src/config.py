@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     whisper_model: str = "whisper-1"
+    openai_web_search_model: str = "gpt-4.1"
 
     # Classification
     confidence_threshold: float = 0.75
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     digest_cron_hour: int = 8
     digest_timezone: str = "America/New_York"
     digest_story_pulse_cooldown_minutes: int = 15
+    knowledge_refresh_hours: int = 6
+    knowledge_max_projects_per_run: int = 3
 
     # Collector
     collector_device_name: str = "macbook"

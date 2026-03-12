@@ -40,6 +40,7 @@ SOURCE_TYPES = (
     "codex_history",
     "claude_history",
     "github",
+    "knowledge",
     "agent",
     "manual",
     "mcp",
@@ -51,6 +52,23 @@ QUERY_MODES = (
     "timeline",
     "changed_since",
     "sources",
+    "project_review",
+)
+
+PROJECT_STATUSES = (
+    "active",
+    "warming_up",
+    "blocked",
+    "dormant",
+    "done",
+    "uncertain",
+)
+
+PROJECT_MANUAL_STATES = (
+    "normal",
+    "pinned",
+    "ignored",
+    "done",
 )
 
 

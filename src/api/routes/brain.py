@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.schemas import (
     CollectorIngestRequest,
     ManualIngestRequest,
+    ProjectStateRefreshRequest,
     QueryRequest,
+    ReminderCreateRequest,
     SyncReportRequest,
     SyncRunResponse,
 )
@@ -17,7 +21,11 @@ from src.database import async_session
 from src.lib.auth import require_api_token
 from src.lib.embeddings import embed_text
 from src.lib.store import get_note, vector_search
+from src.lib import store
+from src.services.digest import generate_or_refresh_digest
 from src.services.query import query_brain
+from src.services.reminders import store_reminder
+from src.services.project_state import recompute_project_states
 from src.services.story import build_project_brief_payload, build_project_story_payload
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
@@ -149,3 +157,77 @@ async def query_route(payload: QueryRequest) -> dict:
             category=payload.category,
             use_opus=payload.use_opus,
         )
+
+
+@router.post("/projects/recompute", dependencies=[Depends(require_api_token)])
+async def recompute_projects_route(payload: ProjectStateRefreshRequest) -> dict:
+    project_ids = [uuid.UUID(value) for value in payload.project_ids]
+    async with async_session() as session:
+        snapshots = await recompute_project_states(session, project_note_ids=project_ids or None)
+    return {
+        "status": "completed",
+        "projects": [
+            {
+                "project_note_id": str(item.project_note_id),
+                "status": item.status,
+                "active_score": item.active_score,
+            }
+            for item in snapshots
+        ],
+    }
+
+
+@router.post("/reminders", dependencies=[Depends(require_api_token)])
+async def create_reminder_route(payload: ReminderCreateRequest) -> dict:
+    async with async_session() as session:
+        note = await store.create_note(
+            session,
+            category="reminder",
+            title=payload.text[:120],
+            content=payload.text,
+            priority="medium",
+            discord_channel_id=payload.discord_channel_id,
+        )
+        project_note_id = None
+        if payload.project_name:
+            matches = await store.find_notes_by_title(session, payload.project_name, "project")
+            if matches:
+                project_note_id = matches[0].id
+        reminder = await store_reminder(
+            session,
+            raw_text=payload.text,
+            note_id=note.id,
+            project_note_id=project_note_id,
+            discord_channel_id=payload.discord_channel_id,
+        )
+    return {
+        "status": "stored",
+        "reminder_id": str(reminder.id),
+        "title": reminder.title,
+        "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+    }
+
+
+@router.get("/reminders/due", dependencies=[Depends(require_api_token)])
+async def list_due_reminders_route() -> list[dict]:
+    from datetime import datetime, timezone
+
+    async with async_session() as session:
+        reminders = await store.list_due_reminders(session, due_before=datetime.now(timezone.utc), limit=50)
+    return [
+        {
+            "id": str(item.id),
+            "title": item.title,
+            "next_fire_at": str(item.next_fire_at) if item.next_fire_at else None,
+            "status": item.status,
+        }
+        for item in reminders
+    ]
+
+
+@router.post("/digest/morning", dependencies=[Depends(require_api_token)])
+async def generate_morning_digest_route() -> dict:
+    digest_date = datetime.now(ZoneInfo("America/New_York")).date()
+    async with async_session() as session:
+        payload = await generate_or_refresh_digest(session, digest_date=digest_date, trigger="manual")
+    return payload
