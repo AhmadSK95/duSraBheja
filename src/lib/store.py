@@ -231,7 +231,7 @@ async def vector_search(
             c.metadata,
             COALESCE(n.created_at, a.created_at) AS created_at,
             COALESCE(n.category, cls.category) AS resolved_category,
-            1 - (c.embedding <=> :embedding::vector) AS similarity
+            1 - (c.embedding <=> CAST(:embedding AS vector)) AS similarity
         FROM chunks c
         LEFT JOIN notes n ON c.note_id = n.id
         LEFT JOIN artifacts a ON c.artifact_id = a.id
@@ -239,9 +239,9 @@ async def vector_search(
             ON cls.artifact_id = c.artifact_id
            AND cls.is_final = TRUE
         WHERE c.embedding IS NOT NULL
-          AND 1 - (c.embedding <=> :embedding::vector) > :min_similarity
+          AND 1 - (c.embedding <=> CAST(:embedding AS vector)) > :min_similarity
           AND (:category IS NULL OR COALESCE(n.category, cls.category) = :category)
-        ORDER BY c.embedding <=> :embedding::vector
+        ORDER BY c.embedding <=> CAST(:embedding AS vector)
         LIMIT :limit
         """
     )

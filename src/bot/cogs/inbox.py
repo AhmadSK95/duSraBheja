@@ -166,9 +166,9 @@ class InboxCog(commands.Cog):
             await message.reply(
                 embed=discord.Embed(
                     title="Brain Answer Failed",
-                    description="I saw the question, but I could not answer it yet.",
+                    description="I saw the question, but retrieval failed before I could answer. Try again in a moment.",
                     color=discord.Color.red(),
-                ).add_field(name="Error", value=str(exc)[:1000], inline=False),
+                ),
                 mention_author=False,
             )
 
