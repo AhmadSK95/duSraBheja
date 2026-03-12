@@ -116,7 +116,27 @@ async def ingest_source_entries(
             sync_source_id=sync_source.id,
             external_id=external_id,
         )
-        if source_item and content_hash and source_item.content_hash == content_hash:
+        same_content = bool(source_item and content_hash and source_item.content_hash == content_hash)
+        if same_content:
+            session_meta = metadata if isinstance(metadata, dict) else {}
+            if entry.get("entry_type") in {"conversation_session", "session_closeout"}:
+                await store.upsert_conversation_session(
+                    session,
+                    source_item_id=source_item.id,
+                    project_note_id=project_note.id if project_note else source_item.project_note_id,
+                    agent_kind=str(session_meta.get("agent_kind") or source_type),
+                    session_id=str(session_meta.get("session_id") or external_id),
+                    parent_session_id=session_meta.get("parent_session_id"),
+                    cwd=session_meta.get("cwd"),
+                    title_hint=session_meta.get("title_hint") or title[:240],
+                    transcript_blob_ref=None,
+                    transcript_excerpt=(summary or safe_body)[:4000] or None,
+                    participants=list(session_meta.get("participants") or []),
+                    turn_count=int(session_meta.get("turn_count") or 0),
+                    started_at=_parse_optional_datetime(session_meta.get("started_at")),
+                    ended_at=_parse_optional_datetime(session_meta.get("ended_at")) or happened_dt,
+                    metadata_=session_meta,
+                )
             continue
 
         sensitive = bool(entry.get("is_sensitive") or metadata.get("sensitive"))
