@@ -10,11 +10,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.lib import store
 
+LOW_SIGNAL_PROJECT_ALIASES = {
+    "api",
+    "app",
+    "assistant",
+    "backend",
+    "bot",
+    "code",
+    "discord",
+    "frontend",
+    "general",
+    "inbox",
+    "mcp",
+    "note",
+    "notes",
+    "planner",
+    "project",
+    "projects",
+    "repo",
+    "server",
+    "task",
+    "tasks",
+    "worker",
+    "workspace",
+}
+
 
 def normalize_alias(value: str | None) -> str:
     cleaned = (value or "").strip().lower()
     cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
     return cleaned.strip("-")
+
+
+def is_low_signal_project_name(value: str | None) -> bool:
+    normalized = normalize_alias(value)
+    if not normalized:
+        return True
+    if normalized in LOW_SIGNAL_PROJECT_ALIASES:
+        return True
+    parts = [part for part in normalized.split("-") if part]
+    return len(parts) == 1 and parts[0] in LOW_SIGNAL_PROJECT_ALIASES
 
 
 def alias_candidates(*values: str | None) -> list[str]:
@@ -39,6 +74,18 @@ def alias_candidates(*values: str | None) -> list[str]:
             seen.add(normalized)
             aliases.append(candidate.strip())
     return aliases
+
+
+def prioritized_alias_candidates(*values: str | None) -> list[str]:
+    candidates = alias_candidates(*values)
+    return sorted(
+        candidates,
+        key=lambda item: (
+            is_low_signal_project_name(item),
+            -len(normalize_alias(item)),
+            item.lower(),
+        ),
+    )
 
 
 async def ensure_project_aliases(
@@ -72,7 +119,7 @@ async def resolve_project(
     source_refs: list[str] | None = None,
     create_if_missing: bool = False,
 ) -> object | None:
-    for candidate in alias_candidates(project_hint, cwd, repo_name, *(source_refs or [])):
+    for candidate in prioritized_alias_candidates(project_hint, cwd, repo_name, *(source_refs or [])):
         project_alias = await store.resolve_project_alias(session, candidate)
         if project_alias:
             return await store.get_note(session, project_alias.project_note_id)
@@ -93,7 +140,14 @@ async def resolve_project(
     if not create_if_missing:
         return None
 
-    fallback_title = next((item for item in alias_candidates(project_hint, cwd, repo_name) if item), None)
+    fallback_title = next(
+        (
+            item
+            for item in prioritized_alias_candidates(project_hint, cwd, repo_name)
+            if item and not is_low_signal_project_name(item)
+        ),
+        None,
+    )
     if not fallback_title:
         return None
 
@@ -111,7 +165,18 @@ async def resolve_project(
 
 async def infer_project_from_text(session: AsyncSession, text: str) -> object | None:
     lowered = (text or "").lower()
-    for alias in await store.list_active_project_aliases(session, limit=50):
+    aliases = await store.list_active_project_aliases(session, limit=100)
+    matches = [alias for alias in aliases if alias.lower() in lowered]
+    for alias in sorted(
+        matches,
+        key=lambda item: (
+            is_low_signal_project_name(item),
+            -len(normalize_alias(item)),
+            item.lower(),
+        ),
+    ):
+        if is_low_signal_project_name(alias):
+            continue
         if alias.lower() in lowered:
             return await resolve_project(session, project_hint=alias)
     return None

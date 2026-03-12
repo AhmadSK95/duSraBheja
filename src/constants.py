@@ -55,6 +55,7 @@ SOURCE_TYPES = (
 
 QUERY_MODES = (
     "answer",
+    "active_projects",
     "latest",
     "timeline",
     "changed_since",

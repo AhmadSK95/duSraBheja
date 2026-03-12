@@ -13,7 +13,7 @@ from src.config import settings
 from src.constants import QUERY_MODES
 from src.lib import store
 from src.lib.embeddings import embed_text
-from src.services.identity import resolve_project
+from src.services.identity import is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
@@ -63,6 +63,15 @@ PERSONAL_QUERY_HINTS = (
     "reminder",
     "notes",
 )
+ACTIVE_PROJECT_QUERY_HINTS = (
+    "active projects",
+    "currently active projects",
+    "current active projects",
+    "what are my active projects",
+    "what are ahmad current active projects",
+    "which projects am i working on",
+    "what am i working on right now",
+)
 
 
 def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
@@ -70,6 +79,8 @@ def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
         return requested_mode
 
     lowered = (question or "").lower()
+    if any(phrase in lowered for phrase in ACTIVE_PROJECT_QUERY_HINTS):
+        return "active_projects"
     if any(phrase in lowered for phrase in ("best approach", "what's missing", "what is missing", "holes", "review project", "review this project", "is this the best")):
         return "project_review"
     if "show sources" in lowered or lowered.startswith("sources") or lowered.startswith("show me sources"):
@@ -95,7 +106,7 @@ def parse_since_boundary(question: str, now: datetime) -> datetime | None:
 
 
 def should_use_web_enrichment(question: str, *, resolved_mode: str, project_payload: dict | None) -> bool:
-    if resolved_mode in {"sources", "timeline", "changed_since"}:
+    if resolved_mode in {"sources", "timeline", "changed_since", "active_projects"}:
         return False
     lowered = (question or "").strip().lower()
     if project_payload and any(hint in lowered for hint in PERSONAL_QUERY_HINTS):
@@ -306,6 +317,71 @@ async def collect_sources(
     return items
 
 
+async def build_active_projects_overview(session: AsyncSession, *, limit: int = 6) -> list[dict]:
+    await recompute_project_states(session)
+    snapshots = await store.list_project_state_snapshots(session, limit=limit * 3)
+    rows: list[dict] = []
+    for snapshot in snapshots:
+        project = await store.get_note(session, snapshot.project_note_id)
+        if not project:
+            continue
+        if snapshot.status not in {"active", "warming_up", "blocked"} and snapshot.manual_state != "pinned":
+            continue
+        if snapshot.active_score < 0.24 and snapshot.manual_state != "pinned":
+            continue
+        feature_scores = dict(snapshot.feature_scores or {})
+        if is_low_signal_project_name(project.title) and feature_scores.get("git", 0) < 0.25 and feature_scores.get("planning", 0) < 0.2:
+            continue
+        rows.append(
+            {
+                "id": str(project.id),
+                "title": project.title,
+                "status": snapshot.status,
+                "manual_state": snapshot.manual_state,
+                "active_score": snapshot.active_score,
+                "last_signal_at": str(snapshot.last_signal_at) if snapshot.last_signal_at else None,
+                "implemented": snapshot.implemented,
+                "remaining": snapshot.remaining,
+                "what_changed": snapshot.what_changed,
+                "why_active": snapshot.why_active,
+                "why_not_active": snapshot.why_not_active,
+                "blockers": list(snapshot.blockers or []),
+                "holes": list(snapshot.holes or []),
+                "feature_scores": feature_scores,
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            1 if item["manual_state"] == "pinned" else 0,
+            float(item["feature_scores"].get("freshness", 0.0)),
+            float(item["feature_scores"].get("planning", 0.0)),
+            float(item["active_score"]),
+        ),
+        reverse=True,
+    )
+    return rows[:limit]
+
+
+def format_active_projects_context(projects: list[dict]) -> str:
+    lines = [
+        "Mode: active_projects",
+        "",
+        "Active Project Board:",
+    ]
+    for item in projects:
+        lines.extend(
+            [
+                f"- {item['title']} | status={item['status']} | score={item['active_score']:.2f} | last_signal={item['last_signal_at'] or 'unknown'}",
+                f"  - what_changed={item.get('what_changed') or 'unknown'}",
+                f"  - implemented={item.get('implemented') or 'unknown'}",
+                f"  - remaining={item.get('remaining') or 'unknown'}",
+                f"  - why_active={item.get('why_active') or 'unknown'}",
+                f"  - why_not_active={item.get('why_not_active') or 'unknown'}",
+            ]
+        )
+    return "\n".join(lines).strip()
+
+
 async def query_brain(
     session: AsyncSession,
     *,
@@ -319,6 +395,57 @@ async def query_brain(
     trace_id = uuid.uuid4()
     resolved_mode = detect_query_mode(question, mode)
     current_time = now or datetime.now(timezone.utc)
+    if resolved_mode == "active_projects":
+        projects = await build_active_projects_overview(session)
+        if not projects:
+            return {
+                "mode": resolved_mode,
+                "answer": "I do not have enough grounded project-state evidence to rank active work yet.",
+                "sources": [],
+                "brain_sources": [],
+                "web_sources": [],
+                "events": [],
+                "confidence": "low",
+                "model": "none",
+                "cost_usd": 0,
+            }
+        voice_profile = await store.get_voice_profile(session, "ahmad-default")
+        result = await narrate_from_context(
+            session,
+            question=question,
+            context_text=(
+                format_active_projects_context(projects)
+                + (
+                    f"\n\nVoice Profile:\nSummary: {voice_profile.summary}\nTraits: {voice_profile.traits}"
+                    if voice_profile
+                    else ""
+                )
+            ),
+            use_opus=use_opus,
+            trace_id=trace_id,
+        )
+        project_sources = [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "category": "project",
+                "status": item["status"],
+                "active_score": item["active_score"],
+            }
+            for item in projects
+        ]
+        return {
+            "mode": resolved_mode,
+            "answer": result["text"],
+            "sources": project_sources,
+            "brain_sources": project_sources,
+            "web_sources": [],
+            "events": [],
+            "projects": projects,
+            "confidence": "high",
+            "model": result["model"],
+            "cost_usd": result["cost_usd"],
+        }
     since_boundary = parse_since_boundary(question, current_time) if resolved_mode == "changed_since" else None
 
     project_payload = await resolve_project_payload(session, question)

@@ -12,12 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.storyteller import assess_project_state
 from src.lib import store
+from src.services.identity import is_low_signal_project_name
 
 RECENT_WINDOW_DAYS = 14
 DORMANT_WINDOW_DAYS = 30
 MAX_ASSESSED_PROJECTS = 5
 LOW_SIGNAL_ENTRY_TYPES = {"context_dump", "repo_snapshot"}
 INDIRECT_ACTIVITY_ENTRY_TYPES = {"knowledge_refresh", "voice_refresh"}
+DIRECT_STATE_ENTRY_TYPES = {"session_closeout", "progress_update", "decision", "conversation_session"}
 
 
 def _utcnow() -> datetime:
@@ -81,6 +83,38 @@ def _project_event_activity_weight(entry) -> float:
     if actor_type == "agent":
         return 0.65
     return 0.2
+
+
+def _event_signal_at(entry) -> datetime | None:
+    return getattr(entry, "happened_at", None)
+
+
+def _project_event_priority(entry) -> tuple[int, datetime]:
+    entry_type = getattr(entry, "entry_type", "") or ""
+    signal_at = _event_signal_at(entry) or datetime(1970, 1, 1, tzinfo=timezone.utc)
+    if entry_type == "session_closeout":
+        return (5, signal_at)
+    if entry_type in {"progress_update", "decision", "conversation_session"}:
+        return (4, signal_at)
+    if entry_type in {"research_thread", "blind_spot", "synapse"}:
+        return (3, signal_at)
+    return (1, signal_at)
+
+
+def _prioritize_project_events(events: list) -> list:
+    return sorted(events, key=_project_event_priority, reverse=True)
+
+
+def _dedupe_nonempty(values: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = (value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
 
 
 @dataclass
@@ -152,6 +186,8 @@ def _score_project(
             source_signal += 0.04 * _recency_weight(happened, now=now)
 
     meaningful_events = [entry for entry in events if _is_meaningful_project_event(entry)]
+    prioritized_events = _prioritize_project_events(meaningful_events)
+    weighted_events = prioritized_events[:6]
     open_loops = [entry for entry in meaningful_events if getattr(entry, "open_question", None)]
     blocker_events = [
         entry
@@ -168,19 +204,24 @@ def _score_project(
     corroborated = bool(sessions or planners or reminders or meaningful_events)
     weighted_story_signals = sum(
         _project_event_activity_weight(entry) * _recency_weight(getattr(entry, "happened_at", None), now=now)
-        for entry in meaningful_events
+        for entry in weighted_events
     )
     weighted_conversation_signals = sum(
         0.28 * _recency_weight(_session_signal_at(session_item), now=now)
-        for session_item in sessions
+        for session_item in sessions[:6]
     )
     weighted_planning_signals = sum(
         0.38 * _recency_weight(getattr(note, "updated_at", None), now=now)
-        for note in planners
+        for note in planners[:4]
     )
     weighted_reminder_signals = sum(
         0.12 * _recency_weight(getattr(reminder, "next_fire_at", None), now=now)
-        for reminder in reminders
+        for reminder in reminders[:6]
+    )
+    freshness_feature = max(
+        _recency_weight(_event_signal_at(prioritized_events[0]), now=now) if prioritized_events else 0.0,
+        _recency_weight(_session_signal_at(sessions[0]), now=now) if sessions else 0.0,
+        _recency_weight(source_dates[0], now=now) if source_dates else 0.0,
     )
 
     feature_scores = {
@@ -197,17 +238,19 @@ def _score_project(
         "story": min(1.0, weighted_story_signals * 0.18 + len(open_loops) * 0.08),
         "planning": min(1.0, weighted_planning_signals),
         "reminders": min(1.0, weighted_reminder_signals + len(due_soon) * 0.25),
+        "freshness": min(1.0, freshness_feature),
         "blockers": min(1.0, len(blocker_events) * 0.2),
     }
     if repo_snapshots and not corroborated:
         feature_scores["git"] = min(feature_scores["git"], 0.18)
         feature_scores["story"] = min(feature_scores["story"], 0.12)
     active_score = round(
-        feature_scores["git"] * 0.32
-        + feature_scores["conversations"] * 0.24
-        + feature_scores["story"] * 0.2
+        feature_scores["git"] * 0.24
+        + feature_scores["conversations"] * 0.2
+        + feature_scores["story"] * 0.18
         + feature_scores["planning"] * 0.12
-        + feature_scores["reminders"] * 0.12,
+        + feature_scores["reminders"] * 0.1
+        + feature_scores["freshness"] * 0.16,
         3,
     )
     if repo_snapshots and not corroborated:
@@ -235,7 +278,47 @@ def _is_meaningful_project_event(entry) -> bool:
     return _project_event_activity_weight(entry) >= 0.5
 
 
+def _derive_recent_state_hints(metrics: ProjectMetrics) -> dict:
+    prioritized_events = _prioritize_project_events(metrics.events)
+    direct_events = [entry for entry in prioritized_events if getattr(entry, "entry_type", "") in DIRECT_STATE_ENTRY_TYPES]
+    newest_direct = direct_events[0] if direct_events else None
+    freshest_signal = newest_direct or (prioritized_events[0] if prioritized_events else None)
+
+    implemented = None
+    if freshest_signal:
+        implemented = (
+            getattr(freshest_signal, "summary", None)
+            or getattr(freshest_signal, "outcome", None)
+            or getattr(freshest_signal, "title", None)
+        )
+    remaining = next(
+        (
+            getattr(entry, "open_question", None) or getattr(entry, "constraint", None)
+            for entry in prioritized_events
+            if getattr(entry, "open_question", None) or getattr(entry, "constraint", None)
+        ),
+        None,
+    )
+    return {
+        "prioritized_events": prioritized_events,
+        "direct_events": direct_events,
+        "fresh_direct_signal": bool(
+            newest_direct
+            and _recency_weight(_event_signal_at(newest_direct), now=_utcnow()) >= 0.75
+        ),
+        "implemented": implemented,
+        "remaining": remaining,
+        "what_changed": " | ".join(
+            _dedupe_nonempty([getattr(entry, "title", None) for entry in prioritized_events[:2]])
+        ),
+        "blockers": _dedupe_nonempty(
+            [getattr(entry, "constraint", None) or getattr(entry, "open_question", None) for entry in prioritized_events[:4]]
+        ),
+    }
+
+
 def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
+    state_hints = _derive_recent_state_hints(metrics)
     lines = [
         f"Project: {metrics.project.title}",
         f"Canonical summary: {(metrics.project.content or 'none')[:600]}",
@@ -247,6 +330,13 @@ def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
         "Feature scores:",
     ]
     lines.extend(f"- {name}: {value}" for name, value in metrics.feature_scores.items())
+    if state_hints["prioritized_events"]:
+        lines.extend(["", "Newest direct state evidence (highest priority first):"])
+        for entry in state_hints["prioritized_events"][:6]:
+            lines.append(
+                f"- {entry.happened_at.isoformat()}: {entry.title} | summary={entry.summary or 'none'} | "
+                f"outcome={entry.outcome or 'none'} | open_question={entry.open_question or 'none'}"
+            )
     if metrics.repos:
         lines.extend(["", "Repos:"])
         lines.extend(
@@ -255,7 +345,7 @@ def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
         )
     if metrics.events:
         lines.extend(["", "Recent story events:"])
-        for entry in metrics.events[:10]:
+        for entry in state_hints["prioritized_events"][:10]:
             lines.append(
                 f"- {entry.happened_at.isoformat()}: {entry.title} | decision={entry.decision or 'none'} | "
                 f"outcome={entry.outcome or 'none'} | open_question={entry.open_question or 'none'}"
@@ -310,6 +400,9 @@ async def _compute_metrics(
         source_items=source_items,
         now=now,
     )
+    if is_low_signal_project_name(project.title) and not repos and not planners and not reminders:
+        score_payload["active_score"] = min(score_payload["active_score"], 0.24)
+        score_payload["feature_scores"]["story"] = min(score_payload["feature_scores"]["story"], 0.22)
     last_signal_candidates = [
         *(entry.happened_at for entry in score_payload["meaningful_events"]),
         *(session.ended_at for session in sessions if session.ended_at),
@@ -375,8 +468,9 @@ async def _compute_metrics(
 
 
 def _fallback_project_assessment(metrics: ProjectMetrics) -> dict:
-    recent_titles = ", ".join(entry.title for entry in metrics.events[:3]) or "Signals are still thin."
-    recent_open = next((entry.open_question for entry in metrics.events if entry.open_question), None)
+    state_hints = _derive_recent_state_hints(metrics)
+    recent_titles = ", ".join(entry.title for entry in state_hints["prioritized_events"][:3]) or "Signals are still thin."
+    recent_open = state_hints["remaining"]
     holes = []
     if not metrics.sessions:
         holes.append("Conversation context is still thin for this project.")
@@ -385,12 +479,12 @@ def _fallback_project_assessment(metrics: ProjectMetrics) -> dict:
     if not holes:
         holes.append("Need stronger proof of completion and deployment state.")
     return {
-        "implemented": recent_titles,
+        "implemented": state_hints["implemented"] or recent_titles,
         "remaining": recent_open or "Need clearer evidence of what remains.",
-        "blockers": metrics.blockers,
+        "blockers": state_hints["blockers"] or metrics.blockers,
         "risks": [metrics.why_not_active] if metrics.why_not_active else [],
         "holes": holes,
-        "what_changed": recent_titles,
+        "what_changed": state_hints["what_changed"] or recent_titles,
         "why_active": metrics.why_active,
         "why_not_active": metrics.why_not_active,
         "confidence": 0.55 if metrics.events else 0.35,
@@ -454,6 +548,7 @@ async def recompute_project_states(
 
     for metrics in metrics_by_project:
         assessment = _fallback_project_assessment(metrics)
+        state_hints = _derive_recent_state_hints(metrics)
         if str(metrics.project.id) in assess_ids:
             try:
                 assessment = {
@@ -466,6 +561,16 @@ async def recompute_project_states(
                 }
             except Exception:
                 pass
+        if state_hints["fresh_direct_signal"]:
+            if state_hints["implemented"]:
+                assessment["implemented"] = state_hints["implemented"]
+            if state_hints["remaining"]:
+                assessment["remaining"] = state_hints["remaining"]
+            if state_hints["what_changed"]:
+                assessment["what_changed"] = state_hints["what_changed"]
+        assessment["blockers"] = _dedupe_nonempty(
+            [*(state_hints["blockers"] or []), *(assessment.get("blockers") or metrics.blockers)]
+        )
 
         confidence = float(assessment.get("confidence") or 0.0)
         snapshot = await store.upsert_project_state_snapshot(

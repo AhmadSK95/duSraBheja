@@ -41,6 +41,8 @@ def register(mcp: FastMCP):
                 "project": story_payload["project"] if story_payload else {"id": str(project.id), "title": project.title},
                 "snapshot": story_payload.get("snapshot") if story_payload else None,
                 "recent_activity": story_payload.get("recent_activity", [])[:8] if story_payload else [],
+                "recent_sessions": story_payload.get("conversation_sessions", [])[:5] if story_payload else [],
+                "aliases": story_payload.get("aliases", [])[:12] if story_payload else [],
                 "connections": story_payload.get("connections", [])[:8] if story_payload else [],
                 "reboot_brief": reboot_brief.get("reboot_brief"),
                 "voice_profile": reboot_brief.get("voice_profile"),

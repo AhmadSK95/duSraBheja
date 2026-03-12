@@ -9,6 +9,7 @@ from src.services import query as query_service
 
 def test_detect_query_mode_prefers_explicit_story_modes() -> None:
     assert query_service.detect_query_mode("What is the latest on dataGenie?") == "latest"
+    assert query_service.detect_query_mode("What are my active projects right now?") == "active_projects"
     assert query_service.detect_query_mode("timeline for duSraBheja") == "timeline"
     assert query_service.detect_query_mode("what changed since yesterday on duSraBheja") == "changed_since"
     assert query_service.detect_query_mode("show sources for dataGenie blockers") == "sources"
@@ -74,3 +75,45 @@ async def test_query_brain_returns_separate_brain_and_web_sources(monkeypatch) -
     assert "From your brain:" in result["answer"]
     assert "From the web:" in result["answer"]
     assert "From your brain:\nFrom your brain" not in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -> None:
+    async def fake_build_active_projects_overview(session, *, limit=6):
+        return [
+            {
+                "id": "project-1",
+                "title": "duSraBheja",
+                "status": "active",
+                "manual_state": "normal",
+                "active_score": 0.91,
+                "last_signal_at": "2026-03-12T19:24:00+00:00",
+                "implemented": "Fresh closeout says ranking and bootstrap were tightened",
+                "remaining": "Verify the new digest output",
+                "what_changed": "Codex closeout: duSraBheja | local snapshot",
+                "why_active": "Fresh direct work landed today",
+                "why_not_active": "none",
+                "blockers": [],
+                "holes": [],
+                "feature_scores": {"freshness": 1.0, "planning": 0.5},
+            }
+        ]
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
+        assert "Active Project Board:" in context_text
+        assert "duSraBheja" in context_text
+        return {"text": "duSraBheja is the clearest current focus.", "model": "test-model", "cost_usd": 0}
+
+    monkeypatch.setattr(query_service, "build_active_projects_overview", fake_build_active_projects_overview)
+    monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
+    monkeypatch.setattr(query_service, "narrate_from_context", fake_narrate_from_context)
+
+    result = await query_service.query_brain(object(), question="What are my active projects right now?")
+
+    assert result["mode"] == "active_projects"
+    assert result["brain_sources"][0]["title"] == "duSraBheja"
+    assert result["projects"][0]["what_changed"].startswith("Codex closeout")
+    assert result["answer"] == "duSraBheja is the clearest current focus."

@@ -127,3 +127,54 @@ def test_knowledge_refresh_does_not_count_as_high_signal_project_activity() -> N
     assert result["corroborated"] is False
     assert result["meaningful_events"] == []
     assert result["active_score"] <= 0.29
+
+
+def test_recent_state_hints_prefer_fresh_closeout_over_older_session() -> None:
+    now = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc)
+    older = SimpleNamespace(
+        entry_type="conversation_session",
+        actor_type="agent",
+        happened_at=now - timedelta(days=1),
+        open_question="Old question",
+        decision=None,
+        impact=None,
+        outcome="Older architecture summary",
+        constraint=None,
+        title="Older session",
+        summary="Older architecture summary",
+    )
+    closeout = SimpleNamespace(
+        entry_type="session_closeout",
+        actor_type="agent",
+        happened_at=now,
+        open_question="Verify today digest output",
+        decision="Use the fresh closeout first",
+        impact=None,
+        outcome="Ranking and bootstrap were tightened",
+        constraint=None,
+        title="Codex closeout: duSraBheja",
+        summary="Tightened active project ranking and bootstrap behavior.",
+    )
+    metrics = project_state.ProjectMetrics(
+        project=SimpleNamespace(title="duSraBheja", content=None),
+        snapshot=None,
+        events=[older, closeout],
+        sessions=[],
+        repos=[],
+        source_items=[],
+        planners=[],
+        reminders=[],
+        feature_scores={},
+        active_score=0.5,
+        status="active",
+        last_signal_at=now,
+        blockers=[],
+        why_active="fresh work",
+        why_not_active="",
+    )
+
+    hints = project_state._derive_recent_state_hints(metrics)
+
+    assert hints["implemented"] == "Tightened active project ranking and bootstrap behavior."
+    assert hints["remaining"] == "Verify today digest output"
+    assert hints["what_changed"].startswith("Codex closeout: duSraBheja")

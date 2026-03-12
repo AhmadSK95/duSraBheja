@@ -55,6 +55,7 @@ Rules:
 - Keep Ahmad's tone: concise, grounded, direct, story-aware.
 - Do not distort dates, names, or citations.
 - Cite sources as [1], [2], etc.
+- If the question asks to separate grounded evidence from inference, add clearly labeled sections for that split.
 - If the evidence is too thin to judge what is implemented, left, or weak, say that explicitly instead of guessing.
 - If evidence is thin, say that clearly.
 """

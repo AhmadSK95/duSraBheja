@@ -6,7 +6,7 @@ from src.database import async_session
 from src.lib import store
 from src.services.identity import resolve_project
 from src.services.project_state import recompute_project_states
-from src.services.query import query_brain
+from src.services.query import build_active_projects_overview, query_brain
 from src.services.reminders import store_reminder
 from src.services.session_bootstrap import build_session_bootstrap, record_session_closeout
 from src.services.story import (
@@ -110,9 +110,19 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def query_brain_mode(question: str, mode: str = "answer", deep: bool = False) -> dict:
-        """Query the brain in answer/latest/timeline/changed_since/sources/project_review mode."""
+        """Query the brain in answer/active_projects/latest/timeline/changed_since/sources/project_review mode."""
         async with async_session() as session:
             return await query_brain(session, question=question, mode=mode, use_opus=deep)
+
+    @mcp.tool()
+    async def list_active_projects(limit: int = 6) -> dict:
+        """Return the current active-project board grounded in stored project snapshots."""
+        async with async_session() as session:
+            projects = await build_active_projects_overview(session, limit=limit)
+            return {
+                "projects": projects,
+                "count": len(projects),
+            }
 
     @mcp.tool()
     async def bootstrap_session(
@@ -178,7 +188,13 @@ def register(mcp: FastMCP):
             if not project:
                 return {"error": "Project not found"}
             payload = await build_project_story_payload(session, project.id)
-            return payload["project"] if payload else {"error": "Project not found"}
+            if not payload:
+                return {"error": "Project not found"}
+            return {
+                "project": payload["project"],
+                "aliases": payload.get("aliases", [])[:12],
+                "repos": payload.get("repos", [])[:6],
+            }
 
     @mcp.tool()
     async def recompute_project_states_tool(project_name: str | None = None) -> dict:
