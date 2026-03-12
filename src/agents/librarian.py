@@ -1,5 +1,6 @@
 """Librarian agent — merges artifacts into canonical notes."""
 
+import json
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
