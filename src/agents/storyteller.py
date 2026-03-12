@@ -187,4 +187,9 @@ Return the JSON operating brief."""
         temperature=0.25,
         trace_id=trace_id,
     )
-    return parse_json_object(result["text"])
+    response_text = result["text"].strip()
+    if response_text.startswith("```"):
+        response_text = response_text.strip("`")
+        if response_text.lower().startswith("json"):
+            response_text = response_text[4:].strip()
+    return parse_json_object(response_text)

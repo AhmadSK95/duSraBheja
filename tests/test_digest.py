@@ -55,10 +55,16 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
     async def fake_get_pending_reviews(session):
         return [FakeReview("review-1", "Is this a project or a note?")]
 
+    async def fake_get_note(session, note_id):
+        if note_id == "project-1":
+            return FakeNote("project-1", "duSraBheja")
+        return None
+
     fake_store = SimpleNamespace(
         list_notes=fake_list_notes,
         list_recent_activity=fake_list_recent_activity,
         get_pending_reviews=fake_get_pending_reviews,
+        get_note=fake_get_note,
     )
     monkeypatch.setattr(digest_service, "store", fake_store)
 

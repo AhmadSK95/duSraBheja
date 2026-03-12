@@ -253,7 +253,6 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         raise RuntimeError("store module is unavailable")
 
     tasks = await store.list_notes(session, category="task", limit=10)
-    projects = await store.list_notes(session, category="project", limit=10)
     resources = await store.list_notes(session, category="resource", limit=10)
     recent_activity = await store.list_recent_activity(session, limit=20)
     pending_reviews = await store.get_pending_reviews(session)
@@ -262,6 +261,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     project_updates: dict[str, list[dict]] = {}
     open_loops = []
     subject_counter: dict[str, int] = {}
+    active_project_map: dict[str, object] = {}
     for entry in recent_activity:
         if entry.happened_at.date() < recent_cutoff:
             continue
@@ -285,9 +285,24 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
                     "open_question": getattr(entry, "open_question", None),
                 }
             )
+            project = await store.get_note(session, entry.project_note_id)
+            if project:
+                active_project_map[str(project.id)] = project
         subject_ref = getattr(entry, "subject_ref", None)
         if subject_ref:
             subject_counter[subject_ref] = subject_counter.get(subject_ref, 0) + 1
+
+    projects = list(active_project_map.values())
+    if len(projects) < 10:
+        fallback_projects = await store.list_notes(session, category="project", limit=15)
+        existing_ids = {str(project.id) for project in projects}
+        for project in fallback_projects:
+            if str(project.id) in existing_ids:
+                continue
+            projects.append(project)
+            existing_ids.add(str(project.id))
+            if len(projects) >= 10:
+                break
 
     connection_summaries = [
         {"subject_ref": subject_ref, "mentions": count}
