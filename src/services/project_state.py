@@ -117,6 +117,48 @@ def _dedupe_nonempty(values: list[str | None]) -> list[str]:
     return result
 
 
+def _compact_text(value: str | None, *, limit: int = 280) -> str | None:
+    cleaned = " ".join((value or "").strip().split())
+    if not cleaned:
+        return None
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def _extract_markdown_section(value: str | None, heading: str) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    wanted = heading.strip().lower()
+    lines = text.splitlines()
+    collecting = False
+    collected: list[str] = []
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        lowered = stripped.lower()
+        if lowered in {f"## {wanted}", f"### {wanted}"}:
+            collecting = True
+            continue
+        if collecting and stripped.startswith("#"):
+            break
+        if collecting and stripped:
+            collected.append(stripped.lstrip("- ").strip())
+    return _compact_text(" ".join(collected)) if collected else None
+
+
+def _preferred_event_summary(entry) -> str | None:
+    summary = getattr(entry, "summary", None)
+    body_markdown = getattr(entry, "body_markdown", None)
+    extracted = _extract_markdown_section(summary, "Summary") or _extract_markdown_section(body_markdown, "Summary")
+    if extracted:
+        return extracted
+    cleaned_summary = _compact_text(summary)
+    if cleaned_summary and not cleaned_summary.startswith("# "):
+        return cleaned_summary
+    return _compact_text(getattr(entry, "outcome", None)) or _compact_text(getattr(entry, "title", None))
+
+
 @dataclass
 class ProjectMetrics:
     project: object
@@ -287,9 +329,9 @@ def _derive_recent_state_hints(metrics: ProjectMetrics) -> dict:
     implemented = None
     if freshest_signal:
         implemented = (
-            getattr(freshest_signal, "summary", None)
-            or getattr(freshest_signal, "outcome", None)
-            or getattr(freshest_signal, "title", None)
+            _preferred_event_summary(freshest_signal)
+            or _compact_text(getattr(freshest_signal, "outcome", None))
+            or _compact_text(getattr(freshest_signal, "title", None))
         )
     remaining = next(
         (
@@ -334,7 +376,7 @@ def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
         lines.extend(["", "Newest direct state evidence (highest priority first):"])
         for entry in state_hints["prioritized_events"][:6]:
             lines.append(
-                f"- {entry.happened_at.isoformat()}: {entry.title} | summary={entry.summary or 'none'} | "
+                f"- {entry.happened_at.isoformat()}: {entry.title} | summary={_preferred_event_summary(entry) or 'none'} | "
                 f"outcome={entry.outcome or 'none'} | open_question={entry.open_question or 'none'}"
             )
     if metrics.repos:

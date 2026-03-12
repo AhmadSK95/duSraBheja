@@ -178,3 +178,48 @@ def test_recent_state_hints_prefer_fresh_closeout_over_older_session() -> None:
     assert hints["implemented"] == "Tightened active project ranking and bootstrap behavior."
     assert hints["remaining"] == "Verify today digest output"
     assert hints["what_changed"].startswith("Codex closeout: duSraBheja")
+
+
+def test_recent_state_hints_extract_summary_from_markdown_blob() -> None:
+    now = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc)
+    closeout = SimpleNamespace(
+        entry_type="session_closeout",
+        actor_type="agent",
+        happened_at=now,
+        open_question="Should we archive stale projects?",
+        decision="Prefer fresh closeouts first",
+        impact=None,
+        outcome="Added active_projects query mode",
+        constraint=None,
+        title="Codex closeout: duSraBheja",
+        summary=(
+            "# Codex session closeout\n"
+            "Session ID: session-1\n\n"
+            "## Summary\n"
+            "Prioritized fresh closeouts and sessions in project-state synthesis.\n\n"
+            "## Decisions\n"
+            "- Prefer fresh closeouts first\n"
+        ),
+        body_markdown=None,
+    )
+    metrics = project_state.ProjectMetrics(
+        project=SimpleNamespace(title="duSraBheja", content=None),
+        snapshot=None,
+        events=[closeout],
+        sessions=[],
+        repos=[],
+        source_items=[],
+        planners=[],
+        reminders=[],
+        feature_scores={},
+        active_score=0.5,
+        status="active",
+        last_signal_at=now,
+        blockers=[],
+        why_active="fresh work",
+        why_not_active="",
+    )
+
+    hints = project_state._derive_recent_state_hints(metrics)
+
+    assert hints["implemented"] == "Prioritized fresh closeouts and sessions in project-state synthesis."
