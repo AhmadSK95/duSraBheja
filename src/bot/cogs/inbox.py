@@ -370,62 +370,13 @@ class InboxCog(commands.Cog):
         await message.reply(embed=embed, mention_author=False)
 
     async def _handle_digest_ready(self, payload: dict):
-        task_titles = [task["title"] for task in payload.get("tasks", [])[:5]] or ["No active tasks"]
-        project_titles = [project["title"] for project in payload.get("projects", [])[:5]] or ["No active projects"]
-        recent_titles = [
-            f"{entry.get('title')} ({entry.get('actor_name') or 'unknown'})"
-            for entry in payload.get("recent_activity", [])[:5]
-        ] or ["No recent activity"]
-        trigger = payload.get("trigger") or "scheduled"
-        is_story_pulse = trigger == "story_pulse"
-
-        embed = discord.Embed(
-            title=f"{'Story Pulse' if is_story_pulse else 'Daily Digest'} - {payload.get('digest_date')}",
-            description=(
-                "New grounded story signals just landed."
-                if is_story_pulse
-                else "Fresh morning snapshot from the brain."
-            ),
-            color=discord.Color.gold(),
-        )
-        embed.add_field(name="Tasks", value="\n".join(task_titles), inline=False)
-        embed.add_field(name="Projects", value="\n".join(project_titles), inline=False)
-        embed.add_field(name="Recent Activity", value="\n".join(recent_titles), inline=False)
-
-        pending_reviews = payload.get("pending_reviews") or []
-        if pending_reviews:
-            embed.add_field(
-                name="Pending Reviews",
-                value="\n".join(item["question"] for item in pending_reviews[:3]),
-                inline=False,
+        for embed in build_digest_embeds(payload):
+            await post_to_channel(
+                self.bot,
+                settings.discord_guild_id,
+                settings.daily_digest_channel_name,
+                embed,
             )
-
-        writing_topics = payload.get("writing_topics") or []
-        if writing_topics:
-            embed.add_field(name="Writing Topics", value="\n".join(writing_topics[:5]), inline=False)
-        if payload.get("open_loops"):
-            loop_lines = [
-                item.get("open_question") or item.get("title") or "Open loop"
-                for item in payload["open_loops"][:3]
-            ]
-            embed.add_field(name="Open Loops", value="\n".join(loop_lines), inline=False)
-        if payload.get("story_connections"):
-            connection_lines = [
-                f"{item.get('subject_ref')} ({item.get('mentions')} mentions)"
-                for item in payload["story_connections"][:5]
-                if item.get("subject_ref")
-            ]
-            if connection_lines:
-                embed.add_field(name="Connections", value="\n".join(connection_lines), inline=False)
-        if payload.get("reason"):
-            embed.set_footer(text=f"Trigger: {payload['reason']}")
-
-        await post_to_channel(
-            self.bot,
-            settings.discord_guild_id,
-            settings.daily_digest_channel_name,
-            embed,
-        )
 
     async def _handle_sync_completed(self, payload: dict):
         status = (payload.get("status") or "completed").lower()
@@ -518,6 +469,13 @@ def _format_list(values: list[str], *, limit: int = 6) -> str:
     return "\n".join(f"- {value[:120]}" for value in trimmed)
 
 
+def _format_digest_entries(values: list[str], *, limit: int = 5, max_line: int = 180) -> str:
+    trimmed = [value for value in values if value][:limit]
+    if not trimmed:
+        return "None"
+    return "\n".join(f"- {value[:max_line]}" for value in trimmed)
+
+
 def build_classification_embed(classification: dict, summary: str, artifact_id: str) -> discord.Embed:
     """Build a rich embed for a classified item."""
     colors = {
@@ -589,6 +547,121 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
     embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
     embed.add_field(name="Model", value=model_label, inline=True)
     return embed
+
+
+def build_digest_embeds(payload: dict) -> list[discord.Embed]:
+    trigger = payload.get("trigger") or "scheduled"
+    is_story_pulse = trigger == "story_pulse"
+    title = f"{'Story Pulse' if is_story_pulse else 'Daily Digest'} - {payload.get('digest_date')}"
+    description = payload.get("narrative") or (
+        "New grounded story signals just landed." if is_story_pulse else "Fresh morning snapshot from the brain."
+    )
+
+    primary = discord.Embed(
+        title=title,
+        description=description[:4000],
+        color=discord.Color.gold(),
+    )
+    if payload.get("headline"):
+        primary.add_field(name="Headline", value=str(payload["headline"])[:1024], inline=False)
+
+    recommended_tasks = payload.get("recommended_tasks") or []
+    if recommended_tasks:
+        primary.add_field(
+            name="Tasks To Pick Up",
+            value=_format_digest_entries(
+                [f"{item.get('title')} — {item.get('why')}" for item in recommended_tasks[:6]],
+                limit=6,
+                max_line=140,
+            ),
+            inline=False,
+        )
+    else:
+        task_titles = [task["title"] for task in payload.get("tasks", [])[:5]] or ["No active tasks"]
+        primary.add_field(name="Tasks To Pick Up", value=_format_digest_entries(task_titles), inline=False)
+
+    project_assessments = payload.get("project_assessments") or []
+    if project_assessments:
+        primary.add_field(
+            name="Project Status",
+            value=_format_digest_entries(
+                [
+                    (
+                        f"{item.get('project')}: {item.get('where_it_stands')} "
+                        f"| Left: {item.get('left')} | Hole: {item.get('holes')}"
+                    )
+                    for item in project_assessments[:5]
+                ]
+            ),
+            inline=False,
+        )
+    else:
+        project_titles = [project["title"] for project in payload.get("projects", [])[:5]] or ["No active projects"]
+        primary.add_field(name="Project Status", value=_format_digest_entries(project_titles), inline=False)
+
+    if payload.get("open_loops"):
+        primary.add_field(
+            name="Open Loops",
+            value=_format_digest_entries(
+                [item.get("open_question") or item.get("title") or "Open loop" for item in payload["open_loops"][:5]]
+            ),
+            inline=False,
+        )
+
+    secondary = discord.Embed(title="Brain Curator", color=discord.Color.blurple())
+    has_secondary_fields = False
+
+    writing_topics = payload.get("writing_topic_items") or []
+    if writing_topics:
+        secondary.add_field(
+            name="Writing Topics",
+            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in writing_topics[:5]]),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    video_recommendations = payload.get("video_recommendations") or []
+    if video_recommendations:
+        secondary.add_field(
+            name="Watch On YouTube",
+            value=_format_digest_entries(
+                [f"{item.get('title')} — search: {item.get('search_query')}" for item in video_recommendations[:5]]
+            ),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    brain_teasers = payload.get("brain_teasers") or []
+    if brain_teasers:
+        secondary.add_field(
+            name="Brain Teasers",
+            value=_format_digest_entries([f"{item.get('title')}: {item.get('prompt')}" for item in brain_teasers[:5]]),
+            inline=False,
+        )
+        has_secondary_fields = True
+
+    recent_titles = [
+        f"{entry.get('title')} ({entry.get('actor_name') or 'unknown'})"
+        for entry in payload.get("recent_activity", [])[:5]
+    ]
+    if recent_titles:
+        secondary.add_field(name="Recent Activity", value=_format_digest_entries(recent_titles), inline=False)
+        has_secondary_fields = True
+
+    if payload.get("story_connections"):
+        connection_lines = [
+            f"{item.get('subject_ref')} ({item.get('mentions')} mentions)"
+            for item in payload["story_connections"][:5]
+            if item.get("subject_ref")
+        ]
+        if connection_lines:
+            secondary.add_field(name="Connections", value=_format_digest_entries(connection_lines), inline=False)
+            has_secondary_fields = True
+
+    if payload.get("reason"):
+        primary.set_footer(text=f"Trigger: {payload['reason']}")
+
+    return [primary, secondary] if has_secondary_fields else [primary]
 
 
 async def setup(bot: commands.Bot):

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import uuid
 
-from src.services.planner import build_planner_payload, merge_weekly_rollup
+from src.agents.classifier import _parse_classifier_response
+from src.services.planner import build_planner_payload, detect_planner_scope, merge_weekly_rollup
 
 
 def test_build_planner_payload_extracts_dates_and_items() -> None:
@@ -49,3 +50,37 @@ def test_merge_weekly_rollup_accumulates_daily_entries() -> None:
     assert changed is True
     assert merged["title"] == "Week of Mar 02, 2026"
     assert "Vacuumed my room" in merged["card"]["top_items"]
+
+
+def test_detect_planner_scope_prefers_daily_for_single_day_page() -> None:
+    text = """Thursday
+→ Job applications
+→ Interview prep
+→ dataGenie add databricks db
+→ Connectivity guide
+"""
+
+    assert detect_planner_scope(text) == "daily_planner"
+
+
+def test_parse_classifier_response_corrects_weekly_to_daily_when_scope_is_single_day() -> None:
+    parsed = _parse_classifier_response(
+        """{
+          "category": "weekly_planner",
+          "confidence": 0.85,
+          "entities": [],
+          "tags": ["planner"],
+          "priority": "medium",
+          "suggested_action": "Store this planner",
+          "summary": "Weekly plan"
+        }""",
+        """Thursday
+→ Job applications
+→ Interview prep
+→ dataGenie add databricks db
+→ Connectivity guide
+""",
+    )
+
+    assert parsed["category"] == "daily_planner"
+    assert parsed["confidence"] >= 0.8

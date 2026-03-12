@@ -43,17 +43,59 @@ Write as a factual narrative, not fiction.
 
 Structure:
 1. Where things stand
-2. What led here
-3. Turning points
-4. What changed recently
-5. Unresolved tension
-6. Sources
+2. What is already implemented or proven
+3. What is left, unproven, or still in motion
+4. What led here / turning points
+5. Approach assessment: what looks strong and what looks weak
+6. Misses, holes, or hidden risks
+7. What changed recently
+8. Sources
 
 Rules:
 - Keep Ahmad's tone: concise, grounded, direct, story-aware.
 - Do not distort dates, names, or citations.
 - Cite sources as [1], [2], etc.
+- If the evidence is too thin to judge what is implemented, left, or weak, say that explicitly instead of guessing.
 - If evidence is thin, say that clearly.
+"""
+
+DIGEST_SYSTEM_PROMPT = """You compose Ahmad's morning operating brief from grounded brain signals.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "headline": "one-line headline",
+  "narrative": "short operating brief in Ahmad's voice",
+  "recommended_tasks": [
+    {"title": "task", "why": "why it matters now", "project_ref": "project or null"}
+  ],
+  "project_assessments": [
+    {
+      "project": "project name",
+      "where_it_stands": "current state",
+      "implemented": "what seems done or proven",
+      "left": "what is still left or unclear",
+      "holes": "weaknesses, misses, or risks",
+      "next_step": "best immediate move"
+    }
+  ],
+  "writing_topics": [
+    {"title": "topic", "why": "why now"}
+  ],
+  "video_recommendations": [
+    {"title": "short title", "search_query": "youtube search to run", "why": "why this video would help"}
+  ],
+  "brain_teasers": [
+    {"title": "short label", "prompt": "the teaser or puzzle", "hint": "small hint"}
+  ]
+}
+
+Rules:
+- Stay grounded in the supplied context.
+- Recommended tasks should feel like strong next bets, not generic todos.
+- Project assessments should say what is built, what is left, and where the holes are.
+- For video_recommendations, never invent a direct YouTube URL or fake creator attribution. If you do not have grounded links, output useful YouTube search ideas instead.
+- Brain teasers can be generated, but make them thoughtful and relevant to the current work when possible.
+- Keep lists tight: up to 10 tasks, 5 project assessments, 5 writing topics, 5 video recommendations, 5 brain teasers.
 """
 
 
@@ -117,3 +159,32 @@ Answer as a grounded story. Cite sources using [1], [2], etc."""
         temperature=0.2,
         trace_id=trace_id,
     )
+
+
+async def compose_digest_sections(
+    session: AsyncSession,
+    *,
+    digest_date: str,
+    trigger: str,
+    context_text: str,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Digest date: {digest_date}
+Trigger: {trigger}
+
+Context:
+{context_text}
+
+Return the JSON operating brief."""
+    result = await agent_call(
+        session,
+        agent_name="storyteller",
+        action="compose_digest",
+        prompt=prompt,
+        system=DIGEST_SYSTEM_PROMPT,
+        model=settings.opus_model,
+        max_tokens=2200,
+        temperature=0.25,
+        trace_id=trace_id,
+    )
+    return parse_json_object(result["text"])

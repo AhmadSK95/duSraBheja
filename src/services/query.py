@@ -151,6 +151,18 @@ def format_story_context(
                 f"Summary: {project['content'] or 'No canonical summary.'}",
             ]
         )
+        repos = project_payload.get("repos") or []
+        if repos:
+            repo_lines = ", ".join(repo["name"] for repo in repos[:5] if repo.get("name"))
+            if repo_lines:
+                sections.append(f"Repos: {repo_lines}")
+        project_sources = project_payload.get("sources") or []
+        if project_sources:
+            sections.append("Project Sources:")
+            for item in project_sources[:5]:
+                sections.append(
+                    f" - {item.get('title')} | summary={item.get('summary') or 'none'} | when={item.get('happened_at') or 'unknown'}"
+                )
 
     if events:
         sections.extend(["", "Story Events:"])

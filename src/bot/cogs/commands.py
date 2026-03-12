@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
-from src.bot.cogs.inbox import build_answer_embed
+from src.bot.cogs.inbox import build_answer_embed, build_digest_embeds
 from src.lib.store import find_notes_by_title, get_pending_reviews
 from src.services.digest import generate_or_refresh_digest
 from src.services.query import query_brain
@@ -209,23 +209,10 @@ class CommandsCog(commands.Cog):
 
         now = datetime.now(ZoneInfo("America/New_York")).date()
         async with async_session() as session:
-            payload = await generate_or_refresh_digest(session, digest_date=now)
+            payload = await generate_or_refresh_digest(session, digest_date=now, trigger="manual")
 
-        embed = discord.Embed(
-            title=f"Daily Digest - {payload['digest_date']}",
-            color=discord.Color.gold(),
-        )
-        task_titles = [task["title"] for task in payload["tasks"][:5]] or ["No active tasks"]
-        project_titles = [project["title"] for project in payload["projects"][:5]] or ["No active projects"]
-        embed.add_field(name="Tasks", value="\n".join(task_titles), inline=False)
-        embed.add_field(name="Projects", value="\n".join(project_titles), inline=False)
-        if payload["pending_reviews"]:
-            embed.add_field(
-                name="Pending Reviews",
-                value="\n".join(item["question"] for item in payload["pending_reviews"][:3]),
-                inline=False,
-            )
-        await interaction.followup.send(embed=embed)
+        embeds = build_digest_embeds({**payload, "trigger": "manual"})
+        await interaction.followup.send(embeds=embeds)
 
 
 async def setup(bot: commands.Bot):

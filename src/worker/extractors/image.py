@@ -11,7 +11,9 @@ def _build_ocr_prompt(project_aliases: list[str]) -> str:
         "Extract ALL text from this image as clean plain text. "
         "If it is a handwritten planner or whiteboard, preserve dates and put each task or bullet on its own line. "
         "Use the known project names below to resolve ambiguous handwriting when a word is close to one of them. "
-        "Do not invent content. If a word is uncertain, prefer the closest visible text, but bias toward the known project names when the handwriting matches.\n"
+        "Do not invent content. If a word is uncertain, prefer the closest visible text, but bias toward the known project names when the handwriting matches. "
+        "Do not guess a missing year or expand a partial date into a full date unless the digits are clearly visible. "
+        "If the page appears to cover a single day, keep it as a single-day capture rather than inventing a weekly heading.\n"
         f"{alias_block}"
         "Return only the extracted text, with no commentary or markdown fences."
     )

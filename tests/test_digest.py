@@ -62,11 +62,45 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
     )
     monkeypatch.setattr(digest_service, "store", fake_store)
 
+    async def fake_compose_digest_sections(session, *, digest_date, trigger, context_text):
+        assert digest_date == "2026-03-11"
+        assert trigger == "scheduled"
+        assert "duSraBheja" in context_text
+        return {
+            "headline": "Morning operating brief",
+            "narrative": "duSraBheja is active and the API import is the freshest turning point.",
+            "recommended_tasks": [{"title": "Ship API", "why": "Highest leverage now", "project_ref": "duSraBheja"}],
+            "project_assessments": [
+                {
+                    "project": "duSraBheja",
+                    "where_it_stands": "Active",
+                    "implemented": "API import path exists",
+                    "left": "Need deeper digest intelligence",
+                    "holes": "Still thin on morning brief coverage",
+                    "next_step": "Improve digest synthesis",
+                }
+            ],
+            "writing_topics": [{"title": "Story-first retrieval", "why": "Active product theme"}],
+            "video_recommendations": [
+                {
+                    "title": "RAG critique walkthrough",
+                    "search_query": "rag critique walkthrough",
+                    "why": "Useful for current project work",
+                }
+            ],
+            "brain_teasers": [{"title": "Edge case", "prompt": "What fails first?", "hint": "Check the scheduler"}],
+        }
+
+    monkeypatch.setattr(digest_service, "compose_digest_sections", fake_compose_digest_sections)
+
     payload = asyncio.run(
         digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 11))
     )
 
+    assert payload["headline"] == "Morning operating brief"
+    assert payload["recommended_tasks"][0]["title"] == "Ship API"
     assert payload["tasks"][0]["title"] == "Ship API"
     assert payload["projects"][0]["title"] == "duSraBheja"
     assert payload["projects"][0]["updates"][0]["title"] == "Imported local snapshot"
     assert payload["pending_reviews"][0]["question"] == "Is this a project or a note?"
+    assert payload["video_recommendations"][0]["search_query"] == "rag critique walkthrough"

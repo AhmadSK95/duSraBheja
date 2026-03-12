@@ -9,7 +9,7 @@ from src.agents.base import agent_call
 from src.config import settings
 from src.constants import normalize_category, normalize_tags
 from src.lib.llm_json import LLMJSONError, parse_json_object
-from src.services.planner import extract_planner_dates
+from src.services.planner import detect_planner_scope, extract_planner_dates
 
 SYSTEM_PROMPT = """You are a personal knowledge classifier for a second brain system.
 
@@ -40,7 +40,11 @@ Rules:
 - confidence should reflect how certain you are about the category
 - Extract ALL named entities (people, projects, dates, URLs)
 - If the input mentions a deadline or urgency, set priority accordingly
-- If you're unsure between two categories, pick the most likely one but lower the confidence"""
+- If you're unsure between two categories, pick the most likely one but lower the confidence
+- For planner images or handwritten pages:
+  - daily_planner means one day/page, even if it has many bullets
+  - weekly_planner means multiple dated sections, multiple weekday headers, or an explicit weekly scope
+  - never infer a weekly planner from bullet count alone"""
 
 
 async def classify(
@@ -131,6 +135,21 @@ def _parse_classifier_response(response_text: str, original_text: str) -> dict:
         entity_value = str(entity.get("value") or "").strip()
         if entity_type and entity_value:
             entities.append({"type": entity_type, "value": entity_value})
+
+    planner_scope = detect_planner_scope(original_text, entities)
+    if category in {"daily_planner", "weekly_planner"} and planner_scope and planner_scope != category:
+        category = planner_scope
+        confidence = max(confidence, 0.8 if category == "daily_planner" else 0.84)
+
+    if category not in {"daily_planner", "weekly_planner"} and planner_scope:
+        bullet_count = sum(
+            1
+            for line in (original_text or "").splitlines()
+            if line.strip().startswith(("→", "-", "*", "•"))
+        )
+        if bullet_count >= 3:
+            category = planner_scope
+            confidence = max(confidence, 0.76)
 
     return {
         "category": category,

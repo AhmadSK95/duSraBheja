@@ -15,6 +15,12 @@ _DATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _BULLET_PREFIX = re.compile(r"^(?:[\u2192•*\-]+|\d+[.)])\s*")
+_DAY_NAME_PATTERN = re.compile(
+    r"\b(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b",
+    re.IGNORECASE,
+)
+_WEEK_SCOPE_PATTERN = re.compile(r"\b(weekly|week of|this week|next week)\b", re.IGNORECASE)
+_DAY_SCOPE_PATTERN = re.compile(r"\b(today|daily|tomorrow|agenda|plan for today)\b", re.IGNORECASE)
 
 
 def _clean_date_label(label: str) -> str:
@@ -67,6 +73,23 @@ def extract_planner_dates(text: str, entities: list[dict] | None = None) -> list
         }
         for iso_date, payload in sorted(seen.items())
     ]
+
+
+def detect_planner_scope(text: str, entities: list[dict] | None = None) -> str | None:
+    dates = extract_planner_dates(text, entities)
+    lowered = (text or "").lower()
+    explicit_week = bool(_WEEK_SCOPE_PATTERN.search(lowered))
+    explicit_day = bool(_DAY_SCOPE_PATTERN.search(lowered))
+
+    seen_days: set[str] = set()
+    for match in _DAY_NAME_PATTERN.finditer(lowered):
+        seen_days.add(match.group(1)[:3].lower())
+
+    if explicit_week or len(dates) >= 2 or len(seen_days) >= 2:
+        return "weekly_planner"
+    if len(dates) == 1 or len(seen_days) == 1 or explicit_day:
+        return "daily_planner"
+    return None
 
 
 def _strip_item_prefix(line: str) -> str:
