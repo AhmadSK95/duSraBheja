@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 from src.services import digest as digest_service
+from src.bot.cogs.inbox import build_board_embed, build_digest_embeds
 
 
 @dataclass
@@ -119,3 +120,41 @@ def test_build_daily_digest_payload_generates_missing_board(monkeypatch) -> None
 
     assert calls["generated"] == "2026-03-12"
     assert payload["summary"] == "Fresh board"
+
+
+def test_digest_and_board_embeds_fit_discord_field_limits() -> None:
+    board_embed = build_board_embed(
+        {
+            "board_type": "daily",
+            "coverage_label": "Friday, Mar 13, 2026",
+            "story": "x" * 3500,
+            "what_mattered": ["y" * 300 for _ in range(8)],
+            "carry_forward": ["z" * 300 for _ in range(8)],
+            "project_signals": [{"project": f"project-{idx}", "summary": "w" * 300} for idx in range(6)],
+            "source_count": 12,
+            "excluded_count": 2,
+        }
+    )
+    digest_embeds = build_digest_embeds(
+        {
+            "digest_date": "2026-03-13",
+            "summary": "x" * 3500,
+            "board_date": "2026-03-12",
+            "project_status": [
+                {
+                    "project": f"project-{idx}",
+                    "where_it_stands": "a" * 300,
+                    "what_changed": "b" * 300,
+                    "blocked_or_unclear": "c" * 300,
+                    "best_next_move": "d" * 300,
+                }
+                for idx in range(5)
+            ],
+            "possible_tasks": [{"title": "t" * 250, "why": "u" * 250} for _ in range(8)],
+            "reminders_due_today": [{"title": "r" * 250, "next_fire_at": "today"} for _ in range(8)],
+        }
+    )
+
+    for embed in [board_embed, *digest_embeds]:
+        for field in embed.fields:
+            assert len(field.value) <= 1024

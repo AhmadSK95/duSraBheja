@@ -78,6 +78,27 @@ def _artifact_line(item: dict) -> str | None:
     return summary[:180]
 
 
+def _is_low_signal_board_item(item: dict) -> bool:
+    artifact = item["artifact"]
+    source = getattr(artifact, "source", None)
+    metadata = dict(getattr(artifact, "metadata_", {}) or {})
+    source_metadata = dict(metadata.get("source_metadata") or {})
+    tags = set(item.get("tags") or [])
+    snapshot_kind = source_metadata.get("snapshot_kind") or metadata.get("snapshot_kind")
+    entry_type = metadata.get("entry_type")
+
+    if source in {"collector", "github"} and snapshot_kind in {"repo", "context_workspace", "directory_inventory"}:
+        return True
+    if source == "collector" and entry_type in {"context_dump", "context_signal_dump"}:
+        return True
+    if {"repo-snapshot", "inventory", "local-context"} & tags:
+        return True
+    summary = (artifact.summary or "").lower()
+    if source == "collector" and ("local snapshot" in summary or "agent context snapshot" in summary):
+        return True
+    return False
+
+
 def _carry_forward_from_text(text: str) -> list[str]:
     lines: list[str] = []
     for raw_line in (text or "").splitlines():
@@ -99,7 +120,7 @@ def _carry_forward_from_text(text: str) -> list[str]:
 
 
 async def build_board_payload(session, *, window: BoardWindow) -> tuple[dict, list[str], list[str]]:
-    validated = await store.list_artifacts_for_window(
+    validated_candidates = await store.list_artifacts_for_window(
         session,
         start=window.coverage_start_utc,
         end=window.coverage_end_utc,
@@ -111,11 +132,13 @@ async def build_board_payload(session, *, window: BoardWindow) -> tuple[dict, li
         start=window.coverage_start_utc,
         end=window.coverage_end_utc,
     )
+    low_signal_excluded = [str(item["artifact"].id) for item in validated_candidates if _is_low_signal_board_item(item)]
+    validated = [item for item in validated_candidates if not _is_low_signal_board_item(item)]
     excluded_ids = [
         str(item["artifact"].id)
         for item in all_items
         if item["validation_status"] != "validated" or not item["eligible_for_boards"]
-    ]
+    ] + low_signal_excluded
     source_ids = [str(item["artifact"].id) for item in validated]
 
     recent_activity = await store.list_story_events(

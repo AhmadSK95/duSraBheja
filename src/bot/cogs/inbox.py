@@ -483,7 +483,10 @@ def _format_digest_entries(values: list[str], *, limit: int = 5, max_line: int =
     trimmed = [value for value in values if value][:limit]
     if not trimmed:
         return "None"
-    return "\n".join(f"- {value[:max_line]}" for value in trimmed)
+    rendered = "\n".join(f"- {value[:max_line]}" for value in trimmed)
+    if len(rendered) <= 1024:
+        return rendered
+    return rendered[:1021].rstrip() + "..."
 
 
 def build_classification_embed(classification: dict, summary: str, artifact_id: str) -> discord.Embed:

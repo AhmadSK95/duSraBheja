@@ -46,6 +46,8 @@ def _page(title: str, body: str, *, token: str) -> HTMLResponse:
   <body>
     <div class="nav">
       <a href="/dashboard/artifacts?token={safe_token}">Artifacts</a>
+      <a href="/dashboard/notes?token={safe_token}">Notes</a>
+      <a href="/dashboard/projects?token={safe_token}">Projects</a>
       <a href="/dashboard/review?token={safe_token}">Review</a>
       <a href="/dashboard/boards?token={safe_token}">Boards</a>
       <a href="/dashboard/sync-health?token={safe_token}">Sync Health</a>
@@ -144,6 +146,60 @@ async def dashboard_review(token: str = Query(default="")) -> HTMLResponse:
         + "</tbody></table>"
     )
     return _page("Review Queue", body, token=token)
+
+
+@router.get("/dashboard/notes", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_notes(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        notes = await store.list_notes(session, limit=200)
+    rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(note.category)}</td>"
+        f"<td>{html.escape(note.title)}</td>"
+        f"<td>{html.escape((note.content or '')[:220])}</td>"
+        f"<td>{note.updated_at}</td>"
+        "</tr>"
+        for note in notes
+    )
+    body = (
+        "<h1>Notes</h1>"
+        "<p>Latest durable notes in the brain, across categories.</p>"
+        "<table><thead><tr><th>Category</th><th>Title</th><th>Preview</th><th>Updated</th></tr></thead><tbody>"
+        + (rows or "<tr><td colspan='4'>No notes yet.</td></tr>")
+        + "</tbody></table>"
+    )
+    return _page("Notes", body, token=token)
+
+
+@router.get("/dashboard/projects", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshots = await store.list_project_state_snapshots(session, limit=50)
+        rows = []
+        for snapshot in snapshots:
+            project = await store.get_note(session, snapshot.project_note_id)
+            if not project:
+                continue
+            blockers = ", ".join((snapshot.blockers or [])[:2]) or "none"
+            rows.append(
+                "<tr>"
+                f"<td>{html.escape(project.title)}</td>"
+                f"<td>{html.escape(snapshot.status)}</td>"
+                f"<td>{snapshot.active_score:.2f}</td>"
+                f"<td>{html.escape((snapshot.implemented or '')[:220])}</td>"
+                f"<td>{html.escape((snapshot.what_changed or '')[:180])}</td>"
+                f"<td>{html.escape(blockers)}</td>"
+                f"<td>{snapshot.updated_at}</td>"
+                "</tr>"
+            )
+    body = (
+        "<h1>Projects</h1>"
+        "<p>Current project-state snapshots ranked by activity score.</p>"
+        "<table><thead><tr><th>Project</th><th>Status</th><th>Score</th><th>Where It Stands</th><th>What Changed</th><th>Blockers</th><th>Updated</th></tr></thead><tbody>"
+        + ("".join(rows) or "<tr><td colspan='7'>No project snapshots yet.</td></tr>")
+        + "</tbody></table>"
+    )
+    return _page("Projects", body, token=token)
 
 
 @router.get("/dashboard/boards", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
