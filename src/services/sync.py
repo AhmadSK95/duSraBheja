@@ -254,8 +254,6 @@ async def run_github_sync(session: AsyncSession) -> dict:
             project_note_ids=[uuid.UUID(value) for value in sorted(project_note_ids_touched)],
         )
     await _publish_sync_event(result)
-    if imported:
-        await _trigger_story_pulse(reason="github:sync", metadata=result)
     return result
 
 
@@ -308,8 +306,6 @@ async def record_sync_report(
     if error:
         result["error"] = error
     await _publish_sync_event(result)
-    if items_imported:
-        await _trigger_story_pulse(reason=f"{source_type}:{mode}", metadata=result)
     return result
 
 
@@ -317,6 +313,11 @@ async def _publish_sync_event(payload: dict) -> None:
     from src.worker.main import EVENT_SYNC_COMPLETED, publish_event
 
     await publish_event(EVENT_SYNC_COMPLETED, payload)
+
+
+async def _trigger_story_pulse(*, reason: str, metadata: dict) -> None:
+    """Retained as a no-op compatibility hook while story-pulse posting is disabled."""
+    return None
 
 
 async def _extract_story_fields(
@@ -369,9 +370,3 @@ async def _extract_story_fields(
             "evidence_refs": [],
             "tags": ["conversation"],
         }
-
-
-async def _trigger_story_pulse(*, reason: str, metadata: dict) -> None:
-    from src.worker.main import enqueue_story_pulse_digest
-
-    await enqueue_story_pulse_digest(reason=reason, metadata=metadata)

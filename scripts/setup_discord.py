@@ -10,11 +10,10 @@ from src.config import settings
 
 CHANNELS = [
     ("inbox", "Drop anything here — the brain will classify and route it"),
-    ("daily-planner", "Daily planning entries and screenshots"),
-    ("weekly-planner", "Weekly planning entries and screenshots"),
-    ("needs-review", "Items that need your clarification"),
-    ("daily-digest", "Morning digest with tasks, project progress, and recommendations"),
-    ("ask-brain", "Operator channel for asking the brain questions and reviewing outputs"),
+    ("daily-board", "Yesterday's validated story board, generated each morning"),
+    ("weekly-board", "Weekly narrative board covering the fully closed previous week"),
+    ("daily-digest", "Simple morning brief with project status, possible tasks, and reminders"),
+    ("ask-brain", "Ask the brain questions here"),
 ]
 
 

@@ -16,6 +16,28 @@ BRAIN_CATEGORIES = (
     "weekly_planner",
 )
 
+CAPTURE_INTENTS = (
+    "thought",
+    "idea",
+    "question",
+    "critique",
+    "plan_capture",
+    "status_update",
+    "reference",
+    "reminder_request",
+)
+
+VALIDATION_STATUSES = (
+    "validated",
+    "needs_review",
+    "rejected",
+)
+
+BOARD_TYPES = (
+    "daily",
+    "weekly",
+)
+
 LEGACY_CATEGORY_ALIASES = {
     "planner": "daily_planner",
 }
@@ -28,8 +50,8 @@ CATEGORY_CHANNELS = {
     "note": "notes",
     "resource": "resources",
     "reminder": "reminders",
-    "daily_planner": "daily-planner",
-    "weekly_planner": "weekly-planner",
+    "daily_planner": "daily-board",
+    "weekly_planner": "weekly-board",
 }
 
 MERGEABLE_CATEGORIES = {"project", "people", "resource"}
@@ -44,6 +66,7 @@ SOURCE_TYPES = (
     "drive",
     "google_keep",
     "apple_notes",
+    "browser_activity",
     "youtube_history",
     "google_search_history",
     "ott_history",

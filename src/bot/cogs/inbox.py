@@ -1,4 +1,4 @@
-"""Inbox Cog — listens on #inbox, enqueues processing, handles review threads."""
+"""Inbox Cog — stores captures silently and publishes only boards, digest, answers, and reminders."""
 
 import asyncio
 import json
@@ -13,7 +13,7 @@ from src.agents.retriever import answer_question
 from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_artifact, get_review_by_thread, resolve_review, set_review_thread, update_artifact
+from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -42,10 +42,18 @@ class InboxCog(commands.Cog):
         return channel.name == settings.inbox_channel_name
 
     def _is_planner_channel(self, channel: discord.TextChannel) -> bool:
-        return channel.name in {"daily-planner", "weekly-planner"}
+        return channel.name in {
+            settings.daily_board_channel_name,
+            settings.weekly_board_channel_name,
+            "daily-planner",
+            "weekly-planner",
+        }
 
     def _is_ask_channel(self, channel: discord.TextChannel) -> bool:
         return channel.name == settings.ask_channel_name
+
+    def _is_digest_channel(self, channel: discord.TextChannel) -> bool:
+        return channel.name == settings.daily_digest_channel_name
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -67,9 +75,10 @@ class InboxCog(commands.Cog):
             await self._handle_ask_message(message)
             return
 
-        # Handle #planner captures (text and images both become planner notes/cards)
-        if isinstance(message.channel, discord.TextChannel) and self._is_planner_channel(message.channel):
-            await self._handle_planner_capture(message)
+        if isinstance(message.channel, discord.TextChannel) and (
+            self._is_planner_channel(message.channel) or self._is_digest_channel(message.channel)
+        ):
+            await self._handle_feedback_capture(message)
             return
 
     async def _handle_inbox_message(self, message: discord.Message):
@@ -90,43 +99,55 @@ class InboxCog(commands.Cog):
         # Enqueue ARQ job
         from src.worker.main import enqueue_ingest
 
+        explicit_hint = _extract_capture_hint(message.content or "")
         await enqueue_ingest(
             discord_message_id=str(message.id),
             discord_channel_id=str(message.channel.id),
             text=message.content,
             attachments=attachments,
+            force_category=explicit_hint,
+            metadata={
+                "channel_name": message.channel.name,
+                "ingest_hint": explicit_hint,
+                "capture_context": "inbox",
+                **_reply_target_metadata(message),
+            },
         )
 
         log.info(f"Enqueued inbox message {message.id} ({len(attachments)} attachments)")
 
-    async def _handle_planner_capture(self, message: discord.Message):
-        """Store planner text or images and force them through the planner flow."""
-        await message.add_reaction("\U0001f4c5")
-
+    async def _handle_feedback_capture(self, message: discord.Message):
+        """Store replies or comments on generated board/digest channels as silent feedback captures."""
         attachments = [
             {
                 "url": att.url,
                 "filename": att.filename,
-                "content_type": att.content_type or "image/png",
+                "content_type": att.content_type or "application/octet-stream",
                 "size": att.size,
             }
             for att in message.attachments
-            if att.content_type and att.content_type.startswith("image/")
         ]
-
         if not attachments and not (message.content or "").strip():
             return
 
+        await message.add_reaction("\U0001f9e0")
         from src.worker.main import enqueue_ingest
 
+        explicit_hint = _extract_capture_hint(message.content or "")
         await enqueue_ingest(
             discord_message_id=str(message.id),
             discord_channel_id=str(message.channel.id),
-            text=message.content or f"[{message.channel.name} image]",
+            text=message.content or f"[{message.channel.name} feedback]",
             attachments=attachments,
-            force_category="daily_planner" if message.channel.name == "daily-planner" else "weekly_planner",
+            force_category=explicit_hint,
+            metadata={
+                "channel_name": message.channel.name,
+                "ingest_hint": explicit_hint,
+                "capture_context": "feedback",
+                **_reply_target_metadata(message),
+            },
         )
-        log.info("Enqueued planner capture %s from #%s", message.id, message.channel.name)
+        log.info("Enqueued feedback capture %s from #%s", message.id, message.channel.name)
 
     async def _handle_thread_reply(self, message: discord.Message):
         """Handle user replies in review threads."""
@@ -205,8 +226,8 @@ class InboxCog(commands.Cog):
         pubsub = redis.pubsub()
         await pubsub.subscribe(
             "brain:artifact_processed",
-            "brain:review_created",
             "brain:artifact_failed",
+            "brain:board_ready",
             "brain:digest_ready",
             "brain:sync_completed",
             "brain:reminder_due",
@@ -222,10 +243,10 @@ class InboxCog(commands.Cog):
                 payload = json.loads(message["data"])
                 if channel_name == "brain:artifact_processed":
                     await self._handle_artifact_processed(payload)
-                elif channel_name == "brain:review_created":
-                    await self._handle_review_created(payload)
                 elif channel_name == "brain:artifact_failed":
                     await self._handle_artifact_failed(payload)
+                elif channel_name == "brain:board_ready":
+                    await self._handle_board_ready(payload)
                 elif channel_name == "brain:digest_ready":
                     await self._handle_digest_ready(payload)
                 elif channel_name == "brain:sync_completed":
@@ -237,8 +258,8 @@ class InboxCog(commands.Cog):
         finally:
             await pubsub.unsubscribe(
                 "brain:artifact_processed",
-                "brain:review_created",
                 "brain:artifact_failed",
+                "brain:board_ready",
                 "brain:digest_ready",
                 "brain:sync_completed",
                 "brain:reminder_due",
@@ -272,124 +293,8 @@ class InboxCog(commands.Cog):
         source_message = await source_channel.fetch_message(int(message_id))
         await source_message.add_reaction("\u2705")
 
-        planner = payload.get("planner") or {}
-        weekly_rollup = payload.get("weekly_rollup") or {}
-        receipt = discord.Embed(
-            title="Brain Receipt",
-            description=payload.get("summary") or payload.get("note_title") or "Stored in the brain.",
-            color=discord.Color.green(),
-        )
-        receipt.add_field(name="Category", value=payload["category"].replace("_", " ").title(), inline=True)
-        receipt.add_field(name="Confidence", value=f"{payload.get('confidence', 0):.0%}", inline=True)
-        receipt.add_field(name="Stored", value="Yes", inline=True)
-        receipt.add_field(name="Note", value=payload.get("note_title") or "Untitled", inline=False)
-        receipt.add_field(
-            name="Pipeline",
-            value="Ingested -> Classified -> Stored",
-            inline=False,
-        )
-        tags = payload.get("tags") or []
-        if tags:
-            receipt.add_field(name="Tags", value=", ".join(tags[:10]), inline=False)
-        if planner.get("dates"):
-            receipt.add_field(name="Planner Dates", value=_format_list(planner["dates"]), inline=False)
-        if planner.get("top_items"):
-            receipt.add_field(name="Top Items", value=_format_list(planner["top_items"]), inline=False)
-
-        planner_message = None
-        weekly_message = None
-        target_channel_name = payload.get("category_channel")
-        if payload.get("category") in {"daily_planner", "weekly_planner"} and target_channel_name:
-            target_channel = discord.utils.get(source_channel.guild.text_channels, name=target_channel_name)
-            if target_channel:
-                planner_card = discord.Embed(
-                    title=planner.get("title") or payload.get("note_title") or payload["category"].replace("_", " ").title(),
-                    description=(planner.get("summary") or payload.get("summary") or "Planner stored.")[:4000],
-                    color=discord.Color.purple() if payload["category"] == "daily_planner" else discord.Color.dark_purple(),
-                )
-                planner_card.add_field(name="Type", value=payload["category"].replace("_", " ").title(), inline=True)
-                planner_card.add_field(name="Status", value="Ingested", inline=True)
-                if planner.get("dates"):
-                    planner_card.add_field(name="Dates", value=_format_list(planner["dates"]), inline=False)
-                if planner.get("top_items"):
-                    planner_card.add_field(name="Top Items", value=_format_list(planner["top_items"]), inline=False)
-                if planner.get("focus_projects"):
-                    planner_card.add_field(name="Projects", value=_format_list(planner["focus_projects"]), inline=False)
-                if planner.get("focus_people"):
-                    planner_card.add_field(name="People", value=_format_list(planner["focus_people"]), inline=False)
-                planner_card.add_field(
-                    name="Source",
-                    value=f"[Open original]({source_message.jump_url})",
-                    inline=False,
-                )
-                planner_message = await target_channel.send(embed=planner_card)
-                await source_message.add_reaction("\U0001f4c5")
-
-        if weekly_rollup:
-            weekly_channel = discord.utils.get(source_channel.guild.text_channels, name="weekly-planner")
-            if weekly_channel:
-                weekly_card = discord.Embed(
-                    title=weekly_rollup.get("title") or "Weekly Rollup",
-                    description=weekly_rollup.get("summary") or "Weekly planner rollup updated.",
-                    color=discord.Color.dark_purple(),
-                )
-                if weekly_rollup.get("dates"):
-                    weekly_card.add_field(name="Dates", value=_format_list(weekly_rollup["dates"]), inline=False)
-                if weekly_rollup.get("top_items"):
-                    weekly_card.add_field(name="Top Items", value=_format_list(weekly_rollup["top_items"]), inline=False)
-                weekly_card.add_field(name="Source", value=f"[Open original]({source_message.jump_url})", inline=False)
-                weekly_message = await weekly_channel.send(embed=weekly_card)
-
-        if planner_message:
-            receipt.add_field(
-                name="Planner Card",
-                value=f"[Open card]({planner_message.jump_url})",
-                inline=False,
-            )
-        if weekly_message:
-            receipt.add_field(
-                name="Weekly Rollup",
-                value=f"[Open card]({weekly_message.jump_url})",
-                inline=False,
-            )
-
-        receipt_message = await source_message.reply(embed=receipt, mention_author=False)
-
-        artifact_id = payload.get("artifact_id")
-        if artifact_id:
-            await self._store_artifact_outputs(
-                artifact_id,
-                receipt_message=receipt_message,
-                planner_message=planner_message,
-                weekly_message=weekly_message,
-            )
-
     async def _handle_review_created(self, payload: dict):
-        channel_id = payload.get("discord_channel_id")
-        message_id = payload.get("discord_message_id")
-        if not channel_id or not message_id:
-            return
-
-        channel = await self.bot.fetch_channel(int(channel_id))
-        if not isinstance(channel, discord.TextChannel):
-            return
-
-        message = await channel.fetch_message(int(message_id))
-        thread = await message.create_thread(
-            name=f"brain-review-{payload['review_id'][:8]}",
-            auto_archive_duration=1440,
-        )
-        await thread.send(
-            embed=discord.Embed(
-                title="Need Clarification",
-                description=payload["question"],
-                color=discord.Color.orange(),
-            )
-        )
-        await message.add_reaction("\u2753")
-
-        async with async_session() as session:
-            await set_review_thread(session, payload["review_id"], str(thread.id))
+        log.info("Review created for moderation queue: %s", payload.get("review_id"))
 
     async def _handle_artifact_failed(self, payload: dict):
         channel_id = payload.get("discord_channel_id")
@@ -403,15 +308,19 @@ class InboxCog(commands.Cog):
 
         message = await channel.fetch_message(int(message_id))
         await message.add_reaction("\u274c")
-        embed = discord.Embed(
-            title="Brain Processing Failed",
-            description="This message was seen, but it was not fully stored yet.",
-            color=discord.Color.red(),
+
+    async def _handle_board_ready(self, payload: dict):
+        embed = build_board_embed(payload)
+        channel_name = payload.get("channel_name") or (
+            settings.daily_board_channel_name if payload.get("board_type") == "daily" else settings.weekly_board_channel_name
         )
-        embed.add_field(name="Stage", value=str(payload.get("stage") or "unknown").title(), inline=True)
-        embed.add_field(name="Stored", value="No", inline=True)
-        embed.add_field(name="Error", value=(payload.get("error") or "Unknown error")[:1000], inline=False)
-        await message.reply(embed=embed, mention_author=False)
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            channel_name,
+            embed,
+            fallback_names=_legacy_board_fallback_names(channel_name),
+        )
 
     async def _handle_digest_ready(self, payload: dict):
         for embed in build_digest_embeds(payload):
@@ -423,36 +332,12 @@ class InboxCog(commands.Cog):
             )
 
     async def _handle_sync_completed(self, payload: dict):
-        status = (payload.get("status") or "completed").lower()
-        color = discord.Color.gold() if status == "noop" else discord.Color.green()
-        embed = discord.Embed(
-            title="Brain Sync Receipt",
-            description=f"{payload.get('source_name') or 'sync'} {status}.",
-            color=color,
-        )
-        embed.add_field(name="Mode", value=str(payload.get("mode") or "sync").title(), inline=True)
-        embed.add_field(name="Seen", value=str(payload.get("items_seen") or 0), inline=True)
-        embed.add_field(name="Imported", value=str(payload.get("items_imported") or 0), inline=True)
-
-        if payload.get("device_name"):
-            embed.add_field(name="Device", value=str(payload["device_name"]), inline=True)
-        if payload.get("source_type"):
-            embed.add_field(name="Source", value=str(payload["source_type"]).title(), inline=True)
-        projects_touched = ((payload.get("metadata") or {}).get("projects_touched")) or payload.get("projects_touched") or []
-        if projects_touched:
-            embed.add_field(
-                name="Projects Touched",
-                value="\n".join(projects_touched[:5]),
-                inline=False,
-            )
-        if payload.get("sync_run_id"):
-            embed.set_footer(text=f"Sync run: {payload['sync_run_id'][:8]}")
-
-        await post_to_channel(
-            self.bot,
-            settings.discord_guild_id,
-            settings.daily_digest_channel_name,
-            embed,
+        log.info(
+            "Sync completed: %s status=%s seen=%s imported=%s",
+            payload.get("source_name") or payload.get("source_type") or "sync",
+            payload.get("status"),
+            payload.get("items_seen"),
+            payload.get("items_imported"),
         )
 
     async def _handle_reminder_due(self, payload: dict):
@@ -514,6 +399,8 @@ async def post_to_channel(
     guild_id: int,
     channel_name: str,
     embed: discord.Embed,
+    *,
+    fallback_names: tuple[str, ...] = (),
 ) -> discord.Message | None:
     """Post an embed to a named channel. Returns the posted message."""
     guild = bot.get_guild(guild_id)
@@ -523,7 +410,13 @@ async def post_to_channel(
 
     channel = discord.utils.get(guild.text_channels, name=channel_name)
     if not channel:
-        log.error(f"Channel #{channel_name} not found in guild {guild_id}")
+        for fallback in fallback_names:
+            channel = discord.utils.get(guild.text_channels, name=fallback)
+            if channel:
+                break
+    if not channel:
+        names = ", ".join((channel_name, *fallback_names))
+        log.error(f"Channel(s) #{names} not found in guild {guild_id}")
         return None
 
     return await channel.send(embed=embed)
@@ -543,6 +436,47 @@ def _looks_like_reminder_request(text: str) -> bool:
         or lowered.startswith("set a reminder")
         or re.search(r"\bevery\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
     )
+
+
+def _extract_capture_hint(text: str) -> str | None:
+    lowered = (text or "").lower()
+    if "#daily-plan" in lowered:
+        return "daily_planner"
+    if "#weekly-plan" in lowered:
+        return "weekly_planner"
+    return None
+
+
+def _reply_target_metadata(message: discord.Message) -> dict:
+    reference = getattr(message, "reference", None)
+    resolved = getattr(reference, "resolved", None)
+    if not isinstance(resolved, discord.Message):
+        return {}
+
+    channel_name = getattr(message.channel, "name", "")
+    if channel_name in {settings.daily_board_channel_name, "daily-planner"}:
+        target_kind = "daily_board"
+    elif channel_name in {settings.weekly_board_channel_name, "weekly-planner"}:
+        target_kind = "weekly_board"
+    elif channel_name == settings.daily_digest_channel_name:
+        target_kind = "daily_digest"
+    else:
+        target_kind = "message"
+
+    return {
+        "reply_target_kind": target_kind,
+        "reply_target_message_id": str(resolved.id),
+        "reply_target_author_id": str(resolved.author.id),
+        "reply_target_channel_id": str(resolved.channel.id),
+    }
+
+
+def _legacy_board_fallback_names(channel_name: str) -> tuple[str, ...]:
+    if channel_name == settings.daily_board_channel_name:
+        return ("daily-planner",)
+    if channel_name == settings.weekly_board_channel_name:
+        return ("weekly-planner",)
+    return ()
 
 
 def _format_digest_entries(values: list[str], *, limit: int = 5, max_line: int = 180) -> str:
@@ -634,208 +568,91 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
 
 
 def build_digest_embeds(payload: dict) -> list[discord.Embed]:
-    trigger = payload.get("trigger") or "scheduled"
-    is_story_pulse = trigger == "story_pulse"
-    title = f"{'Story Pulse' if is_story_pulse else 'Daily Digest'} - {payload.get('digest_date')}"
-    description = payload.get("narrative") or (
-        "New grounded story signals just landed." if is_story_pulse else "Fresh morning snapshot from the brain."
-    )
-
-    primary = discord.Embed(
-        title=title,
-        description=description[:4000],
+    embed = discord.Embed(
+        title=f"Daily Digest - {payload.get('digest_date')}",
+        description=(payload.get("summary") or payload.get("headline") or "Morning operating brief.")[:4000],
         color=discord.Color.gold(),
     )
-    if payload.get("headline"):
-        primary.add_field(name="Headline", value=str(payload["headline"])[:1024], inline=False)
-
-    recommended_tasks = payload.get("recommended_tasks") or []
-    if recommended_tasks:
-        primary.add_field(
-            name="Tasks To Pick Up",
-            value=_format_digest_entries(
-                [f"{item.get('title')} — {item.get('why')}" for item in recommended_tasks[:6]],
-                limit=6,
-                max_line=140,
-            ),
-            inline=False,
-        )
-    else:
-        task_titles = [task["title"] for task in payload.get("tasks", [])[:5]] or ["No active tasks"]
-        primary.add_field(name="Tasks To Pick Up", value=_format_digest_entries(task_titles), inline=False)
-
-    project_assessments = payload.get("project_assessments") or []
-    if project_assessments:
-        primary.add_field(
+    project_status = payload.get("project_status") or []
+    if project_status:
+        embed.add_field(
             name="Project Status",
             value=_format_digest_entries(
                 [
                     (
                         f"{item.get('project')}: {item.get('where_it_stands')} "
-                        f"| Left: {item.get('left')} | Hole: {item.get('holes')}"
+                        f"| Changed: {item.get('what_changed')} "
+                        f"| Blocked: {item.get('blocked_or_unclear')} "
+                        f"| Next: {item.get('best_next_move')}"
                     )
-                    for item in project_assessments[:5]
-                ]
-            ),
-            inline=False,
-        )
-    else:
-        project_titles = [project["title"] for project in payload.get("projects", [])[:5]] or ["No active projects"]
-        primary.add_field(name="Project Status", value=_format_digest_entries(project_titles), inline=False)
-
-    if payload.get("open_loops"):
-        primary.add_field(
-            name="Open Loops",
-            value=_format_digest_entries(
-                [item.get("open_question") or item.get("title") or "Open loop" for item in payload["open_loops"][:5]]
-            ),
-            inline=False,
-        )
-    if payload.get("synapses"):
-        primary.add_field(
-            name="New Synapses",
-            value=_format_digest_entries(
-                [
-                    f"{item.get('title')} — {item.get('summary') or item.get('project_ref') or 'Fresh cross-project connection'}"
-                    for item in payload["synapses"][:5]
-                ]
-            ),
-            inline=False,
-        )
-    if payload.get("reminders_due_today"):
-        primary.add_field(
-            name="Due Today",
-            value=_format_digest_entries(
-                [f"{item.get('title')} — {item.get('next_fire_at') or 'today'}" for item in payload["reminders_due_today"][:5]]
-            ),
-            inline=False,
-        )
-    if payload.get("low_confidence_sections"):
-        primary.add_field(
-            name="Low Confidence",
-            value=_format_digest_entries([str(item) for item in payload["low_confidence_sections"][:5]]),
-            inline=False,
-        )
-
-    secondary = discord.Embed(title="Brain Curator", color=discord.Color.blurple())
-    has_secondary_fields = False
-
-    writing_topics = payload.get("writing_topic_items") or []
-    if writing_topics:
-        secondary.add_field(
-            name="Writing Topics",
-            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in writing_topics[:5]]),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    best_ideas = payload.get("best_ideas") or []
-    if best_ideas:
-        secondary.add_field(
-            name="Best Ideas From Your Brain",
-            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in best_ideas[:5]]),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    video_recommendations = payload.get("video_recommendations") or []
-    if video_recommendations:
-        secondary.add_field(
-            name="Watch On YouTube",
-            value=_format_digest_entries(
-                [
-                    f"{item.get('title')} — {item.get('url') or f'search: {item.get(\"search_query\") or \"unknown\"}'}"
-                    for item in video_recommendations[:5]
-                ]
-            ),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    brain_teasers = payload.get("brain_teasers") or []
-    if brain_teasers:
-        secondary.add_field(
-            name="Brain Teasers",
-            value=_format_digest_entries(
-                [
-                    f"{item.get('title')}: {item.get('prompt')}"
-                    + (f" — {item.get('url')}" if item.get("url") else "")
-                    for item in brain_teasers[:5]
-                ]
-            ),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    improvement_focus = payload.get("improvement_focus") or []
-    if improvement_focus:
-        secondary.add_field(
-            name="Improve By Working Here",
-            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in improvement_focus[:5]]),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    recent_titles = [
-        f"{entry.get('title')} ({entry.get('actor_name') or 'unknown'})"
-        for entry in payload.get("recent_activity", [])[:5]
-    ]
-    if recent_titles:
-        secondary.add_field(name="Recent Activity", value=_format_digest_entries(recent_titles), inline=False)
-        has_secondary_fields = True
-
-    if payload.get("story_connections"):
-        connection_lines = [
-            f"{item.get('subject_ref')} ({item.get('mentions')} mentions)"
-            for item in payload["story_connections"][:5]
-            if item.get("subject_ref")
-        ]
-        if connection_lines:
-            secondary.add_field(name="Connections", value=_format_digest_entries(connection_lines), inline=False)
-            has_secondary_fields = True
-
-    if payload.get("brain_learnings"):
-        secondary.add_field(
-            name="What The Brain Learned",
-            value=_format_digest_entries(
-                [f"{item.get('title')} — {item.get('summary') or 'Fresh external learning'}" for item in payload["brain_learnings"][:5]]
-            ),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    if payload.get("blind_spots"):
-        secondary.add_field(
-            name="Blind Spots",
-            value=_format_digest_entries(
-                [f"{item.get('title')} — {item.get('summary') or 'Missing evidence'}" for item in payload["blind_spots"][:5]]
-            ),
-            inline=False,
-        )
-        has_secondary_fields = True
-
-    voice_profile = payload.get("voice_profile") or {}
-    if voice_profile:
-        tone = ", ".join((voice_profile.get("traits") or {}).get("tone") or []) or "unknown"
-        priorities = ", ".join((voice_profile.get("traits") or {}).get("priorities") or []) or "unknown"
-        secondary.add_field(
-            name="Voice Alignment",
-            value=_format_digest_entries(
-                [
-                    f"Summary: {voice_profile.get('summary') or 'No profile yet'}",
-                    f"Tone: {tone}",
-                    f"Priorities: {priorities}",
+                    for item in project_status[:5]
                 ],
-                limit=3,
+                limit=5,
+                max_line=220,
             ),
             inline=False,
         )
-        has_secondary_fields = True
+    task_lines = [
+        f"{item.get('title')} — {item.get('why')}"
+        for item in (payload.get("possible_tasks") or [])[:8]
+    ] or ["No clear task suggestions yet."]
+    embed.add_field(
+        name="Possible Task List",
+        value=_format_digest_entries(task_lines, limit=8, max_line=180),
+        inline=False,
+    )
+    reminder_lines = [
+        f"{item.get('title')} — {item.get('next_fire_at') or 'today'}"
+        for item in (payload.get("reminders_due_today") or [])[:8]
+    ] or ["No reminders due today."]
+    embed.add_field(
+        name="Reminders",
+        value=_format_digest_entries(reminder_lines, limit=8, max_line=160),
+        inline=False,
+    )
+    if payload.get("board_date"):
+        embed.set_footer(text=f"Grounded in daily board for {payload['board_date']}")
+    return [embed]
 
-    if payload.get("reason"):
-        primary.set_footer(text=f"Trigger: {payload['reason']}")
 
-    return [primary, secondary] if has_secondary_fields else [primary]
+def build_board_embed(payload: dict) -> discord.Embed:
+    board_type = str(payload.get("board_type") or "daily").title()
+    coverage_label = payload.get("coverage_label") or payload.get("generated_for_date") or "unknown window"
+    embed = discord.Embed(
+        title=f"{board_type} Board - {coverage_label}",
+        description=(payload.get("story") or payload.get("summary") or "Board generated from validated signals.")[:4000],
+        color=discord.Color.blue() if payload.get("board_type") == "daily" else discord.Color.dark_blue(),
+    )
+    if payload.get("what_mattered"):
+        embed.add_field(
+            name="What Mattered",
+            value=_format_digest_entries(payload["what_mattered"], limit=8, max_line=180),
+            inline=False,
+        )
+    if payload.get("carry_forward"):
+        embed.add_field(
+            name="Carry Forward",
+            value=_format_digest_entries(payload["carry_forward"], limit=8, max_line=180),
+            inline=False,
+        )
+    if payload.get("project_signals"):
+        embed.add_field(
+            name="Project Signals",
+            value=_format_digest_entries(
+                [f"{item.get('project')}: {item.get('summary')}" for item in payload["project_signals"][:6]],
+                limit=6,
+                max_line=180,
+            ),
+            inline=False,
+        )
+    if payload.get("source_count") is not None:
+        embed.set_footer(
+            text=(
+                f"Validated sources: {payload.get('source_count', 0)}"
+                f" | Excluded: {payload.get('excluded_count', 0)}"
+            )
+        )
+    return embed
 
 
 async def setup(bot: commands.Bot):

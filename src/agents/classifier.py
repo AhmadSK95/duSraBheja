@@ -9,6 +9,7 @@ from src.agents.base import agent_call
 from src.config import settings
 from src.constants import normalize_category, normalize_tags
 from src.lib.llm_json import LLMJSONError, parse_json_object
+from src.services.capture_analysis import infer_capture_intent, validate_capture
 from src.services.planner import detect_planner_scope, extract_planner_dates
 
 SYSTEM_PROMPT = """You are a personal knowledge classifier for a second brain system.
@@ -28,6 +29,8 @@ For each input, return a JSON object with these exact fields:
 {
   "category": "one of the 9 categories above",
   "confidence": 0.0 to 1.0,
+  "capture_intent": "thought|idea|question|critique|plan_capture|status_update|reference|reminder_request",
+  "intent_confidence": 0.0 to 1.0,
   "entities": [{"type": "person|project|topic|date|url", "value": "extracted value"}],
   "tags": ["relevant", "tags"],
   "priority": "low|medium|high|urgent",
@@ -41,6 +44,7 @@ Rules:
 - Extract ALL named entities (people, projects, dates, URLs)
 - If the input mentions a deadline or urgency, set priority accordingly
 - If you're unsure between two categories, pick the most likely one but lower the confidence
+- capture_intent should describe what the user is doing with the capture, independent of storage category
 - For planner images or handwritten pages:
   - daily_planner means one day/page, even if it has many bullets
   - weekly_planner means multiple dated sections, multiple weekday headers, or an explicit weekly scope
@@ -50,6 +54,8 @@ Rules:
 async def classify(
     session: AsyncSession,
     text: str,
+    *,
+    content_type: str | None = None,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     """Classify text using Claude Haiku 4.5.
@@ -68,7 +74,7 @@ async def classify(
         trace_id=trace_id,
     )
 
-    parsed = _parse_classifier_response(result["text"], text)
+    parsed = _parse_classifier_response(result["text"], text, content_type=content_type)
     parsed["_meta"] = {
         "model": result["model"],
         "tokens_used": result["input_tokens"] + result["output_tokens"],
@@ -82,6 +88,8 @@ async def reclassify(
     session: AsyncSession,
     original_text: str,
     user_clarification: str,
+    *,
+    content_type: str | None = None,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     """Re-classify after user provides clarification."""
@@ -103,7 +111,7 @@ Classify this input considering the user's clarification."""
         trace_id=trace_id,
     )
 
-    parsed = _parse_classifier_response(result["text"], original_text)
+    parsed = _parse_classifier_response(result["text"], original_text, content_type=content_type)
     parsed["_meta"] = {
         "model": result["model"],
         "tokens_used": result["input_tokens"] + result["output_tokens"],
@@ -113,7 +121,7 @@ Classify this input considering the user's clarification."""
     return parsed
 
 
-def _parse_classifier_response(response_text: str, original_text: str) -> dict:
+def _parse_classifier_response(response_text: str, original_text: str, *, content_type: str | None = None) -> dict:
     try:
         parsed = parse_json_object(response_text)
     except LLMJSONError:
@@ -151,14 +159,32 @@ def _parse_classifier_response(response_text: str, original_text: str) -> dict:
             category = planner_scope
             confidence = max(confidence, 0.76)
 
+    capture_intent, intent_confidence = infer_capture_intent(
+        original_text,
+        category=category,
+        suggested_intent=parsed.get("capture_intent"),
+    )
+    validation = validate_capture(
+        text=original_text,
+        category=category,
+        entities=entities,
+        content_type=content_type,
+    )
+
     return {
         "category": category,
         "confidence": confidence,
+        "capture_intent": capture_intent,
+        "intent_confidence": float(parsed.get("intent_confidence") or intent_confidence),
         "entities": entities,
         "tags": normalize_tags(parsed.get("tags") or []),
         "priority": str(parsed.get("priority") or "medium").lower(),
         "suggested_action": parsed.get("suggested_action"),
         "summary": str(parsed.get("summary") or original_text[:200]).strip(),
+        "validation_status": validation["validation_status"],
+        "quality_issues": validation["quality_issues"],
+        "eligible_for_boards": validation["eligible_for_boards"],
+        "eligible_for_project_state": validation["eligible_for_project_state"],
     }
 
 

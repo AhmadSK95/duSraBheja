@@ -10,16 +10,13 @@ from discord.ext import commands
 
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_artifact_by_discord_id, get_final_classification, reset_artifact_processing
+from src.lib.store import get_artifact_by_discord_id, get_latest_classification, reset_artifact_processing
 from src.worker.main import enqueue_classify, enqueue_ingest
 
 log = logging.getLogger("brain-bot.replay")
 
-PLANNER_CHANNEL_CATEGORIES = {
-    "daily-planner": "daily_planner",
-    "weekly-planner": "weekly_planner",
-}
-DEFAULT_REPLAY_CHANNELS = ("inbox", "daily-planner", "weekly-planner")
+PLANNER_CHANNEL_CATEGORIES = {}
+DEFAULT_REPLAY_CHANNELS = ("inbox",)
 
 
 @dataclass(slots=True)
@@ -76,15 +73,8 @@ def should_skip_empty_message(message: discord.Message, *, channel_name: str) ->
     return not message.attachments
 
 
-def artifact_needs_replay(*, artifact, channel_name: str, has_final_classification: bool) -> bool:
-    metadata = dict(getattr(artifact, "metadata_", None) or {})
-    if not has_final_classification:
-        return True
-    if channel_name == settings.inbox_channel_name:
-        return not metadata.get("discord_receipt_message_id")
-    if channel_name in PLANNER_CHANNEL_CATEGORIES:
-        return not metadata.get("discord_planner_card_message_id")
-    return False
+def artifact_needs_replay(*, artifact, channel_name: str, has_any_classification: bool) -> bool:
+    return not has_any_classification
 
 
 async def _discord_message_exists(channel, message_id: str | None) -> bool:
@@ -101,29 +91,7 @@ async def _discord_message_exists(channel, message_id: str | None) -> bool:
 
 
 async def artifact_output_missing_on_discord(*, artifact, message: discord.Message, channel_name: str) -> bool:
-    metadata = dict(getattr(artifact, "metadata_", None) or {})
-    if channel_name == settings.inbox_channel_name:
-        receipt_message_id = metadata.get("discord_receipt_message_id")
-        if not receipt_message_id:
-            return True
-        return not await _discord_message_exists(message.channel, receipt_message_id)
-
-    if channel_name not in PLANNER_CHANNEL_CATEGORIES:
-        return False
-
-    planner_message_id = metadata.get("discord_planner_card_message_id")
-    planner_channel_id = metadata.get("discord_planner_card_channel_id")
-    if not planner_message_id or not planner_channel_id:
-        return True
-
-    guild = getattr(message, "guild", None)
-    planner_channel = guild.get_channel(int(planner_channel_id)) if guild else None
-    if planner_channel is None and guild and hasattr(guild, "fetch_channel"):
-        try:
-            planner_channel = await guild.fetch_channel(int(planner_channel_id))
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError, TypeError):
-            planner_channel = None
-    return not await _discord_message_exists(planner_channel, planner_message_id)
+    return False
 
 
 def attachment_payloads(message: discord.Message) -> list[dict]:
@@ -147,11 +115,11 @@ async def reconcile_message(message: discord.Message) -> str:
     async with async_session() as session:
         artifact = await get_artifact_by_discord_id(session, str(message.id))
         if artifact:
-            final_classification = await get_final_classification(session, artifact.id)
+            latest_classification = await get_latest_classification(session, artifact.id)
             needs_replay = artifact_needs_replay(
                 artifact=artifact,
                 channel_name=channel_name,
-                has_final_classification=bool(final_classification),
+                has_any_classification=bool(latest_classification),
             )
             if not needs_replay:
                 needs_replay = await artifact_output_missing_on_discord(
@@ -172,6 +140,7 @@ async def reconcile_message(message: discord.Message) -> str:
         attachments=attachments,
         force_category=force_category,
         source="discord",
+        metadata={"channel_name": channel_name, "capture_context": "startup_replay"},
     )
     return "queued_new"
 

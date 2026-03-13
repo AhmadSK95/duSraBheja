@@ -37,7 +37,7 @@ async def ingest_source_entries(
     device_name: str | None = None,
     emit_sync_event: bool = True,
 ) -> dict:
-    from src.services.sync import _extract_story_fields, _publish_sync_event, _trigger_story_pulse
+    from src.services.sync import _extract_story_fields, _publish_sync_event
 
     sync_source = await store.upsert_sync_source(
         session,
@@ -227,6 +227,7 @@ async def ingest_source_entries(
                     "drive",
                     "google_keep",
                     "apple_notes",
+                    "browser_activity",
                     "github",
                     "youtube_history",
                     "google_search_history",
@@ -314,6 +315,4 @@ async def ingest_source_entries(
         )
     if emit_sync_event:
         await _publish_sync_event(result)
-    if imported and emit_sync_event:
-        await _trigger_story_pulse(reason=f"{source_type}:{mode}", metadata=result)
     return result

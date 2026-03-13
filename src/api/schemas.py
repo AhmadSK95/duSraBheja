@@ -114,3 +114,19 @@ class AgentSessionCloseoutRequest(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     source_links: list[str] = Field(default_factory=list)
     transcript_excerpt: str | None = None
+
+
+class ArtifactModerationRequest(BaseModel):
+    category: str | None = None
+    capture_intent: str | None = None
+    validation_status: str | None = None
+    quality_issues: list[dict] = Field(default_factory=list)
+    eligible_for_boards: bool | None = None
+    eligible_for_project_state: bool | None = None
+    moderation_notes: str | None = None
+    resolved_by: str | None = None
+
+
+class BoardRegenerateRequest(BaseModel):
+    board_type: str = Field(min_length=1)
+    target_date: str = Field(min_length=8)

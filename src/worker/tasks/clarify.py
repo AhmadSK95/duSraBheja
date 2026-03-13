@@ -1,4 +1,4 @@
-"""Clarify task — generate question and post to Discord thread."""
+"""Clarify task — generate moderation prompts for the private dashboard queue."""
 
 import logging
 import uuid
@@ -6,7 +6,6 @@ import uuid
 from src.database import async_session
 from src.agents.clarifier import generate_question
 from src.lib.store import create_review, get_artifact
-from src.worker.main import EVENT_REVIEW_CREATED, publish_event
 
 log = logging.getLogger("brain-worker.clarify")
 
@@ -44,13 +43,22 @@ async def ask_clarification(ctx, artifact_id: str, classification_id: str):
             "summary": artifact.summary or artifact.raw_text[:200],
         }
 
-        # Generate question
-        question = await generate_question(
-            session,
-            original_text=artifact.raw_text,
-            classification_attempt=classification_data,
-            trace_id=trace_id,
-        )
+        validation_status = getattr(classification, "validation_status", "validated")
+        quality_issues = list(getattr(classification, "quality_issues", []) or [])
+        if validation_status != "validated" and quality_issues:
+            question = "Review this capture before it affects boards or project state.\n\n" + "\n".join(
+                f"- {issue.get('message') or issue.get('code')}"
+                for issue in quality_issues[:5]
+            )
+            review_kind = "validation"
+        else:
+            question = await generate_question(
+                session,
+                original_text=artifact.raw_text,
+                classification_attempt=classification_data,
+                trace_id=trace_id,
+            )
+            review_kind = "classification"
 
         # Create review queue entry
         review = await create_review(
@@ -58,17 +66,7 @@ async def ask_clarification(ctx, artifact_id: str, classification_id: str):
             artifact_id=artifact_uuid,
             classification_id=classification_uuid,
             question=question,
+            review_kind=review_kind,
         )
 
         log.info(f"Created review {review.id} for artifact {artifact_id}: {question}")
-
-        await publish_event(
-            EVENT_REVIEW_CREATED,
-            {
-                "review_id": str(review.id),
-                "artifact_id": artifact_id,
-                "discord_message_id": artifact.discord_message_id,
-                "discord_channel_id": artifact.discord_channel_id,
-                "question": question,
-            },
-        )

@@ -70,6 +70,12 @@ class Classification(Base):
     tags = Column(ARRAY(String), default=list)
     priority = Column(String, default="medium")
     suggested_action = Column(Text, nullable=True)
+    capture_intent = Column(String, nullable=False, default="thought")
+    intent_confidence = Column(Float, nullable=False, default=0.5)
+    validation_status = Column(String, nullable=False, default="validated")
+    quality_issues = Column(JSONB, default=list)
+    eligible_for_boards = Column(Boolean, nullable=False, default=True)
+    eligible_for_project_state = Column(Boolean, nullable=False, default=True)
     model_used = Column(String, nullable=False)
     tokens_used = Column(Integer, nullable=True)
     cost_usd = Column(Numeric(10, 6), nullable=True)
@@ -170,6 +176,10 @@ class ReviewQueue(Base):
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=True)
     discord_thread_id = Column(String, nullable=True)
+    review_kind = Column(String, nullable=False, default="moderation")
+    resolution = Column(Text, nullable=True)
+    moderation_notes = Column(Text, nullable=True)
+    resolved_by = Column(String, nullable=True)
     status = Column(String, nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
@@ -218,6 +228,30 @@ class Digest(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     __table_args__ = (Index("idx_digests_date", "digest_date"),)
+
+
+class Board(Base):
+    __tablename__ = "boards"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    board_type = Column(String, nullable=False)
+    coverage_start = Column(DateTime(timezone=True), nullable=False)
+    coverage_end = Column(DateTime(timezone=True), nullable=False)
+    generated_for_date = Column(Date, nullable=False)
+    status = Column(String, nullable=False, default="ready")
+    payload = Column(JSONB, nullable=False)
+    source_artifact_ids = Column(JSONB, default=list)
+    excluded_artifact_ids = Column(JSONB, default=list)
+    discord_channel_name = Column(String, nullable=True)
+    discord_message_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("board_type", "coverage_start", "coverage_end"),
+        Index("idx_boards_type_date", "board_type", "generated_for_date"),
+        Index("idx_boards_status", "status"),
+    )
 
 
 class JournalEntry(Base):

@@ -39,6 +39,7 @@ async def process_inbox_message(
     attachments: list[dict],
     force_category: str | None = None,
     source: str = "discord",
+    metadata: dict | None = None,
 ):
     """Main ingestion pipeline — called by ARQ worker."""
     log.info(f"Processing message {discord_message_id} with {len(attachments)} attachments")
@@ -106,6 +107,7 @@ async def process_inbox_message(
             metadata_={
                 "attachments": attachment_records,
                 "linked_urls": linked_urls,
+                **(metadata or {}),
             },
             source=source,
         )

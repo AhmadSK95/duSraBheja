@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from src.agents.librarian import process_artifact
-from src.constants import CATEGORY_CHANNELS, MERGEABLE_CATEGORIES, normalize_category
+from src.constants import MERGEABLE_CATEGORIES, normalize_category
 from src.database import async_session
 from src.lib.store import (
     create_journal_entry,
@@ -17,7 +17,7 @@ from src.lib.store import (
     update_note,
 )
 from src.models import Classification
-from src.services.planner import build_planner_payload, merge_weekly_rollup
+from src.services.planner import build_planner_payload
 from src.services.reminders import store_reminder
 from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
 
@@ -94,21 +94,18 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     relation="derived_from",
                 )
 
-            weekly_rollup = None
-            if classification.category == "daily_planner" and planner_payload:
-                weekly_rollup = await _upsert_weekly_rollup(
-                    session,
-                    artifact_uuid,
-                    note_id,
-                    planner_payload,
-                )
-
+            capture_intent = getattr(classification, "capture_intent", "thought")
+            reply_target_kind = (artifact.metadata_ or {}).get("reply_target_kind")
             project_note_id = note_id if classification.category == "project" else None
             await create_journal_entry(
                 session,
                 artifact_id=artifact_uuid,
                 project_note_id=project_note_id,
-                entry_type="artifact_ingested",
+                entry_type=(
+                    "feedback"
+                    if reply_target_kind and capture_intent in {"critique", "question"}
+                    else "artifact_ingested"
+                ),
                 actor_type="human" if artifact.source in {"discord", "manual", "command"} else "agent",
                 actor_name=artifact.source,
                 title=artifact.summary or note_title,
@@ -116,7 +113,13 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                 summary=artifact.summary or note_title,
                 tags=list(classification.tags or []),
                 source_links=[],
-                metadata_={"category": classification.category, "note_id": str(note_id)},
+                metadata_={
+                    "category": classification.category,
+                    "note_id": str(note_id),
+                    "capture_intent": capture_intent,
+                    "reply_target_kind": reply_target_kind,
+                    "reply_target_message_id": (artifact.metadata_ or {}).get("reply_target_message_id"),
+                },
             )
 
             await publish_event(
@@ -133,9 +136,8 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "note_id": str(note_id),
                     "note_title": note_title,
                     "note_content_preview": (note_content or "")[:1200],
-                    "category_channel": CATEGORY_CHANNELS.get(classification.category),
-                    "planner": planner_payload["card"] if planner_payload else None,
-                    "weekly_rollup": weekly_rollup,
+                    "capture_intent": capture_intent,
+                    "validation_status": getattr(classification, "validation_status", "validated"),
                     "reminder": (
                         {
                             "title": reminder.title,
@@ -144,17 +146,6 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                         if reminder
                         else None
                     ),
-                },
-            )
-            from src.worker.main import enqueue_story_pulse_digest
-
-            await enqueue_story_pulse_digest(
-                reason=f"artifact:{classification.category}",
-                metadata={
-                    "artifact_id": str(artifact_uuid),
-                    "category": classification.category,
-                    "note_id": str(note_id),
-                    "note_title": note_title,
                 },
             )
         except Exception as exc:
@@ -312,68 +303,3 @@ async def _upsert_reminder_note(session, artifact, artifact_note, classification
     metadata["next_fire_at"] = str(reminder.next_fire_at) if reminder.next_fire_at else None
     await update_note(session, note.id, metadata_=metadata, remind_at=reminder.next_fire_at)
     return note.id, note.title, note.content, reminder
-
-
-async def _upsert_weekly_rollup(session, artifact_uuid: uuid.UUID, planner_note_id, planner_payload: dict):
-    if not planner_payload["metadata"].get("week_start"):
-        return None
-
-    merged_payload, changed = merge_weekly_rollup({}, planner_payload, artifact_uuid)
-    week_title = merged_payload["title"]
-
-    matches = await find_notes_by_title(session, week_title, "weekly_planner")
-    weekly_note = matches[0] if matches else None
-    if weekly_note:
-        merged_payload, changed = merge_weekly_rollup(weekly_note.metadata_ or {}, planner_payload, artifact_uuid)
-
-    if not changed:
-        return {
-            "title": merged_payload["card"]["title"],
-            "summary": merged_payload["card"]["summary"],
-            "dates": merged_payload["card"]["dates"],
-            "top_items": merged_payload["card"]["top_items"],
-        }
-
-    if weekly_note:
-        await update_note(
-            session,
-            weekly_note.id,
-            category="weekly_planner",
-            title=merged_payload["title"],
-            content=merged_payload["content"],
-            tags=merged_payload["tags"],
-            metadata_=merged_payload["metadata"],
-        )
-        weekly_note_id = weekly_note.id
-    else:
-        weekly_note = await create_note(
-            session,
-            category="weekly_planner",
-            title=merged_payload["title"],
-            content=merged_payload["content"],
-            tags=merged_payload["tags"],
-            priority="medium",
-            metadata_=merged_payload["metadata"],
-        )
-        weekly_note_id = weekly_note.id
-
-    note_links = await get_related(session, "note", planner_note_id)
-    if not any(
-        link.target_type == "note" and link.target_id == weekly_note_id and link.relation == "rolls_up_to"
-        for link in note_links
-    ):
-        await create_link(
-            session,
-            source_type="note",
-            source_id=planner_note_id,
-            target_type="note",
-            target_id=weekly_note_id,
-            relation="rolls_up_to",
-        )
-
-    return {
-        "title": merged_payload["card"]["title"],
-        "summary": merged_payload["card"]["summary"],
-        "dates": merged_payload["card"]["dates"],
-        "top_items": merged_payload["card"]["top_items"],
-    }

@@ -121,7 +121,7 @@ class AdminCog(commands.Cog):
             embed.add_field(name="Channels", value="\n".join(details), inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="replay-ingestion", description="Replay your Discord posts so receipts and planner cards are rebuilt")
+    @app_commands.command(name="replay-ingestion", description="Replay your Discord posts so stored captures and boards can be rebuilt")
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.describe(
         history_limit="How many recent messages per replay channel to scan. Leave empty to scan the full history.",

@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from src.config import settings
 from src.database import async_session
 from src.lib.notifications import publish as publish_notification
+from src.worker.tasks.boards import generate_daily_board, generate_weekly_board
 from src.services.digest import generate_or_refresh_digest
 
 EVENT_DIGEST_READY = "brain:digest_ready"
@@ -33,23 +34,11 @@ async def generate_daily_digest(
             "metadata": metadata or {},
             "digest_date": payload["digest_date"],
             "headline": payload.get("headline"),
-            "narrative": payload.get("narrative"),
-            "tasks": payload["tasks"],
-            "recommended_tasks": payload.get("recommended_tasks", []),
-            "best_ideas": payload.get("best_ideas", []),
-            "projects": payload["projects"],
-            "project_assessments": payload.get("project_assessments", []),
-            "recent_activity": payload["recent_activity"],
-            "pending_reviews": payload["pending_reviews"],
-            "open_loops": payload.get("open_loops", []),
-            "story_connections": payload.get("story_connections", []),
-            "writing_topics": payload["writing_topics"],
-            "writing_topic_items": payload.get("writing_topic_items", []),
-            "video_recommendations": payload.get("video_recommendations", []),
-            "brain_teasers": payload.get("brain_teasers", []),
+            "summary": payload.get("summary"),
+            "board_date": payload.get("board_date"),
+            "project_status": payload.get("project_status", []),
+            "possible_tasks": payload.get("possible_tasks", []),
             "reminders_due_today": payload.get("reminders_due_today", []),
-            "improvement_focus": payload.get("improvement_focus", []),
-            "low_confidence_sections": payload.get("low_confidence_sections", []),
         },
     )
     return payload
@@ -67,6 +56,9 @@ async def generate_scheduled_digest_tick(ctx) -> dict:
         claimed = bool(await redis.set(marker_key, "1", ex=60 * 60 * 36, nx=True))
         if not claimed:
             return {"status": "skipped", "reason": "scheduled digest already published"}
+        await generate_daily_board(ctx, run_date=now.date().isoformat())
+        if now.weekday() == settings.weekly_board_cron_weekday:
+            await generate_weekly_board(ctx, run_date=now.date().isoformat())
         return await generate_daily_digest(ctx, trigger="scheduled")
     except Exception:
         if claimed:

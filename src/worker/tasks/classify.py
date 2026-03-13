@@ -44,7 +44,12 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
                     "_meta": {"model": "forced", "tokens_used": 0, "cost_usd": 0, "duration_ms": 0},
                 }
             else:
-                result = await classify(session, artifact.raw_text, trace_id=trace_id)
+                result = await classify(
+                    session,
+                    artifact.raw_text,
+                    content_type=artifact.content_type,
+                    trace_id=trace_id,
+                )
 
             log.info(
                 f"Classified artifact {artifact_id}: "
@@ -58,14 +63,23 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
                 artifact_id=artifact_uuid,
                 category=result["category"],
                 confidence=result["confidence"],
+                capture_intent=result.get("capture_intent"),
+                intent_confidence=result.get("intent_confidence"),
                 entities=result.get("entities", []),
                 tags=result.get("tags", []),
                 priority=result.get("priority", "medium"),
                 suggested_action=result.get("suggested_action"),
+                validation_status=result.get("validation_status", "validated"),
+                quality_issues=result.get("quality_issues", []),
+                eligible_for_boards=result.get("eligible_for_boards", True),
+                eligible_for_project_state=result.get("eligible_for_project_state", True),
                 model_used=meta.get("model", "unknown"),
                 tokens_used=meta.get("tokens_used"),
                 cost_usd=meta.get("cost_usd"),
-                is_final=result["confidence"] >= settings.confidence_threshold,
+                is_final=(
+                    result["confidence"] >= settings.confidence_threshold
+                    and result.get("validation_status", "validated") == "validated"
+                ),
             )
 
             # Update artifact summary
@@ -82,7 +96,11 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
 
             pool = await get_pool()
 
-            if result["confidence"] >= settings.confidence_threshold:
+            is_publishable = (
+                result["confidence"] >= settings.confidence_threshold
+                and result.get("validation_status", "validated") == "validated"
+            )
+            if is_publishable:
                 # High confidence → embed + librarian + route to channel
                 await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
                 await pool.enqueue_job(
@@ -92,13 +110,17 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
                 )
                 log.info(f"High confidence — routing artifact {artifact_id} to channel")
             else:
-                # Low confidence → ask clarification
+                # Low confidence or invalid capture → moderation queue
                 await pool.enqueue_job(
                     JOB_ASK_CLARIFICATION,
                     artifact_id=artifact_id,
                     classification_id=str(classification.id),
                 )
-                log.info(f"Low confidence ({result['confidence']:.2f}) — requesting clarification")
+                log.info(
+                    "Capture needs review (%s, %.2f) — enqueueing moderation review",
+                    result.get("validation_status", "validated"),
+                    result["confidence"],
+                )
         except Exception as exc:
             from src.worker.main import EVENT_ARTIFACT_FAILED, publish_event
 
@@ -128,7 +150,13 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
             return
 
         try:
-            result = await reclassify(session, artifact.raw_text, user_answer, trace_id=trace_id)
+            result = await reclassify(
+                session,
+                artifact.raw_text,
+                user_answer,
+                content_type=artifact.content_type,
+                trace_id=trace_id,
+            )
 
             meta = result.pop("_meta", {})
             classification = await create_classification(
@@ -136,14 +164,20 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
                 artifact_id=artifact_uuid,
                 category=result["category"],
                 confidence=result["confidence"],
+                capture_intent=result.get("capture_intent"),
+                intent_confidence=result.get("intent_confidence"),
                 entities=result.get("entities", []),
                 tags=result.get("tags", []),
                 priority=result.get("priority", "medium"),
                 suggested_action=result.get("suggested_action"),
+                validation_status=result.get("validation_status", "validated"),
+                quality_issues=result.get("quality_issues", []),
+                eligible_for_boards=result.get("eligible_for_boards", True),
+                eligible_for_project_state=result.get("eligible_for_project_state", True),
                 model_used=meta.get("model", "unknown"),
                 tokens_used=meta.get("tokens_used"),
                 cost_usd=meta.get("cost_usd"),
-                is_final=True,  # User-clarified = always final
+                is_final=result.get("validation_status", "validated") == "validated",
             )
 
             artifact.summary = result.get("summary", artifact.raw_text[:200])
@@ -153,12 +187,13 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
             from src.worker.main import get_pool, JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN
 
             pool = await get_pool()
-            await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
-            await pool.enqueue_job(
-                JOB_PROCESS_LIBRARIAN,
-                artifact_id=artifact_id,
-                classification_id=str(classification.id),
-            )
+            if result.get("validation_status", "validated") == "validated":
+                await pool.enqueue_job(JOB_GENERATE_EMBEDDINGS, artifact_id=artifact_id)
+                await pool.enqueue_job(
+                    JOB_PROCESS_LIBRARIAN,
+                    artifact_id=artifact_id,
+                    classification_id=str(classification.id),
+                )
 
             log.info(f"Reclassified artifact {artifact_id}: {result['category']} ({result['confidence']:.2f})")
         except Exception as exc:

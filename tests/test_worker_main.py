@@ -62,6 +62,7 @@ async def test_enqueue_ingest_uses_registered_job_name(monkeypatch) -> None:
                 "attachments": [],
                 "force_category": "note",
                 "source": "discord",
+                "metadata": {},
             },
         )
     ]

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     discord_guild_id: int = 0
     inbox_channel_name: str = "inbox"
     needs_review_channel_name: str = "needs-review"
+    daily_board_channel_name: str = "daily-board"
+    weekly_board_channel_name: str = "weekly-board"
     daily_digest_channel_name: str = "daily-digest"
     ask_channel_name: str = "ask-brain"
     brain_voice_instructions: str = (
@@ -66,6 +68,7 @@ class Settings(BaseSettings):
     digest_cron_hour: int = 8
     digest_timezone: str = "America/New_York"
     digest_story_pulse_cooldown_minutes: int = 15
+    weekly_board_cron_weekday: int = 0
     knowledge_refresh_hours: int = 6
     knowledge_max_projects_per_run: int = 3
     cognition_refresh_hours: int = 4
@@ -73,7 +76,7 @@ class Settings(BaseSettings):
     startup_replay_enabled: bool = True
     startup_replay_history_limit: int = 0
     startup_replay_author_ids: str = ""
-    startup_replay_channel_names: str = "inbox,daily-planner,weekly-planner"
+    startup_replay_channel_names: str = "inbox"
 
     # Collector
     collector_device_name: str = "macbook"
@@ -91,6 +94,8 @@ class Settings(BaseSettings):
     apple_notes_export_path: str = "~/.brain-collector/apple-notes"
     apple_notes_state_path: str = "~/.brain-collector/apple-notes-state.json"
     apple_notes_exclude_folders: str = ""
+    browser_activity_state_path: str = "~/.brain-collector/browser-activity-state.json"
+    browser_activity_lookback_days: int = 1
 
     # Story retrieval
     story_max_events: int = 25

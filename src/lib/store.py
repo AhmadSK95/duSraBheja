@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.constants import normalize_category, normalize_tags
 from src.models import (
     Artifact,
+    Board,
     Classification,
     Chunk,
     ConversationSession,
@@ -73,6 +74,12 @@ async def update_artifact(session: AsyncSession, artifact_id: uuid.UUID, **kwarg
 async def create_classification(session: AsyncSession, **kwargs) -> Classification:
     kwargs["category"] = normalize_category(kwargs.get("category"))
     kwargs["tags"] = normalize_tags(kwargs.get("tags"))
+    kwargs.setdefault("capture_intent", "thought")
+    kwargs.setdefault("intent_confidence", 0.5)
+    kwargs.setdefault("validation_status", "validated")
+    kwargs.setdefault("quality_issues", [])
+    kwargs.setdefault("eligible_for_boards", True)
+    kwargs.setdefault("eligible_for_project_state", True)
     classification = Classification(**kwargs)
     session.add(classification)
     await session.commit()
@@ -88,6 +95,26 @@ async def get_final_classification(session: AsyncSession, artifact_id: uuid.UUID
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_classification(session: AsyncSession, classification_id: uuid.UUID) -> Classification | None:
+    return await session.get(Classification, classification_id)
+
+
+async def get_latest_classification(session: AsyncSession, artifact_id: uuid.UUID) -> Classification | None:
+    result = await session.execute(
+        select(Classification)
+        .where(Classification.artifact_id == artifact_id)
+        .order_by(Classification.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_classification(session: AsyncSession, classification_id: uuid.UUID, **kwargs) -> Classification | None:
+    await session.execute(update(Classification).where(Classification.id == classification_id).values(**kwargs))
+    await session.commit()
+    return await get_classification(session, classification_id)
 
 
 async def create_note(session: AsyncSession, **kwargs) -> Note:
@@ -403,6 +430,7 @@ async def get_related(session: AsyncSession, source_type: str, source_id: uuid.U
 
 
 async def create_review(session: AsyncSession, **kwargs) -> ReviewQueue:
+    kwargs.setdefault("review_kind", "moderation")
     review = ReviewQueue(**kwargs)
     session.add(review)
     await session.commit()
@@ -427,6 +455,10 @@ async def get_pending_reviews(session: AsyncSession) -> list[ReviewQueue]:
     return list(result.scalars().all())
 
 
+async def get_review(session: AsyncSession, review_id: uuid.UUID) -> ReviewQueue | None:
+    return await session.get(ReviewQueue, review_id)
+
+
 async def resolve_review(session: AsyncSession, review_id: uuid.UUID, answer: str) -> ReviewQueue:
     await session.execute(
         update(ReviewQueue)
@@ -449,6 +481,28 @@ async def set_review_thread(session: AsyncSession, review_id: uuid.UUID, thread_
     return result.scalar_one_or_none()
 
 
+async def moderate_review(
+    session: AsyncSession,
+    review_id: uuid.UUID,
+    *,
+    status: str,
+    resolution: str | None = None,
+    moderation_notes: str | None = None,
+    resolved_by: str | None = None,
+) -> ReviewQueue | None:
+    values = {
+        "status": status,
+        "resolution": resolution,
+        "moderation_notes": moderation_notes,
+        "resolved_by": resolved_by,
+    }
+    if status in {"approved", "rejected", "resolved"}:
+        values["resolved_at"] = _utcnow()
+    await session.execute(update(ReviewQueue).where(ReviewQueue.id == review_id).values(**values))
+    await session.commit()
+    return await get_review(session, review_id)
+
+
 async def create_digest(session: AsyncSession, *, digest_date: date, payload: dict) -> Digest:
     digest = Digest(digest_date=digest_date, payload=payload)
     session.add(digest)
@@ -460,6 +514,111 @@ async def create_digest(session: AsyncSession, *, digest_date: date, payload: di
 async def get_digest_by_date(session: AsyncSession, digest_date: date) -> Digest | None:
     result = await session.execute(select(Digest).where(Digest.digest_date == digest_date))
     return result.scalar_one_or_none()
+
+
+async def upsert_board(
+    session: AsyncSession,
+    *,
+    board_type: str,
+    generated_for_date: date,
+    coverage_start: datetime,
+    coverage_end: datetime,
+    payload: dict,
+    source_artifact_ids: list[str] | None = None,
+    excluded_artifact_ids: list[str] | None = None,
+    status: str = "ready",
+    discord_channel_name: str | None = None,
+    discord_message_id: str | None = None,
+) -> Board:
+    result = await session.execute(
+        select(Board).where(
+            Board.board_type == board_type,
+            Board.coverage_start == coverage_start,
+            Board.coverage_end == coverage_end,
+        )
+    )
+    board = result.scalar_one_or_none()
+    if board:
+        board.generated_for_date = generated_for_date
+        board.payload = payload
+        board.source_artifact_ids = source_artifact_ids or []
+        board.excluded_artifact_ids = excluded_artifact_ids or []
+        board.status = status
+        if discord_channel_name is not None:
+            board.discord_channel_name = discord_channel_name
+        if discord_message_id is not None:
+            board.discord_message_id = discord_message_id
+        board.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(board)
+        return board
+
+    board = Board(
+        board_type=board_type,
+        generated_for_date=generated_for_date,
+        coverage_start=coverage_start,
+        coverage_end=coverage_end,
+        payload=payload,
+        source_artifact_ids=source_artifact_ids or [],
+        excluded_artifact_ids=excluded_artifact_ids or [],
+        status=status,
+        discord_channel_name=discord_channel_name,
+        discord_message_id=discord_message_id,
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(board)
+    await session.commit()
+    await session.refresh(board)
+    return board
+
+
+async def get_board(session: AsyncSession, board_id: uuid.UUID) -> Board | None:
+    return await session.get(Board, board_id)
+
+
+async def get_board_by_window(
+    session: AsyncSession,
+    *,
+    board_type: str,
+    coverage_start: datetime,
+    coverage_end: datetime,
+) -> Board | None:
+    result = await session.execute(
+        select(Board).where(
+            Board.board_type == board_type,
+            Board.coverage_start == coverage_start,
+            Board.coverage_end == coverage_end,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_latest_board(
+    session: AsyncSession,
+    *,
+    board_type: str,
+    generated_for_date: date | None = None,
+) -> Board | None:
+    query = select(Board).where(Board.board_type == board_type).order_by(Board.generated_for_date.desc(), Board.updated_at.desc())
+    if generated_for_date:
+        query = query.where(Board.generated_for_date == generated_for_date)
+    result = await session.execute(query.limit(1))
+    return result.scalar_one_or_none()
+
+
+async def list_boards(
+    session: AsyncSession,
+    *,
+    board_type: str | None = None,
+    limit: int = 30,
+) -> list[Board]:
+    query = select(Board)
+    if board_type:
+        query = query.where(Board.board_type == board_type)
+    query = query.order_by(Board.generated_for_date.desc(), Board.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
 
 
 async def create_journal_entry(session: AsyncSession, **kwargs) -> JournalEntry:
@@ -488,6 +647,168 @@ async def list_recent_activity(
     query = query.order_by(JournalEntry.happened_at.desc(), JournalEntry.created_at.desc()).limit(limit)
     result = await session.execute(query)
     return list(result.scalars().all())
+
+
+async def list_recent_sync_runs(session: AsyncSession, *, limit: int = 25) -> list[SyncRun]:
+    result = await session.execute(
+        select(SyncRun)
+        .join(SyncSource, SyncRun.sync_source_id == SyncSource.id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_artifact_interpretations(
+    session: AsyncSession,
+    *,
+    validation_status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    latest_class = (
+        select(
+            Classification.id.label("classification_id"),
+            Classification.artifact_id.label("artifact_id"),
+            Classification.category,
+            Classification.confidence,
+            Classification.capture_intent,
+            Classification.intent_confidence,
+            Classification.validation_status,
+            Classification.quality_issues,
+            Classification.eligible_for_boards,
+            Classification.eligible_for_project_state,
+            Classification.tags,
+            Classification.created_at.label("classified_at"),
+        )
+        .distinct(Classification.artifact_id)
+        .order_by(Classification.artifact_id, Classification.created_at.desc())
+        .subquery()
+    )
+
+    query = (
+        select(
+            Artifact,
+            latest_class.c.classification_id,
+            latest_class.c.category,
+            latest_class.c.confidence,
+            latest_class.c.capture_intent,
+            latest_class.c.intent_confidence,
+            latest_class.c.validation_status,
+            latest_class.c.quality_issues,
+            latest_class.c.eligible_for_boards,
+            latest_class.c.eligible_for_project_state,
+            latest_class.c.tags,
+            latest_class.c.classified_at,
+        )
+        .outerjoin(latest_class, latest_class.c.artifact_id == Artifact.id)
+        .order_by(Artifact.created_at.desc())
+        .limit(limit)
+    )
+    if validation_status:
+        query = query.where(latest_class.c.validation_status == validation_status)
+
+    result = await session.execute(query)
+    rows: list[dict] = []
+    for row in result.all():
+        artifact = row[0]
+        rows.append(
+            {
+                "artifact": artifact,
+                "classification_id": row.classification_id,
+                "category": row.category,
+                "confidence": row.confidence,
+                "capture_intent": row.capture_intent,
+                "intent_confidence": row.intent_confidence,
+                "validation_status": row.validation_status,
+                "quality_issues": row.quality_issues or [],
+                "eligible_for_boards": row.eligible_for_boards,
+                "eligible_for_project_state": row.eligible_for_project_state,
+                "tags": row.tags or [],
+                "classified_at": row.classified_at,
+            }
+        )
+    return rows
+
+
+async def get_artifact_interpretation(session: AsyncSession, artifact_id: uuid.UUID) -> dict | None:
+    latest_class = await get_latest_classification(session, artifact_id)
+    artifact = await get_artifact(session, artifact_id)
+    if not artifact:
+        return None
+    return {
+        "artifact": artifact,
+        "classification_id": str(latest_class.id) if latest_class else None,
+        "category": latest_class.category if latest_class else None,
+        "confidence": latest_class.confidence if latest_class else None,
+        "capture_intent": latest_class.capture_intent if latest_class else None,
+        "intent_confidence": latest_class.intent_confidence if latest_class else None,
+        "validation_status": latest_class.validation_status if latest_class else None,
+        "quality_issues": list(latest_class.quality_issues or []) if latest_class else [],
+        "eligible_for_boards": latest_class.eligible_for_boards if latest_class else False,
+        "eligible_for_project_state": latest_class.eligible_for_project_state if latest_class else False,
+        "tags": list(latest_class.tags or []) if latest_class else [],
+        "classified_at": latest_class.created_at if latest_class else None,
+    }
+
+
+async def list_artifacts_for_window(
+    session: AsyncSession,
+    *,
+    start: datetime,
+    end: datetime,
+    eligible_for_boards: bool | None = None,
+    eligible_for_project_state: bool | None = None,
+    validation_status: str | None = None,
+    limit: int = 250,
+) -> list[dict]:
+    final_class = (
+        select(Classification)
+        .where(Classification.is_final == True)
+        .subquery()
+    )
+    query = (
+        select(
+            Artifact,
+            final_class.c.id.label("classification_id"),
+            final_class.c.category,
+            final_class.c.confidence,
+            final_class.c.capture_intent,
+            final_class.c.intent_confidence,
+            final_class.c.validation_status,
+            final_class.c.quality_issues,
+            final_class.c.eligible_for_boards,
+            final_class.c.eligible_for_project_state,
+            final_class.c.tags,
+        )
+        .join(final_class, final_class.c.artifact_id == Artifact.id)
+        .where(Artifact.created_at >= start, Artifact.created_at <= end)
+        .order_by(Artifact.created_at.asc())
+        .limit(limit)
+    )
+    if validation_status:
+        query = query.where(final_class.c.validation_status == validation_status)
+    if eligible_for_boards is not None:
+        query = query.where(final_class.c.eligible_for_boards == eligible_for_boards)
+    if eligible_for_project_state is not None:
+        query = query.where(final_class.c.eligible_for_project_state == eligible_for_project_state)
+
+    result = await session.execute(query)
+    return [
+        {
+            "artifact": row[0],
+            "classification_id": row.classification_id,
+            "category": row.category,
+            "confidence": row.confidence,
+            "capture_intent": row.capture_intent,
+            "intent_confidence": row.intent_confidence,
+            "validation_status": row.validation_status,
+            "quality_issues": row.quality_issues or [],
+            "eligible_for_boards": row.eligible_for_boards,
+            "eligible_for_project_state": row.eligible_for_project_state,
+            "tags": row.tags or [],
+        }
+        for row in result.all()
+    ]
 
 
 async def list_story_events(

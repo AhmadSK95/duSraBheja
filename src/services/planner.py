@@ -25,6 +25,19 @@ _DAY_HEADER_PATTERN = re.compile(
 )
 _WEEK_SCOPE_PATTERN = re.compile(r"\b(weekly|week of|this week|next week)\b", re.IGNORECASE)
 _DAY_SCOPE_PATTERN = re.compile(r"\b(today|daily|tomorrow|agenda|plan for today)\b", re.IGNORECASE)
+_LEADING_WEEKDAY_PATTERN = re.compile(
+    r"^\s*(?P<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+_WEEKDAY_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
 
 
 def _clean_date_label(label: str) -> str:
@@ -97,6 +110,106 @@ def detect_planner_scope(text: str, entities: list[dict] | None = None) -> str |
     if len(dates) == 1 or len(seen_days) == 1 or explicit_day:
         return "daily_planner"
     return None
+
+
+def validate_planner_capture(
+    text: str,
+    *,
+    category: str,
+    entities: list[dict] | None = None,
+    content_type: str | None = None,
+) -> dict:
+    issues: list[dict] = []
+    dates = extract_planner_dates(text, entities)
+    inferred_scope = detect_planner_scope(text, entities)
+    stripped = " ".join((text or "").split()).strip()
+    alpha_count = sum(1 for char in stripped if char.isalpha())
+
+    if content_type == "image" and (len(stripped) < 24 or alpha_count < 10):
+        issues.append(
+            {
+                "code": "ocr_sparse",
+                "severity": "error",
+                "message": "OCR output is too sparse to trust for planner synthesis.",
+            }
+        )
+
+    for item in dates:
+        label = item.get("label") or ""
+        weekday_match = _LEADING_WEEKDAY_PATTERN.search(label)
+        if not weekday_match:
+            continue
+        weekday_name = weekday_match.group("weekday").lower()
+        parsed = _parse_date_label(label)
+        if not parsed:
+            continue
+        if parsed.weekday() != _WEEKDAY_INDEX[weekday_name]:
+            issues.append(
+                {
+                    "code": "weekday_date_mismatch",
+                    "severity": "error",
+                    "message": (
+                        f"{label.strip()} does not match the actual weekday for "
+                        f"{parsed.strftime('%B %d, %Y')}."
+                    ),
+                    "label": label.strip(),
+                    "iso_date": parsed.isoformat(),
+                }
+            )
+
+    if category == "daily_planner":
+        if len(dates) > 1:
+            issues.append(
+                {
+                    "code": "daily_scope_multiple_dates",
+                    "severity": "error",
+                    "message": "Daily planner capture includes multiple distinct dates.",
+                }
+            )
+        if inferred_scope == "weekly_planner":
+            issues.append(
+                {
+                    "code": "scope_contradiction",
+                    "severity": "error",
+                    "message": "Content looks like a weekly planner, not a single-day plan.",
+                }
+            )
+
+    if category == "weekly_planner":
+        if inferred_scope == "daily_planner":
+            issues.append(
+                {
+                    "code": "scope_contradiction",
+                    "severity": "error",
+                    "message": "Content looks like a daily planner, not a week-long board input.",
+                }
+            )
+        if not dates and not _WEEK_SCOPE_PATTERN.search(text or ""):
+            issues.append(
+                {
+                    "code": "weekly_scope_missing",
+                    "severity": "warning",
+                    "message": "Weekly planner has weak date coverage and no explicit week marker.",
+                }
+            )
+
+    if category in {"daily_planner", "weekly_planner"} and not dates:
+        issues.append(
+            {
+                "code": "planner_date_missing",
+                "severity": "warning",
+                "message": "Planner capture has no clearly parsed date.",
+            }
+        )
+
+    blocking = any(issue["severity"] == "error" for issue in issues)
+    return {
+        "validation_status": "needs_review" if blocking else "validated",
+        "quality_issues": issues,
+        "inferred_scope": inferred_scope,
+        "eligible_for_boards": not blocking,
+        "eligible_for_project_state": not blocking,
+    }
 
 
 def _strip_item_prefix(line: str) -> str:

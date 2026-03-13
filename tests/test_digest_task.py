@@ -52,17 +52,30 @@ def test_generate_scheduled_digest_tick_catches_up_after_target_hour(monkeypatch
         captured["trigger"] = trigger
         return {"status": "generated"}
 
+    async def _fake_generate_daily_board(ctx, *, run_date=None):
+        captured["daily_board"] = run_date
+        return {"status": "board-generated"}
+
+    async def _fake_generate_weekly_board(ctx, *, run_date=None):
+        captured["weekly_board"] = run_date
+        return {"status": "weekly-board-generated"}
+
     redis_instance = _FakeRedis()
     monkeypatch.setattr(digest_task, "datetime", _FakeDateTime)
     monkeypatch.setattr(digest_task.settings, "digest_cron_hour", 8)
     monkeypatch.setattr(digest_task.settings, "digest_timezone", "America/New_York")
+    monkeypatch.setattr(digest_task.settings, "weekly_board_cron_weekday", 0)
     monkeypatch.setattr(digest_task.Redis, "from_url", lambda url: redis_instance)
     monkeypatch.setattr(digest_task, "generate_daily_digest", _fake_generate_daily_digest)
+    monkeypatch.setattr(digest_task, "generate_daily_board", _fake_generate_daily_board)
+    monkeypatch.setattr(digest_task, "generate_weekly_board", _fake_generate_weekly_board)
 
     result = asyncio.run(digest_task.generate_scheduled_digest_tick(SimpleNamespace()))
 
     assert result == {"status": "generated"}
     assert captured["trigger"] == "scheduled"
+    assert captured["daily_board"] == "2026-03-12"
+    assert "weekly_board" not in captured
 
 
 def test_generate_daily_digest_publishes_trigger_metadata(monkeypatch) -> None:
@@ -72,20 +85,11 @@ def test_generate_daily_digest_publishes_trigger_metadata(monkeypatch) -> None:
         return {
             "digest_date": digest_date.isoformat(),
             "headline": "Morning brief",
-            "narrative": "The brain has a view of the day.",
-            "tasks": [],
-            "recommended_tasks": [],
-            "best_ideas": [],
-            "projects": [],
-            "project_assessments": [],
-            "recent_activity": [],
-            "pending_reviews": [],
-            "open_loops": [],
-            "story_connections": [],
-            "writing_topics": [],
-            "writing_topic_items": [],
-            "video_recommendations": [],
-            "brain_teasers": [],
+            "summary": "Board-grounded morning brief.",
+            "board_date": "2026-03-11",
+            "project_status": [],
+            "possible_tasks": [],
+            "reminders_due_today": [],
         }
 
     async def _fake_publish_event(channel: str, payload: dict):

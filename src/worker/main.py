@@ -19,6 +19,8 @@ JOB_RECLASSIFY_ARTIFACT = "src.worker.tasks.classify.reclassify_artifact"
 JOB_ASK_CLARIFICATION = "src.worker.tasks.clarify.ask_clarification"
 JOB_GENERATE_EMBEDDINGS = "src.worker.tasks.embed.generate_embeddings"
 JOB_PROCESS_LIBRARIAN = "src.worker.tasks.librarian.process_librarian"
+JOB_GENERATE_DAILY_BOARD = "src.worker.tasks.boards.generate_daily_board"
+JOB_GENERATE_WEEKLY_BOARD = "src.worker.tasks.boards.generate_weekly_board"
 JOB_GENERATE_DAILY_DIGEST = "src.worker.tasks.digest.generate_daily_digest"
 JOB_GENERATE_SCHEDULED_DIGEST_TICK = "src.worker.tasks.digest.generate_scheduled_digest_tick"
 JOB_PROCESS_DUE_REMINDERS = "src.worker.tasks.reminders.process_due_reminders"
@@ -29,6 +31,7 @@ JOB_RUN_CONTINUOUS_COGNITION = "src.worker.tasks.cognition.run_continuous_cognit
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
 EVENT_ARTIFACT_FAILED = "brain:artifact_failed"
+EVENT_BOARD_READY = "brain:board_ready"
 EVENT_DIGEST_READY = "brain:digest_ready"
 EVENT_SYNC_COMPLETED = "brain:sync_completed"
 EVENT_REMINDER_DUE = "brain:reminder_due"
@@ -50,6 +53,7 @@ async def enqueue_ingest(
     attachments: list[dict],
     force_category: str | None = None,
     source: str = "discord",
+    metadata: dict | None = None,
 ):
     pool = await get_pool()
     await pool.enqueue_job(
@@ -60,6 +64,7 @@ async def enqueue_ingest(
         attachments=attachments,
         force_category=force_category,
         source=source,
+        metadata=metadata or {},
     )
 
 
@@ -108,6 +113,8 @@ class WorkerSettings:
         JOB_ASK_CLARIFICATION,
         JOB_GENERATE_EMBEDDINGS,
         JOB_PROCESS_LIBRARIAN,
+        JOB_GENERATE_DAILY_BOARD,
+        JOB_GENERATE_WEEKLY_BOARD,
         JOB_GENERATE_DAILY_DIGEST,
         JOB_GENERATE_SCHEDULED_DIGEST_TICK,
         JOB_PROCESS_DUE_REMINDERS,

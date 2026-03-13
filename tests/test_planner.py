@@ -3,7 +3,12 @@ from __future__ import annotations
 import uuid
 
 from src.agents.classifier import _parse_classifier_response
-from src.services.planner import build_planner_payload, detect_planner_scope, merge_weekly_rollup
+from src.services.planner import (
+    build_planner_payload,
+    detect_planner_scope,
+    merge_weekly_rollup,
+    validate_planner_capture,
+)
 
 
 def test_build_planner_payload_extracts_dates_and_items() -> None:
@@ -84,3 +89,15 @@ def test_parse_classifier_response_corrects_weekly_to_daily_when_scope_is_single
 
     assert parsed["category"] == "daily_planner"
     assert parsed["confidence"] >= 0.8
+
+
+def test_validate_planner_capture_flags_weekday_date_mismatch() -> None:
+    result = validate_planner_capture(
+        "Friday, Mar 24, 2026\n→ Job applications\n→ Interview prep",
+        category="daily_planner",
+        content_type="image",
+    )
+
+    assert result["validation_status"] == "needs_review"
+    assert result["eligible_for_boards"] is False
+    assert any(issue["code"] == "weekday_date_mismatch" for issue in result["quality_issues"])
