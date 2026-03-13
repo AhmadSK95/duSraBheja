@@ -69,6 +69,8 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
     async def fake_list_notes(session, category=None, limit=25, status="active"):
         if category == "task":
             return [FakeNote("task-1", "Ship API")]
+        if category == "idea":
+            return [FakeNote("idea-1", "Agent reboot from brain", category="idea", content="Make every session start with a reboot brief.")]
         if category == "project":
             return [FakeNote("project-1", "duSraBheja", content="Builder brain project")]
         return []
@@ -146,6 +148,7 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
             "headline": "Morning operating brief",
             "narrative": "duSraBheja is active and the API import is the freshest turning point.",
             "recommended_tasks": [{"title": "Ship API", "why": "Highest leverage now", "project_ref": "duSraBheja"}],
+            "best_ideas": [{"title": "Agent reboot from brain", "why": "Shared-memory workflow", "project_ref": "duSraBheja"}],
             "project_assessments": [
                 {
                     "project": "duSraBheja",
@@ -160,11 +163,12 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
             "video_recommendations": [
                 {
                     "title": "RAG critique walkthrough",
+                    "url": "https://www.youtube.com/watch?v=abc123",
                     "search_query": "rag critique walkthrough",
                     "why": "Useful for current project work",
                 }
             ],
-            "brain_teasers": [{"title": "Edge case", "prompt": "What fails first?", "hint": "Check the scheduler"}],
+            "brain_teasers": [{"title": "Edge case", "prompt": "What fails first?", "hint": "Check the scheduler", "url": "https://example.com/puzzle"}],
             "improvement_focus": [{"title": "Tighten digest", "why": "The brief is still noisy"}],
             "low_confidence_sections": [],
         }
@@ -177,11 +181,13 @@ def test_build_daily_digest_payload_aggregates_tasks_projects_and_activity(monke
 
     assert payload["headline"] == "Morning operating brief"
     assert payload["recommended_tasks"][0]["title"] == "Ship API"
+    assert payload["best_ideas"][0]["title"] == "Agent reboot from brain"
     assert payload["tasks"][0]["title"] == "Ship API"
     assert payload["projects"][0]["title"] == "duSraBheja"
     assert payload["projects"][0]["active_score"] == 0.91
     assert payload["projects"][0]["updates"][0]["title"] == "Imported local snapshot"
     assert payload["pending_reviews"][0]["question"] == "Is this a project or a note?"
+    assert payload["video_recommendations"][0]["url"] == "https://www.youtube.com/watch?v=abc123"
     assert payload["video_recommendations"][0]["search_query"] == "rag critique walkthrough"
     assert payload["improvement_focus"][0]["title"] == "Tighten digest"
 
@@ -259,6 +265,7 @@ def test_build_daily_digest_payload_skips_collector_only_stale_projects(monkeypa
             "headline": "Morning brief",
             "narrative": "Focused on current work only.",
             "recommended_tasks": [],
+            "best_ideas": [],
             "project_assessments": [],
             "writing_topics": [],
             "video_recommendations": [],

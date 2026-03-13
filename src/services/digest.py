@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from src.agents.storyteller import compose_digest_sections
 from src.config import settings
-from src.services.openai_web import search_youtube_learning_queries
+from src.services.openai_web import search_brain_teasers_with_web, search_youtube_learning_queries
 from src.services.project_state import recompute_project_states
 
 try:
@@ -117,6 +117,50 @@ def _fallback_task_recommendations(tasks: list, open_loops: list[dict], projects
             }
         )
     return recommendations[:10]
+
+
+def _fallback_best_ideas(ideas: list, synapses: list[dict], open_loops: list[dict], projects: list) -> list[dict]:
+    best: list[dict] = []
+    for note in ideas[:5]:
+        best.append(
+            {
+                "title": note.title,
+                "why": _shorten(getattr(note, "content", None), 140) or "Stored idea with real signal in the brain.",
+                "project_ref": None,
+            }
+        )
+    for item in synapses[:3]:
+        if len(best) >= 5:
+            break
+        best.append(
+            {
+                "title": item["title"],
+                "why": item["summary"] or "Cross-project connection worth turning into a concrete move.",
+                "project_ref": item.get("project_ref"),
+            }
+        )
+    for item in open_loops[:3]:
+        question = item.get("open_question")
+        if len(best) >= 5 or not question:
+            break
+        best.append(
+            {
+                "title": _shorten(question, 90),
+                "why": "This unresolved thread may hide a stronger project or product idea.",
+                "project_ref": None,
+            }
+        )
+    for project in projects:
+        if len(best) >= 5:
+            break
+        best.append(
+            {
+                "title": f"{project.title} as a sharper product story",
+                "why": "The project is active enough that refining its product angle could unlock better execution.",
+                "project_ref": project.title,
+            }
+        )
+    return best[:5]
 
 
 def _fallback_project_assessments(projects: list, project_updates: dict[str, list[dict]]) -> list[dict]:
@@ -228,6 +272,7 @@ def _build_digest_context(
     digest_date: date,
     trigger: str,
     tasks: list,
+    ideas: list,
     projects: list,
     project_snapshots: dict[str, object],
     resources: list,
@@ -252,6 +297,12 @@ def _build_digest_context(
         f"- {task.title} | priority={getattr(task, 'priority', 'medium')} | status={getattr(task, 'status', 'active')}"
         for task in tasks[:10]
     )
+    if ideas:
+        lines.extend(["", "Ideas:"])
+        lines.extend(
+            f"- {idea.title} | summary={_shorten(getattr(idea, 'content', None), 180) or 'stored idea'}"
+            for idea in ideas[:8]
+        )
     lines.extend(["", "Projects:"])
     for project in projects[:6]:
         snapshot = project_snapshots.get(str(project.id))
@@ -331,9 +382,10 @@ def _build_digest_context(
             "- Recommend strong tasks for today.",
             "- Assess active projects with what is implemented, what is left, and what looks weak.",
             "- Surface cross-project synapses, external learning, and blind spots that matter right now.",
+            "- Surface the best ideas already living in Ahmad's brain, not just the most obvious tasks.",
             "- Suggest five writing topics.",
-            "- Suggest five YouTube watch ideas that fit Ahmad's active domains and current project gaps.",
-            "- Generate five smart brain teasers.",
+            "- Suggest five YouTube watch ideas that fit Ahmad's active domains and current project gaps, using direct links when grounded.",
+            "- Generate five smart brain teasers, using grounded links when possible.",
             "- Include one or two improvement-focus suggestions based on where Ahmad should work next.",
         ]
     )
@@ -355,6 +407,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
 
     await recompute_project_states(session)
     tasks = await store.list_notes(session, category="task", limit=10)
+    ideas = await store.list_notes(session, category="idea", limit=10)
     resources = await store.list_notes(session, category="resource", limit=10)
     recent_activity = await store.list_recent_activity(session, limit=30)
     pending_reviews = await store.get_pending_reviews(session)
@@ -481,6 +534,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     headline = f"{digest_date.isoformat()} operating brief"
     narrative = "The brain has fresh signals, but the higher-order brief is still converging."
     recommended_tasks = fallback_tasks
+    best_ideas = _fallback_best_ideas(ideas, synapses, open_loops, projects)
     project_assessments = fallback_projects
     writing_topic_items = fallback_topics
     video_recommendations = fallback_videos
@@ -492,6 +546,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         digest_date=digest_date,
         trigger=trigger,
         tasks=tasks,
+        ideas=ideas,
         projects=projects,
         project_snapshots=snapshot_map,
         resources=resources,
@@ -523,6 +578,10 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         recommended_tasks, _ = _normalize_topic_items(
             composed.get("recommended_tasks"),
             fallback_tasks,
+        )
+        best_ideas, _ = _normalize_topic_items(
+            composed.get("best_ideas"),
+            best_ideas,
         )
         project_assessments, _ = _normalize_topic_items(
             composed.get("project_assessments"),
@@ -565,6 +624,18 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     else:
         low_confidence_sections = sorted(set([*low_confidence_sections, "youtube_recommendations"]))
 
+    live_brain_teasers = await search_brain_teasers_with_web(
+        topics=[
+            *(project.title for project in projects[:4]),
+            *(item.get("title") for item in best_ideas[:3] if item.get("title")),
+            *(item.get("title") for item in improvement_focus[:2] if item.get("title")),
+        ]
+    )
+    if live_brain_teasers:
+        brain_teasers = live_brain_teasers
+    else:
+        low_confidence_sections = sorted(set([*low_confidence_sections, "brain_teasers"]))
+
     return {
         "digest_date": digest_date.isoformat(),
         "headline": headline,
@@ -579,6 +650,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
             for task in tasks
         ],
         "recommended_tasks": recommended_tasks[:10],
+        "best_ideas": best_ideas[:5],
         "projects": [
             {
                 "id": str(project.id),

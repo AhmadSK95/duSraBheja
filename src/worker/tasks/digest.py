@@ -36,6 +36,7 @@ async def generate_daily_digest(
             "narrative": payload.get("narrative"),
             "tasks": payload["tasks"],
             "recommended_tasks": payload.get("recommended_tasks", []),
+            "best_ideas": payload.get("best_ideas", []),
             "projects": payload["projects"],
             "project_assessments": payload.get("project_assessments", []),
             "recent_activity": payload["recent_activity"],

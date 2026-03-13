@@ -73,6 +73,9 @@ Return ONLY valid JSON with this exact shape:
   "recommended_tasks": [
     {"title": "task", "why": "why it matters now", "project_ref": "project or null"}
   ],
+  "best_ideas": [
+    {"title": "idea", "why": "why it is worth pulling forward now", "project_ref": "project or null"}
+  ],
   "project_assessments": [
     {
       "project": "project name",
@@ -87,21 +90,22 @@ Return ONLY valid JSON with this exact shape:
     {"title": "topic", "why": "why now"}
   ],
   "video_recommendations": [
-    {"title": "short title", "search_query": "youtube search to run", "why": "why this video would help"}
+    {"title": "short title", "url": "https://youtube.com/... or null", "search_query": "youtube search to run", "why": "why this video would help"}
   ],
   "brain_teasers": [
-    {"title": "short label", "prompt": "the teaser or puzzle", "hint": "small hint"}
+    {"title": "short label", "prompt": "the teaser or puzzle", "hint": "small hint", "url": "https://example.com or null"}
   ]
 }
 
 Rules:
 - Stay grounded in the supplied context.
 - Recommended tasks should feel like strong next bets, not generic todos.
+- best_ideas should surface the strongest project, product, or life ideas already living in Ahmad's brain.
 - Project assessments should say what is built, what is left, and where the holes are.
-- For video_recommendations, never invent a direct YouTube URL or fake creator attribution. If you do not have grounded links, output useful YouTube search ideas instead.
-- Brain teasers can be generated, but make them thoughtful and relevant to the current work when possible.
+- For video_recommendations, never invent a direct YouTube URL or fake creator attribution. If you do not have grounded links, set url to null and output useful YouTube search ideas instead.
+- Brain teasers can be generated, but make them thoughtful, relevant to the current work when possible, and include a grounded url when one is available.
 - If a section is weak because evidence is thin, say so and add that section name to low_confidence_sections.
-- Keep lists tight: up to 10 tasks, 5 project assessments, 5 writing topics, 5 video recommendations, 5 brain teasers.
+- Keep lists tight: up to 10 tasks, 5 best ideas, 5 project assessments, 5 writing topics, 5 video recommendations, 5 brain teasers.
 """
 
 JSON_REPAIR_SYSTEM_PROMPT = """You repair malformed JSON.

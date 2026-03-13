@@ -729,12 +729,24 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
         )
         has_secondary_fields = True
 
+    best_ideas = payload.get("best_ideas") or []
+    if best_ideas:
+        secondary.add_field(
+            name="Best Ideas From Your Brain",
+            value=_format_digest_entries([f"{item.get('title')} — {item.get('why')}" for item in best_ideas[:5]]),
+            inline=False,
+        )
+        has_secondary_fields = True
+
     video_recommendations = payload.get("video_recommendations") or []
     if video_recommendations:
         secondary.add_field(
             name="Watch On YouTube",
             value=_format_digest_entries(
-                [f"{item.get('title')} — search: {item.get('search_query')}" for item in video_recommendations[:5]]
+                [
+                    f"{item.get('title')} — {item.get('url') or f'search: {item.get(\"search_query\") or \"unknown\"}'}"
+                    for item in video_recommendations[:5]
+                ]
             ),
             inline=False,
         )
@@ -744,7 +756,13 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
     if brain_teasers:
         secondary.add_field(
             name="Brain Teasers",
-            value=_format_digest_entries([f"{item.get('title')}: {item.get('prompt')}" for item in brain_teasers[:5]]),
+            value=_format_digest_entries(
+                [
+                    f"{item.get('title')}: {item.get('prompt')}"
+                    + (f" — {item.get('url')}" if item.get("url") else "")
+                    for item in brain_teasers[:5]
+                ]
+            ),
             inline=False,
         )
         has_secondary_fields = True

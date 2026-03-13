@@ -18,8 +18,34 @@ async def search_youtube_learning_queries(*, topics: list[str]) -> list[dict]:
 
     prompt = (
         "Return ONLY valid JSON with this exact shape: "
-        '{"items":[{"title":"short title","search_query":"youtube search query","why":"why it helps Ahmad now"}]}. '
-        "Use live web search if helpful, but do not invent direct YouTube URLs or creators. "
+        '{"items":[{"title":"short title","url":"https://youtube.com/... or null","search_query":"youtube search query",'
+        '"why":"why it helps Ahmad now"}]}. '
+        "Use live web search and prefer grounded direct YouTube video, playlist, or channel URLs when confidently found. "
+        "If you cannot ground a direct URL, set url to null and provide a strong search_query instead. "
+        f"Topics: {', '.join(topics[:8])}"
+    )
+    try:
+        response = await client.responses.create(
+            model=settings.openai_web_search_model,
+            tools=[{"type": "web_search_preview"}],
+            input=prompt,
+        )
+        payload = parse_json_object(response.output_text)
+        return list(payload.get("items") or [])[:5]
+    except (openai.OpenAIError, LLMJSONError, json.JSONDecodeError, AttributeError):
+        return []
+
+
+async def search_brain_teasers_with_web(*, topics: list[str]) -> list[dict]:
+    if not settings.openai_api_key or not topics:
+        return []
+
+    prompt = (
+        "Return ONLY valid JSON with this exact shape: "
+        '{"items":[{"title":"short title","prompt":"thoughtful teaser or puzzle",'
+        '"hint":"small hint","url":"https://example.com or null","why":"why it fits Ahmad now"}]}. '
+        "Use live web search when helpful. Prefer real puzzle, article, or challenge links when grounded; otherwise set url to null. "
+        "Make the teasers smart, practical, and connected to systems thinking, product thinking, software delivery, or the active topics. "
         f"Topics: {', '.join(topics[:8])}"
     )
     try:

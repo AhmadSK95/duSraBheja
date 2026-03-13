@@ -75,6 +75,7 @@ def test_generate_daily_digest_publishes_trigger_metadata(monkeypatch) -> None:
             "narrative": "The brain has a view of the day.",
             "tasks": [],
             "recommended_tasks": [],
+            "best_ideas": [],
             "projects": [],
             "project_assessments": [],
             "recent_activity": [],

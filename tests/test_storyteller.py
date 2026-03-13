@@ -17,6 +17,7 @@ def test_compose_digest_sections_repairs_invalid_json(monkeypatch) -> None:
               "headline": "Morning brief",
               "narrative": "Grounded narrative",
               "recommended_tasks": [],
+              "best_ideas": [],
               "project_assessments": [],
               "writing_topics": [],
               "video_recommendations": [],
