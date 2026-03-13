@@ -13,7 +13,7 @@ from src.config import settings
 from src.constants import QUERY_MODES
 from src.lib import store
 from src.lib.embeddings import embed_text
-from src.services.identity import is_low_signal_project_name, resolve_project
+from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
@@ -156,6 +156,9 @@ def candidate_lookup_phrases(question: str) -> list[str]:
 
 
 async def resolve_project_payload(session: AsyncSession, question: str) -> dict | None:
+    inferred = await infer_project_from_text(session, question)
+    if inferred:
+        return await build_project_story_payload(session, inferred.id)
     for phrase in candidate_lookup_phrases(question):
         project = await resolve_project(
             session,

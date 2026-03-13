@@ -87,6 +87,45 @@ def artifact_needs_replay(*, artifact, channel_name: str, has_final_classificati
     return False
 
 
+async def _discord_message_exists(channel, message_id: str | None) -> bool:
+    if not channel or not message_id:
+        return False
+    try:
+        await channel.fetch_message(int(message_id))
+        return True
+    except (discord.NotFound, ValueError, TypeError):
+        return False
+    except (discord.Forbidden, discord.HTTPException):
+        # If Discord is temporarily unhappy, avoid destructive replay churn.
+        return True
+
+
+async def artifact_output_missing_on_discord(*, artifact, message: discord.Message, channel_name: str) -> bool:
+    metadata = dict(getattr(artifact, "metadata_", None) or {})
+    if channel_name == settings.inbox_channel_name:
+        receipt_message_id = metadata.get("discord_receipt_message_id")
+        if not receipt_message_id:
+            return True
+        return not await _discord_message_exists(message.channel, receipt_message_id)
+
+    if channel_name not in PLANNER_CHANNEL_CATEGORIES:
+        return False
+
+    planner_message_id = metadata.get("discord_planner_card_message_id")
+    planner_channel_id = metadata.get("discord_planner_card_channel_id")
+    if not planner_message_id or not planner_channel_id:
+        return True
+
+    guild = getattr(message, "guild", None)
+    planner_channel = guild.get_channel(int(planner_channel_id)) if guild else None
+    if planner_channel is None and guild and hasattr(guild, "fetch_channel"):
+        try:
+            planner_channel = await guild.fetch_channel(int(planner_channel_id))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError, TypeError):
+            planner_channel = None
+    return not await _discord_message_exists(planner_channel, planner_message_id)
+
+
 def attachment_payloads(message: discord.Message) -> list[dict]:
     return [
         {
@@ -109,11 +148,18 @@ async def reconcile_message(message: discord.Message) -> str:
         artifact = await get_artifact_by_discord_id(session, str(message.id))
         if artifact:
             final_classification = await get_final_classification(session, artifact.id)
-            if not artifact_needs_replay(
+            needs_replay = artifact_needs_replay(
                 artifact=artifact,
                 channel_name=channel_name,
                 has_final_classification=bool(final_classification),
-            ):
+            )
+            if not needs_replay:
+                needs_replay = await artifact_output_missing_on_discord(
+                    artifact=artifact,
+                    message=message,
+                    channel_name=channel_name,
+                )
+            if not needs_replay:
                 return "skipped_existing"
             await reset_artifact_processing(session, artifact.id)
             await enqueue_classify(str(artifact.id), force_category=force_category)

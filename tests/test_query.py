@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,6 +78,29 @@ async def test_query_brain_returns_separate_brain_and_web_sources(monkeypatch) -
     assert "From your brain:" in result["answer"]
     assert "From the web:" in result["answer"]
     assert "From your brain:\nFrom your brain" not in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_project_payload_prefers_alias_inference_from_full_question(monkeypatch) -> None:
+    project = {"id": "project-1", "title": "duSraBheja"}
+
+    async def fake_infer_project_from_text(session, text):
+        assert "duSraBheja" in text
+        return SimpleNamespace(id="project-1")
+
+    async def fake_build_project_story_payload(session, project_note_id):
+        assert project_note_id == "project-1"
+        return {"project": project}
+
+    monkeypatch.setattr(query_service, "infer_project_from_text", fake_infer_project_from_text)
+    monkeypatch.setattr(query_service, "build_project_story_payload", fake_build_project_story_payload)
+
+    payload = await query_service.resolve_project_payload(
+        object(),
+        "Bring me up to speed on duSraBheja. Include the latest direction and open loops.",
+    )
+
+    assert payload["project"]["title"] == "duSraBheja"
 
 
 @pytest.mark.asyncio
