@@ -80,6 +80,26 @@ def test_parse_since_boundary_supports_yesterday_and_dates() -> None:
     assert explicit == datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
 
 
+def test_should_use_web_enrichment_suppresses_internal_project_queries() -> None:
+    allowed = query_service.should_use_web_enrichment(
+        "What is the dataGenie project status??",
+        resolved_mode="latest",
+        resolved_intent="project_status",
+        project_payload={"project": {"title": "dataGenie"}},
+        evidence_quality={"overall": 0.2},
+    )
+    explicit = query_service.should_use_web_enrichment(
+        "What is the dataGenie project status on the web?",
+        resolved_mode="latest",
+        resolved_intent="project_status",
+        project_payload={"project": {"title": "dataGenie"}},
+        evidence_quality={"overall": 0.2},
+    )
+
+    assert allowed is False
+    assert explicit is True
+
+
 @pytest.mark.asyncio
 async def test_query_brain_returns_separate_brain_and_web_sources(monkeypatch) -> None:
     async def fake_resolve_project_payload(session, question):

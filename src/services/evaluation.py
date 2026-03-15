@@ -20,6 +20,7 @@ class QueryEvalCase:
     required_terms: list[str] = field(default_factory=list)
     forbidden_terms: list[str] = field(default_factory=list)
     require_brain_source: bool = True
+    allow_web: bool = True
 
 
 def default_query_eval_cases() -> list[QueryEvalCase]:
@@ -29,18 +30,21 @@ def default_query_eval_cases() -> list[QueryEvalCase]:
             question="What is the latest on the duSraBheja project??",
             expected_mode="latest",
             required_terms=["duSraBheja"],
+            allow_web=False,
         ),
         QueryEvalCase(
             name="dataGenie status",
             question="What is the dataGenie project status??",
             expected_mode="latest",
             required_terms=["dataGenie"],
+            allow_web=False,
         ),
         QueryEvalCase(
             name="droplet ip exact fact",
             question="what is my droplet account ip ??",
             expected_mode="answer",
             required_terms=["104.131.63.231"],
+            allow_web=False,
         ),
     ]
 
@@ -70,6 +74,12 @@ def score_query_eval_case(result: dict, case: QueryEvalCase) -> tuple[float, str
             passed += 1
         else:
             notes.append("no brain sources returned")
+
+    checks += 1
+    if case.allow_web or not result.get("used_web"):
+        passed += 1
+    else:
+        notes.append("web enrichment used when local-only answer was expected")
 
     for term in case.required_terms:
         checks += 1

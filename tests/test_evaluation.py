@@ -27,6 +27,29 @@ def test_score_query_eval_case_passes_on_grounded_answer() -> None:
     assert notes == "ok"
 
 
+def test_score_query_eval_case_fails_when_local_only_case_uses_web() -> None:
+    case = evaluation_service.QueryEvalCase(
+        name="project latest",
+        question="What is the latest on the duSraBheja project??",
+        expected_mode="latest",
+        required_terms=["duSraBheja"],
+        allow_web=False,
+    )
+    result = {
+        "ok": True,
+        "mode": "latest",
+        "answer": "From your brain:\nduSraBheja\n\nFrom the web:\nWrong public result",
+        "brain_sources": [{"title": "duSraBheja snapshot"}],
+        "used_web": True,
+        "failure_stage": None,
+    }
+
+    score, status, notes = evaluation_service.score_query_eval_case(result, case)
+
+    assert status == "fail"
+    assert "web enrichment used" in notes
+
+
 def test_run_query_eval_executes_multiple_rounds(monkeypatch) -> None:
     calls = []
 

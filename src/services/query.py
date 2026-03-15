@@ -107,6 +107,17 @@ EXACT_FACT_HINTS = (
     "account",
     "port",
 )
+EXTERNAL_WEB_HINTS = (
+    "web",
+    "online",
+    "internet",
+    "external",
+    "market",
+    "industry",
+    "competitor",
+    "news",
+    "latest news",
+)
 QUERY_STAGE_ROUTING = "routing"
 QUERY_STAGE_CANDIDATE_RETRIEVAL = "candidate_retrieval"
 QUERY_STAGE_NARRATION = "narration"
@@ -178,6 +189,8 @@ def should_use_web_enrichment(
     if resolved_intent == "exact_fact":
         return False
     lowered = (question or "").strip().lower()
+    if project_payload and resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"}:
+        return any(hint in lowered for hint in EXTERNAL_WEB_HINTS)
     if project_payload and any(hint in lowered for hint in PERSONAL_QUERY_HINTS):
         return False
     if resolved_intent in {"project_latest", "project_status"} and float((evidence_quality or {}).get("overall", 0.0)) >= 0.55:
