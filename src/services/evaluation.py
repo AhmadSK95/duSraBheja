@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,6 +90,18 @@ def score_query_eval_case(result: dict, case: QueryEvalCase) -> tuple[float, str
     return score, status, "; ".join(notes) or "ok"
 
 
+def _json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 async def run_query_eval(
     session: AsyncSession,
     *,
@@ -126,7 +139,7 @@ async def run_query_eval(
                     "required_terms": case.required_terms,
                     "forbidden_terms": case.forbidden_terms,
                 },
-                actual=result,
+                actual=_json_safe(result),
                 status=status,
                 score=score,
                 notes=notes,

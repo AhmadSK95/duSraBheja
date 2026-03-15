@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 
 from src.services import evaluation as evaluation_service
 
@@ -72,3 +73,17 @@ def test_run_query_eval_executes_multiple_rounds(monkeypatch) -> None:
     assert len(calls) == 3
     assert result["summary"]["cases"] == 3
     assert result["summary"]["passed"] == 3
+
+
+def test_json_safe_converts_decimal_values() -> None:
+    payload = {
+        "cost_usd": Decimal("0.123"),
+        "nested": [{"score": Decimal("1.5")}],
+    }
+
+    converted = evaluation_service._json_safe(payload)
+
+    assert converted == {
+        "cost_usd": 0.123,
+        "nested": [{"score": 1.5}],
+    }
