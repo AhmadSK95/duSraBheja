@@ -122,6 +122,18 @@ commit_state() {
   cp "${PREP_DIR}/next_state.json" "${STATE_PATH}"
 }
 
+run_chrome_signal_sync() {
+  if [[ "${MODE}" != "sync" ]]; then
+    return 0
+  fi
+  if [[ ! -x "${ROOT_DIR}/scripts/run_chrome_signal_sync.sh" ]]; then
+    return 0
+  fi
+  if ! "${ROOT_DIR}/scripts/run_chrome_signal_sync.sh"; then
+    echo "Chrome signal sync failed; collector sync still completed." >&2
+  fi
+}
+
 if [[ "${ITEMS_SEEN}" == "0" ]]; then
   ssh -i "${SERVER_SSH_KEY}" "${SERVER_USER}@${SERVER_HOST}" \
     "cd '${REMOTE_APP_DIR}' && /usr/bin/bash -lc 'set -a && source .env && curl -sS -X POST -H \"Authorization: Bearer \$API_TOKEN\" -H \"Content-Type: application/json\" --data-binary @- http://127.0.0.1:8000/api/sync/report'" \
@@ -129,6 +141,7 @@ if [[ "${ITEMS_SEEN}" == "0" ]]; then
 {"source_type":"collector","source_name":"${SOURCE_NAME}","mode":"${MODE}","status":"noop","items_seen":0,"items_imported":0,"device_name":"${DEVICE_NAME}"}
 EOF
   commit_state
+  run_chrome_signal_sync
   echo '{"status":"noop","items_seen":0}'
   exit 0
 fi
@@ -138,3 +151,4 @@ ssh -i "${SERVER_SSH_KEY}" "${SERVER_USER}@${SERVER_HOST}" \
   < "${PREP_DIR}/payload.json"
 
 commit_state
+run_chrome_signal_sync
