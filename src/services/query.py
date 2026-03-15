@@ -282,6 +282,47 @@ def _content_alignment(text: str | None, project_title: str | None) -> float:
     return 1.0 if project_title.lower() in text.lower() else 0.0
 
 
+def _normalize_project_text(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _matches_project_context(text: str | None, project_title: str | None) -> bool:
+    if not text or not project_title:
+        return False
+    lowered = (text or "").lower()
+    project_lower = project_title.lower()
+    if project_lower in lowered:
+        return True
+
+    normalized_text = _normalize_project_text(text)
+    normalized_project = _normalize_project_text(project_title)
+    if not normalized_project:
+        return False
+    if normalized_project in normalized_text:
+        return True
+    compact_text = normalized_text.replace(" ", "")
+    compact_project = normalized_project.replace(" ", "")
+    if compact_project and compact_project in compact_text:
+        return True
+
+    project_tokens = [token for token in normalized_project.split() if len(token) >= 3]
+    if not project_tokens:
+        return False
+    return all(token in normalized_text for token in project_tokens)
+
+
+def _directness_similarity_bonus(signal_kind: str) -> float:
+    if signal_kind == "direct_human":
+        return 0.1
+    if signal_kind == "direct_agent":
+        return 0.08
+    if signal_kind == "direct_sync":
+        return 0.05
+    if signal_kind == "derived_system":
+        return -0.08
+    return 0.0
+
+
 def _extract_fact_values(text: str) -> dict[str, list[str]]:
     raw_text = text or ""
     urls = re.findall(r"https?://[^\s)>]+", raw_text)
@@ -539,6 +580,7 @@ async def _collect_exact_sources(
     *,
     project_payload: dict | None,
     now: datetime,
+    strict_project_match: bool = False,
     limit: int = 8,
 ) -> list[dict]:
     try:
@@ -562,11 +604,21 @@ async def _collect_exact_sources(
                 capture_context=(artifact.metadata_ or {}).get("capture_context"),
             )
             matched_count = max(1, len(hit.get("matched_phrases") or []))
+            content = f"{artifact.summary or ''}\n{artifact.raw_text or ''}"
+            if strict_project_match and project_title and not _matches_project_context(content, project_title):
+                continue
             alignment = _content_alignment(
-                f"{artifact.summary or ''}\n{artifact.raw_text or ''}",
+                content,
                 project_title,
             )
-            similarity = min(0.99, 0.7 + matched_count * 0.08 + alignment * 0.12 + _recency_score(artifact.created_at, now=now) * 0.1)
+            similarity = min(
+                0.99,
+                0.68
+                + matched_count * 0.08
+                + alignment * 0.12
+                + _recency_score(artifact.created_at, now=now) * 0.1
+                + _directness_similarity_bonus(signal_kind),
+            )
             exact_sources.append(
                 _build_source_item(
                     source_id=source_id,
@@ -591,7 +643,10 @@ async def _collect_exact_sources(
                 continue
             seen.add(source_id)
             matched_count = max(1, len(hit.get("matched_phrases") or []))
-            alignment = _content_alignment(f"{note.title}\n{note.content or ''}", project_title)
+            note_text = f"{note.title}\n{note.content or ''}"
+            if strict_project_match and project_title and not _matches_project_context(note_text, project_title):
+                continue
+            alignment = _content_alignment(note_text, project_title)
             similarity = min(0.96, 0.66 + matched_count * 0.08 + alignment * 0.14 + _recency_score(note.updated_at, now=now) * 0.12)
             exact_sources.append(
                 _build_source_item(
@@ -615,6 +670,8 @@ async def _collect_exact_sources(
                 continue
             seen.add(source_id)
             content = "\n".join(part for part in (source_item.title, source_item.summary, source_item.external_url) if part)
+            if strict_project_match and project_title and not _matches_project_context(content, project_title):
+                continue
             similarity = min(0.92, 0.64 + _content_alignment(content, project_title) * 0.14 + _recency_score(source_item.happened_at or source_item.created_at, now=now) * 0.12)
             exact_sources.append(
                 _build_source_item(
@@ -736,20 +793,20 @@ def _merge_sources(
     limit: int = 8,
 ) -> list[dict]:
     if intent == "exact_fact":
-        ordered_groups = [exact_sources, project_sources, vector_sources]
+        ordered_groups = [(0, exact_sources), (1, project_sources), (2, vector_sources)]
     elif intent in {"project_latest", "project_status", "project_review", "timeline_review", "latest_status"}:
-        ordered_groups = [project_sources, exact_sources, vector_sources]
+        ordered_groups = [(0, project_sources), (1, exact_sources), (2, vector_sources)]
     else:
-        ordered_groups = [exact_sources, project_sources, vector_sources]
+        ordered_groups = [(0, exact_sources), (1, project_sources), (2, vector_sources)]
 
     merged: list[dict] = []
     seen: set[str] = set()
-    for group in ordered_groups:
+    for group_priority, group in ordered_groups:
         for item in group:
             if item["id"] in seen:
                 continue
             seen.add(item["id"])
-            merged.append(item)
+            merged.append({**item, "_group_priority": group_priority})
             if len(merged) >= limit * 2:
                 break
         if len(merged) >= limit * 2:
@@ -757,13 +814,14 @@ def _merge_sources(
 
     merged.sort(
         key=lambda item: (
+            -int(item.get("_group_priority", 99)),
             item["similarity"],
             1 if item["signal_kind"] in {"direct_human", "direct_agent"} else 0,
             item.get("event_time_utc") or "",
         ),
         reverse=True,
     )
-    return merged[:limit]
+    return [{k: v for k, v in item.items() if k != "_group_priority"} for item in merged[:limit]]
 
 
 def _selected_source_text(sources: list[dict]) -> str:
@@ -1244,6 +1302,7 @@ async def query_brain(
             question,
             project_payload=project_payload,
             now=current_time,
+            strict_project_match=resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"},
             limit=8,
         )
         exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]

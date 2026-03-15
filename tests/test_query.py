@@ -33,6 +33,44 @@ def test_build_exact_answer_prefers_recent_ip_and_username() -> None:
     assert "deployer" in answer
 
 
+def test_matches_project_context_handles_compact_and_spaced_titles() -> None:
+    assert query_service._matches_project_context("duSraBheja project sync", "duSraBheja")
+    assert query_service._matches_project_context("du sra bheja project sync", "duSraBheja")
+    assert not query_service._matches_project_context("barbershop project sync", "duSraBheja")
+
+
+def test_merge_sources_prefers_project_group_for_project_queries() -> None:
+    merged = query_service._merge_sources(
+        intent="project_status",
+        exact_sources=[
+            {
+                "id": "exact-1",
+                "title": "Evidence gap: duSraBheja",
+                "content": "older lexical hit",
+                "similarity": 0.99,
+                "signal_kind": "derived_system",
+                "event_time_utc": "2026-03-15T10:00:00+00:00",
+                "retrieval_kind": "exact_artifact",
+            }
+        ],
+        project_sources=[
+            {
+                "id": "project-1",
+                "title": "duSraBheja snapshot",
+                "content": "fresh project snapshot",
+                "similarity": 0.8,
+                "signal_kind": "derived_system",
+                "event_time_utc": "2026-03-15T09:00:00+00:00",
+                "retrieval_kind": "project_snapshot",
+            }
+        ],
+        vector_sources=[],
+        limit=4,
+    )
+
+    assert merged[0]["id"] == "project-1"
+
+
 def test_parse_since_boundary_supports_yesterday_and_dates() -> None:
     now = datetime(2026, 3, 12, 15, 0, tzinfo=timezone.utc)
     yesterday = query_service.parse_since_boundary("what changed since yesterday", now)
@@ -162,3 +200,82 @@ async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -
     assert result["brain_sources"][0]["title"] == "duSraBheja"
     assert result["projects"][0]["what_changed"].startswith("Codex closeout")
     assert result["answer"] == "duSraBheja is the clearest current focus."
+
+
+@pytest.mark.asyncio
+async def test_query_brain_project_status_prefers_project_sources_over_lexical_noise(monkeypatch) -> None:
+    async def fake_resolve_project_payload(session, question):
+        return {
+            "project": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "title": "duSraBheja",
+                "status": "active",
+                "content": "Board-first overhaul is live.",
+            },
+            "snapshot": {
+                "implemented": "Board-first overhaul is live.",
+                "what_changed": "Recent closeout tightened retrieval.",
+                "remaining": "Verify live answers.",
+                "last_signal_at": "2026-03-15T10:00:00+00:00",
+                "blockers": [],
+                "holes": [],
+            },
+            "recent_activity": [
+                {
+                    "id": "evt-1",
+                    "title": "Closeout published",
+                    "summary": "Codex published a closeout about retrieval fixes.",
+                    "entry_type": "session_closeout",
+                    "actor_type": "agent",
+                    "happened_at": "2026-03-15T09:30:00+00:00",
+                }
+            ],
+            "sources": [],
+        }
+
+    async def fake_resolve_subject_ref(session, question):
+        return "duSraBheja"
+
+    async def fake_list_story_events(session, **kwargs):
+        return []
+
+    async def fake_collect_sources(session, question, *, category=None, limit=8):
+        return []
+
+    async def fake_collect_exact_sources(session, question, *, project_payload, now, strict_project_match=False, limit=8):
+        assert strict_project_match is True
+        return [
+            {
+                "id": "exact-1",
+                "title": "Evidence gap: duSraBheja",
+                "content": "Old lexical artifact mentioning duSraBheja",
+                "similarity": 0.99,
+                "signal_kind": "derived_system",
+                "event_time_utc": "2026-03-15T10:00:00+00:00",
+                "retrieval_kind": "exact_artifact",
+            }
+        ]
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
+        assert "Where it stands: Board-first overhaul is live." in context_text
+        assert context_text.index("duSraBheja snapshot") < context_text.index("Evidence gap: duSraBheja")
+        return {"text": "duSraBheja is live and the next step is verifying answers.", "model": "test-model", "cost_usd": 0}
+
+    monkeypatch.setattr(query_service, "resolve_project_payload", fake_resolve_project_payload)
+    monkeypatch.setattr(query_service, "resolve_subject_ref", fake_resolve_subject_ref)
+    monkeypatch.setattr(query_service.store, "list_story_events", fake_list_story_events)
+    monkeypatch.setattr(query_service, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(query_service, "_collect_exact_sources", fake_collect_exact_sources)
+    monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
+    monkeypatch.setattr(query_service, "narrate_from_context", fake_narrate_from_context)
+
+    result = await query_service.query_brain(object(), question="What is the latest on the duSraBheja project??", include_web=False)
+
+    retrieval_kinds = [item["retrieval_kind"] for item in result["brain_sources"]]
+    assert retrieval_kinds[0].startswith("project_")
+    assert "project_snapshot" in retrieval_kinds
+    assert retrieval_kinds.index("project_snapshot") < retrieval_kinds.index("exact_artifact")
+    assert result["used_project_snapshot"] is True
