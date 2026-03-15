@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from uuid import UUID
 
 import discord
 from redis.asyncio import Redis
@@ -13,7 +14,7 @@ from src.agents.retriever import answer_question
 from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact
+from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact, update_retrieval_trace
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -205,16 +206,37 @@ class InboxCog(commands.Cog):
                 async with async_session() as session:
                     result = await answer_question(session, question=question)
 
+            if not result.get("ok", True):
+                await message.add_reaction("\u274c")
+                await message.reply(
+                    embed=build_answer_failure_embed(result),
+                    mention_author=False,
+                )
+                return
+
             embed = build_answer_embed(question, result)
-            await message.reply(embed=embed, mention_author=False)
+            try:
+                await message.reply(embed=embed, mention_author=False)
+            except Exception:
+                log.exception("Embed send failed for ask-brain message %s; falling back to text", message.id)
+                trace_id = result.get("retrieval_trace_id")
+                if trace_id:
+                    async with async_session() as session:
+                        await update_retrieval_trace(
+                            session,
+                            UUID(trace_id),
+                            failure_stage="render_send",
+                            payload={"render_fallback_used": True},
+                        )
+                await message.reply(build_answer_text(question, result), mention_author=False)
             await message.add_reaction("\u2705")
-        except Exception as exc:
+        except Exception:
             log.exception("Failed to answer ask-brain message %s", message.id)
             await message.add_reaction("\u274c")
             await message.reply(
                 embed=discord.Embed(
                     title="Brain Answer Failed",
-                    description="I saw the question, but retrieval failed before I could answer. Try again in a moment.",
+                    description="I saw the question, but hit a render or answer stage failure before I could reply cleanly. Try again in a moment.",
                     color=discord.Color.red(),
                 ),
                 mention_author=False,
@@ -542,20 +564,22 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
 
     embed = discord.Embed(
         title="Brain Answer",
-        description=result["answer"],
+        description=str(result["answer"])[:4000],
         color=discord.Color.teal(),
     )
     embed.add_field(name="Question", value=question[:1024], inline=False)
     if result.get("mode"):
         embed.add_field(name="Mode", value=str(result["mode"]).replace("_", " ").title(), inline=True)
+    if result.get("intent"):
+        embed.add_field(name="Intent", value=str(result["intent"]).replace("_", " ").title(), inline=True)
 
     brain_sources = result.get("brain_sources") or []
     if brain_sources:
         source_lines = [
-            f"[{i}] {src['category']}: {src['title']} ({src['similarity']:.0%})"
+            f"[{i}] {src['category']}: {src['title']} ({float(src.get('similarity', 0)):.0%})"
             for i, src in enumerate(brain_sources[:5], 1)
         ]
-        embed.add_field(name="From Your Brain", value="\n".join(source_lines), inline=False)
+        embed.add_field(name="From Your Brain", value="\n".join(source_lines)[:1024], inline=False)
 
     web_sources = result.get("web_sources") or []
     if web_sources:
@@ -563,10 +587,53 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
             f"[{i}] {src.get('title') or src.get('source_hint') or 'Web result'}"
             for i, src in enumerate(web_sources[:4], 1)
         ]
-        embed.add_field(name="From The Web", value="\n".join(web_lines), inline=False)
+        embed.add_field(name="From The Web", value="\n".join(web_lines)[:1024], inline=False)
 
     embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
     embed.add_field(name="Model", value=model_label, inline=True)
+    return embed
+
+
+def build_answer_text(question: str, result: dict) -> str:
+    lines = [
+        "Brain Answer",
+        "",
+        str(result.get("answer") or "").strip(),
+        "",
+        f"Question: {question}",
+        f"Mode: {str(result.get('mode') or 'answer').replace('_', ' ')}",
+    ]
+    if result.get("intent"):
+        lines.append(f"Intent: {str(result['intent']).replace('_', ' ')}")
+    if result.get("brain_sources"):
+        lines.append("")
+        lines.append("From your brain:")
+        for index, src in enumerate((result.get("brain_sources") or [])[:5], 1):
+            lines.append(
+                f"[{index}] {src.get('category')}: {src.get('title')} ({float(src.get('similarity', 0)):.0%})"
+            )
+    if result.get("web_sources"):
+        lines.append("")
+        lines.append("From the web:")
+        for index, src in enumerate((result.get("web_sources") or [])[:4], 1):
+            lines.append(f"[{index}] {src.get('title') or src.get('source_hint') or 'Web result'}")
+    rendered = "\n".join(lines).strip()
+    return rendered[:1900]
+
+
+def build_answer_failure_embed(result: dict) -> discord.Embed:
+    stage = str(result.get("failure_stage") or "answering").replace("_", " ")
+    trace_id = result.get("retrieval_trace_id")
+    embed = discord.Embed(
+        title="Brain Answer Unavailable",
+        description=str(result.get("answer") or f"I hit a {stage} issue before I could answer cleanly.")[:4000],
+        color=discord.Color.red(),
+    )
+    embed.add_field(name="Failure Stage", value=stage.title(), inline=True)
+    if trace_id:
+        embed.add_field(name="Trace", value=str(trace_id)[:32], inline=True)
+    if result.get("mode"):
+        embed.add_field(name="Mode", value=str(result["mode"]).replace("_", " ").title(), inline=True)
     return embed
 
 

@@ -9,19 +9,25 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest
+from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
 from src.constants import normalize_category
 from src.database import async_session
 from src.lib import store
 from src.lib.auth import require_api_token, require_dashboard_token
+from src.lib.time import format_display_datetime
 from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
 from src.services.digest import generate_or_refresh_digest
+from src.services.evaluation import run_query_eval
 from src.services.project_state import recompute_project_states
 from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_pool
 
 router = APIRouter(tags=["dashboard"])
 api_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _fmt_dt(value) -> str:
+    return format_display_datetime(value)
 
 
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
@@ -50,6 +56,8 @@ def _page(title: str, body: str, *, token: str) -> HTMLResponse:
       <a href="/dashboard/projects?token={safe_token}">Projects</a>
       <a href="/dashboard/review?token={safe_token}">Review</a>
       <a href="/dashboard/boards?token={safe_token}">Boards</a>
+      <a href="/dashboard/query-traces?token={safe_token}">Query Traces</a>
+      <a href="/dashboard/evals?token={safe_token}">Evals</a>
       <a href="/dashboard/sync-health?token={safe_token}">Sync Health</a>
     </div>
     {body}
@@ -71,7 +79,7 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
             f"<td>{html.escape(item.get('capture_intent') or 'unknown')}</td>"
             f"<td>{html.escape(item.get('validation_status') or 'unknown')}</td>"
             f"<td>{html.escape(issues)}</td>"
-            f"<td>{artifact.created_at}</td>"
+            f"<td>{_fmt_dt(artifact.created_at)}</td>"
             "</tr>"
         )
     return "".join(rows)
@@ -135,7 +143,7 @@ async def dashboard_review(token: str = Query(default="")) -> HTMLResponse:
         f"<td>{str(review.id)[:8]}</td>"
         f"<td>{html.escape(review.review_kind)}</td>"
         f"<td>{html.escape(review.question)}</td>"
-        f"<td>{review.created_at}</td>"
+        f"<td>{_fmt_dt(review.created_at)}</td>"
         "</tr>"
         for review in reviews
     )
@@ -157,7 +165,7 @@ async def dashboard_notes(token: str = Query(default="")) -> HTMLResponse:
         f"<td>{html.escape(note.category)}</td>"
         f"<td>{html.escape(note.title)}</td>"
         f"<td>{html.escape((note.content or '')[:220])}</td>"
-        f"<td>{note.updated_at}</td>"
+        f"<td>{_fmt_dt(note.updated_at)}</td>"
         "</tr>"
         for note in notes
     )
@@ -189,7 +197,7 @@ async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
                 f"<td>{html.escape((snapshot.implemented or '')[:220])}</td>"
                 f"<td>{html.escape((snapshot.what_changed or '')[:180])}</td>"
                 f"<td>{html.escape(blockers)}</td>"
-                f"<td>{snapshot.updated_at}</td>"
+                f"<td>{_fmt_dt(snapshot.updated_at)}</td>"
                 "</tr>"
             )
     body = (
@@ -208,9 +216,9 @@ async def dashboard_boards(token: str = Query(default="")) -> HTMLResponse:
         boards = await store.list_boards(session, limit=30)
     rows = "".join(
         "<tr>"
-        f"<td>{html.escape(board.board_type)}</td>"
+        f"<td><a href=\"/dashboard/boards/{board.id}?token={html.escape(token)}\">{html.escape(board.board_type)}</a></td>"
         f"<td>{board.generated_for_date}</td>"
-        f"<td>{board.coverage_start} -> {board.coverage_end}</td>"
+        f"<td>{_fmt_dt(board.coverage_start)} -> {_fmt_dt(board.coverage_end)}</td>"
         f"<td>{board.status}</td>"
         f"<td>{len(board.source_artifact_ids or [])}</td>"
         f"<td>{len(board.excluded_artifact_ids or [])}</td>"
@@ -226,6 +234,134 @@ async def dashboard_boards(token: str = Query(default="")) -> HTMLResponse:
     return _page("Boards", body, token=token)
 
 
+@router.get("/dashboard/boards/{board_id}", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_board_detail(board_id: uuid.UUID, token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        board = await store.get_board(session, board_id)
+        if not board:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+    payload = dict(board.payload or {})
+    included_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(item.get('title') or 'source')}</td>"
+        f"<td>{html.escape(item.get('signal_kind') or 'unknown')}</td>"
+        f"<td>{html.escape(item.get('reason') or '')}</td>"
+        f"<td>{html.escape(item.get('event_time_local') or 'unknown')}</td>"
+        "</tr>"
+        for item in payload.get("included_source_reasons", [])
+    ) or "<tr><td colspan='4'>None</td></tr>"
+    excluded_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(item.get('title') or 'source')}</td>"
+        f"<td>{html.escape(item.get('signal_kind') or 'unknown')}</td>"
+        f"<td>{html.escape(item.get('reason') or '')}</td>"
+        f"<td>{html.escape(item.get('event_time_local') or 'unknown')}</td>"
+        "</tr>"
+        for item in payload.get("excluded_source_reasons", [])
+    ) or "<tr><td colspan='4'>None</td></tr>"
+    body = f"""
+    <h1>{html.escape(str(board.board_type).title())} Board</h1>
+    <p><span class="pill">{html.escape(payload.get('coverage_label') or str(board.generated_for_date))}</span>
+    <span class="pill">{html.escape(payload.get('display_timezone') or 'UTC')}</span></p>
+    <h2>Story</h2>
+    <p>{html.escape(payload.get('story') or 'No story text.')}</p>
+    <h2>Included Inputs</h2>
+    <table><thead><tr><th>Title</th><th>Signal</th><th>Reason</th><th>Local Time</th></tr></thead><tbody>{included_rows}</tbody></table>
+    <h2>Excluded Inputs</h2>
+    <table><thead><tr><th>Title</th><th>Signal</th><th>Reason</th><th>Local Time</th></tr></thead><tbody>{excluded_rows}</tbody></table>
+    """
+    return _page("Board Detail", body, token=token)
+
+
+@router.get("/dashboard/query-traces", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_query_traces(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        traces = await store.list_retrieval_traces(session, limit=50)
+    rows = "".join(
+        "<tr>"
+        f"<td><a href=\"/dashboard/query-traces/{trace.id}?token={html.escape(token)}\">{str(trace.id)[:8]}</a></td>"
+        f"<td>{html.escape((trace.question or '')[:120])}</td>"
+        f"<td>{html.escape(trace.resolved_mode)}</td>"
+        f"<td>{html.escape(trace.resolved_intent)}</td>"
+        f"<td>{html.escape(trace.failure_stage or 'ok')}</td>"
+        f"<td>{_fmt_dt(trace.created_at)}</td>"
+        "</tr>"
+        for trace in traces
+    ) or "<tr><td colspan='6'>No query traces yet.</td></tr>"
+    body = (
+        "<h1>Query Traces</h1>"
+        "<table><thead><tr><th>ID</th><th>Question</th><th>Mode</th><th>Intent</th><th>Failure Stage</th><th>Created</th></tr></thead><tbody>"
+        + rows
+        + "</tbody></table>"
+    )
+    return _page("Query Traces", body, token=token)
+
+
+@router.get("/dashboard/query-traces/{trace_id}", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_query_trace_detail(trace_id: uuid.UUID, token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        trace = await store.get_retrieval_trace(session, trace_id)
+        if not trace:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
+    body = f"""
+    <h1>Query Trace {trace.id}</h1>
+    <p><span class="pill">{html.escape(trace.resolved_mode)}</span>
+    <span class="pill">{html.escape(trace.resolved_intent)}</span>
+    <span class="pill">{html.escape(trace.failure_stage or 'ok')}</span></p>
+    <p><strong>Question:</strong> {html.escape(trace.question)}</p>
+    <p><strong>Created:</strong> {html.escape(_fmt_dt(trace.created_at))}</p>
+    <h2>Evidence Quality</h2>
+    <pre>{html.escape(str(trace.evidence_quality or {}))}</pre>
+    <h2>Trace Payload</h2>
+    <pre>{html.escape(str(trace.payload or {}))}</pre>
+    """
+    return _page("Query Trace Detail", body, token=token)
+
+
+@router.get("/dashboard/evals", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_evals(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        runs = await store.list_eval_runs(session, limit=25)
+    rows = "".join(
+        "<tr>"
+        f"<td><a href=\"/dashboard/evals/{run.id}?token={html.escape(token)}\">{html.escape(run.run_name)}</a></td>"
+        f"<td>{html.escape(run.status)}</td>"
+        f"<td>{html.escape(str(run.summary or {}))}</td>"
+        f"<td>{_fmt_dt(run.created_at)}</td>"
+        "</tr>"
+        for run in runs
+    ) or "<tr><td colspan='4'>No eval runs yet.</td></tr>"
+    body = (
+        "<h1>Evaluation Runs</h1>"
+        "<table><thead><tr><th>Name</th><th>Status</th><th>Summary</th><th>Created</th></tr></thead><tbody>"
+        + rows
+        + "</tbody></table>"
+    )
+    return _page("Eval Runs", body, token=token)
+
+
+@router.get("/dashboard/evals/{eval_run_id}", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_eval_detail(eval_run_id: uuid.UUID, token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        results = await store.list_eval_case_results(session, eval_run_id=eval_run_id)
+    rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(result.case_name)}</td>"
+        f"<td>{html.escape(result.status)}</td>"
+        f"<td>{result.score:.2f}</td>"
+        f"<td>{html.escape(result.question[:140])}</td>"
+        "</tr>"
+        for result in results
+    ) or "<tr><td colspan='4'>No case results yet.</td></tr>"
+    body = (
+        "<h1>Eval Case Results</h1>"
+        "<table><thead><tr><th>Case</th><th>Status</th><th>Score</th><th>Question</th></tr></thead><tbody>"
+        + rows
+        + "</tbody></table>"
+    )
+    return _page("Eval Detail", body, token=token)
+
+
 @router.get("/dashboard/sync-health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_sync_health(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
@@ -237,7 +373,7 @@ async def dashboard_sync_health(token: str = Query(default="")) -> HTMLResponse:
         f"<td>{html.escape(run.status)}</td>"
         f"<td>{run.items_seen}</td>"
         f"<td>{run.items_imported}</td>"
-        f"<td>{run.started_at}</td>"
+        f"<td>{_fmt_dt(run.started_at)}</td>"
         "</tr>"
         for run in runs
     )
@@ -263,6 +399,7 @@ async def list_dashboard_artifacts(validation_status: str | None = None) -> list
             "validation_status": item.get("validation_status"),
             "quality_issues": item.get("quality_issues", []),
             "created_at": item["artifact"].created_at.isoformat(),
+            "created_at_local": _fmt_dt(item["artifact"].created_at),
         }
         for item in items
     ]
@@ -283,6 +420,7 @@ async def get_dashboard_artifact(artifact_id: uuid.UUID) -> dict:
         "capture_intent": item.get("capture_intent"),
         "validation_status": item.get("validation_status"),
         "quality_issues": item.get("quality_issues", []),
+        "created_at_local": _fmt_dt(artifact.created_at),
     }
 
 
@@ -347,6 +485,7 @@ async def list_dashboard_reviews() -> list[dict]:
             "review_kind": review.review_kind,
             "question": review.question,
             "created_at": review.created_at.isoformat(),
+            "created_at_local": _fmt_dt(review.created_at),
         }
         for review in reviews
     ]
@@ -363,12 +502,32 @@ async def list_dashboard_boards(board_type: str | None = None) -> list[dict]:
             "generated_for_date": board.generated_for_date.isoformat(),
             "coverage_start": board.coverage_start.isoformat(),
             "coverage_end": board.coverage_end.isoformat(),
+            "coverage_start_local": _fmt_dt(board.coverage_start),
+            "coverage_end_local": _fmt_dt(board.coverage_end),
             "status": board.status,
             "source_artifact_ids": board.source_artifact_ids or [],
             "excluded_artifact_ids": board.excluded_artifact_ids or [],
         }
         for board in boards
     ]
+
+
+@api_router.get("/boards/{board_id}", dependencies=[Depends(require_api_token)])
+async def get_dashboard_board(board_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        board = await store.get_board(session, board_id)
+        if not board:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+    return {
+        "board_id": str(board.id),
+        "board_type": board.board_type,
+        "generated_for_date": board.generated_for_date.isoformat(),
+        "coverage_start": board.coverage_start.isoformat(),
+        "coverage_end": board.coverage_end.isoformat(),
+        "coverage_start_local": _fmt_dt(board.coverage_start),
+        "coverage_end_local": _fmt_dt(board.coverage_end),
+        "payload": board.payload,
+    }
 
 
 @api_router.post("/boards/regenerate", dependencies=[Depends(require_api_token)])
@@ -393,6 +552,96 @@ async def regenerate_board_route(payload: BoardRegenerateRequest) -> dict:
     }
 
 
+@api_router.get("/query-traces", dependencies=[Depends(require_api_token)])
+async def list_query_traces() -> list[dict]:
+    async with async_session() as session:
+        traces = await store.list_retrieval_traces(session, limit=50)
+    return [
+        {
+            "trace_id": str(trace.id),
+            "question": trace.question,
+            "resolved_mode": trace.resolved_mode,
+            "resolved_intent": trace.resolved_intent,
+            "failure_stage": trace.failure_stage,
+            "evidence_quality": trace.evidence_quality or {},
+            "used_exact_match": trace.used_exact_match,
+            "used_project_snapshot": trace.used_project_snapshot,
+            "used_vector_search": trace.used_vector_search,
+            "used_web": trace.used_web,
+            "created_at": trace.created_at.isoformat(),
+            "created_at_local": _fmt_dt(trace.created_at),
+        }
+        for trace in traces
+    ]
+
+
+@api_router.get("/query-traces/{trace_id}", dependencies=[Depends(require_api_token)])
+async def get_query_trace(trace_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        trace = await store.get_retrieval_trace(session, trace_id)
+        if not trace:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
+    return {
+        "trace_id": str(trace.id),
+        "question": trace.question,
+        "resolved_mode": trace.resolved_mode,
+        "resolved_intent": trace.resolved_intent,
+        "failure_stage": trace.failure_stage,
+        "evidence_quality": trace.evidence_quality or {},
+        "used_exact_match": trace.used_exact_match,
+        "used_project_snapshot": trace.used_project_snapshot,
+        "used_vector_search": trace.used_vector_search,
+        "used_web": trace.used_web,
+        "payload": trace.payload or {},
+        "created_at": trace.created_at.isoformat(),
+        "created_at_local": _fmt_dt(trace.created_at),
+    }
+
+
+@api_router.get("/eval-runs", dependencies=[Depends(require_api_token)])
+async def list_eval_runs_route() -> list[dict]:
+    async with async_session() as session:
+        runs = await store.list_eval_runs(session, limit=25)
+    return [
+        {
+            "eval_run_id": str(run.id),
+            "run_name": run.run_name,
+            "status": run.status,
+            "summary": run.summary or {},
+            "created_at": run.created_at.isoformat(),
+            "created_at_local": _fmt_dt(run.created_at),
+        }
+        for run in runs
+    ]
+
+
+@api_router.get("/eval-runs/{eval_run_id}", dependencies=[Depends(require_api_token)])
+async def get_eval_run_route(eval_run_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        results = await store.list_eval_case_results(session, eval_run_id=eval_run_id)
+    return {
+        "eval_run_id": str(eval_run_id),
+        "results": [
+            {
+                "case_name": result.case_name,
+                "status": result.status,
+                "score": result.score,
+                "question": result.question,
+                "expected": result.expected or {},
+                "actual": result.actual or {},
+                "notes": result.notes,
+            }
+            for result in results
+        ],
+    }
+
+
+@api_router.post("/eval-runs/run", dependencies=[Depends(require_api_token)])
+async def run_eval_route(payload: EvalRunRequest) -> dict:
+    async with async_session() as session:
+        return await run_query_eval(session, run_name=payload.run_name, rounds=payload.rounds)
+
+
 @api_router.get("/sync-health", dependencies=[Depends(require_api_token)])
 async def sync_health_route() -> list[dict]:
     async with async_session() as session:
@@ -407,6 +656,8 @@ async def sync_health_route() -> list[dict]:
             "items_imported": run.items_imported,
             "started_at": run.started_at.isoformat(),
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "started_at_local": _fmt_dt(run.started_at),
+            "finished_at_local": _fmt_dt(run.finished_at) if run.finished_at else None,
         }
         for run in runs
     ]

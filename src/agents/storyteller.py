@@ -36,28 +36,51 @@ Rules:
 - Prefer concise evidence anchors over long quotes.
 """
 
-NARRATIVE_SYSTEM_PROMPT = """You are Ahmad's storyteller brain.
+STATUS_ANSWER_SYSTEM_PROMPT = """You are Ahmad's storyteller brain.
 
 Answer using ONLY the provided evidence.
-Write as a factual narrative, not fiction.
 
-Structure:
-1. Where things stand
-2. What is already implemented or proven
-3. What is left, unproven, or still in motion
-4. What led here / turning points
-5. Approach assessment: what looks strong and what looks weak
-6. Misses, holes, or hidden risks
-7. What changed recently
-8. Sources
+Output rules:
+- Start with a direct answer in 1-3 sentences.
+- Then add a short grounded evidence section.
+- If you are inferring anything, label it clearly as an inference.
+- Keep Ahmad's tone: direct, thoughtful, low-fluff, builder-operator energy.
+- Prefer clear current status over generic retrospection.
+- Cite sources as [1], [2], etc. only when they are actually grounded in the evidence.
+- If the evidence is mixed or weak, say so plainly instead of sounding certain.
+- Do not include irrelevant sources just because they were retrieved.
+"""
 
-Rules:
-- Keep Ahmad's tone: concise, grounded, direct, story-aware.
-- Do not distort dates, names, or citations.
-- Cite sources as [1], [2], etc.
-- If the question asks to separate grounded evidence from inference, add clearly labeled sections for that split.
-- If the evidence is too thin to judge what is implemented, left, or weak, say that explicitly instead of guessing.
-- If evidence is thin, say that clearly.
+EXACT_FACT_SYSTEM_PROMPT = """You answer exact personal or project fact questions from grounded evidence only.
+
+Output rules:
+- Start with the exact answer immediately.
+- If the evidence contains multiple conflicting values, say that clearly.
+- Keep the answer short and human-readable.
+- Add a brief evidence note after the answer when useful.
+- Cite only grounded sources as [1], [2], etc.
+- Do not generalize from partial matches.
+"""
+
+TIMELINE_ANSWER_SYSTEM_PROMPT = """You build a grounded timeline or review answer from the supplied evidence.
+
+Output rules:
+- Start with the clearest short answer to the user's question.
+- Then walk through the timeline or change sequence in chronological order.
+- Separate grounded evidence from inference when needed.
+- Keep names, dates, and causal links precise.
+- If the story is incomplete, say where the gaps are.
+- Cite grounded sources as [1], [2], etc.
+"""
+
+BOARD_NARRATIVE_SYSTEM_PROMPT = """You turn a closed time window of grounded evidence into a readable board narrative.
+
+Output rules:
+- Write like Ahmad's operating brain: direct, grounded, human, and concise.
+- Say plainly when there was no direct project work in the window.
+- Do not inflate derived system artifacts into direct work.
+- Highlight what mattered, what slipped, and what carries forward.
+- Do not invent momentum that the evidence does not support.
 """
 
 DIGEST_SYSTEM_PROMPT = """You compose Ahmad's morning operating brief from grounded brain signals.
@@ -187,16 +210,126 @@ async def narrate_from_context(
 Context:
 {context_text}
 
-Answer as a grounded story. Cite sources using [1], [2], etc."""
+Answer as a grounded status update. Cite sources using [1], [2], etc."""
     model = settings.opus_model if use_opus else settings.sonnet_model
     return await agent_call(
         session,
         agent_name="storyteller",
         action="narrate",
         prompt=prompt,
-        system=NARRATIVE_SYSTEM_PROMPT,
+        system=STATUS_ANSWER_SYSTEM_PROMPT,
         model=model,
         max_tokens=1800,
+        temperature=0.2,
+        trace_id=trace_id,
+    )
+
+
+async def narrate_status_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Question: {question}
+
+Context:
+{context_text}
+
+Answer with a direct status summary first, then grounded evidence."""
+    model = settings.opus_model if use_opus else settings.sonnet_model
+    return await agent_call(
+        session,
+        agent_name="storyteller",
+        action="narrate_status",
+        prompt=prompt,
+        system=STATUS_ANSWER_SYSTEM_PROMPT,
+        model=model,
+        max_tokens=1800,
+        temperature=0.2,
+        trace_id=trace_id,
+    )
+
+
+async def narrate_exact_fact_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Question: {question}
+
+Context:
+{context_text}
+
+Answer with the exact fact first, then a brief evidence note."""
+    model = settings.opus_model if use_opus else settings.sonnet_model
+    return await agent_call(
+        session,
+        agent_name="storyteller",
+        action="narrate_exact_fact",
+        prompt=prompt,
+        system=EXACT_FACT_SYSTEM_PROMPT,
+        model=model,
+        max_tokens=1200,
+        temperature=0.1,
+        trace_id=trace_id,
+    )
+
+
+async def narrate_timeline_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Question: {question}
+
+Context:
+{context_text}
+
+Answer with the direct takeaway first, then the grounded timeline."""
+    model = settings.opus_model if use_opus else settings.sonnet_model
+    return await agent_call(
+        session,
+        agent_name="storyteller",
+        action="narrate_timeline",
+        prompt=prompt,
+        system=TIMELINE_ANSWER_SYSTEM_PROMPT,
+        model=model,
+        max_tokens=1800,
+        temperature=0.2,
+        trace_id=trace_id,
+    )
+
+
+async def narrate_board_story(
+    session: AsyncSession,
+    *,
+    board_type: str,
+    context_text: str,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    prompt = f"""Board type: {board_type}
+
+Context:
+{context_text}
+
+Write the board narrative."""
+    return await agent_call(
+        session,
+        agent_name="storyteller",
+        action="narrate_board",
+        prompt=prompt,
+        system=BOARD_NARRATIVE_SYSTEM_PROMPT,
+        model=settings.sonnet_model,
+        max_tokens=1200,
         temperature=0.2,
         trace_id=trace_id,
     )

@@ -17,6 +17,8 @@ from src.models import (
     ConversationSession,
     DigestPreference,
     Digest,
+    EvalCaseResult,
+    EvalRun,
     JournalEntry,
     Link,
     Note,
@@ -27,6 +29,7 @@ from src.models import (
     ProtectedContent,
     ReviewQueue,
     Reminder,
+    RetrievalTrace,
     SourceItem,
     StoryConnection,
     SyncRun,
@@ -42,6 +45,18 @@ def _utcnow() -> datetime:
 def _normalize_alias(alias: str | None) -> str:
     cleaned = (alias or "").strip().lower()
     return "".join(ch if ch.isalnum() else "-" for ch in cleaned).strip("-")
+
+
+def _contains_any(columns: list, phrases: list[str]):
+    cleaned_phrases = [phrase.strip().lower() for phrase in phrases if (phrase or "").strip()]
+    if not cleaned_phrases:
+        return None
+    predicates = [
+        func.lower(func.coalesce(column, "")).contains(phrase)
+        for phrase in cleaned_phrases
+        for column in columns
+    ]
+    return or_(*predicates)
 
 
 async def create_artifact(session: AsyncSession, **kwargs) -> Artifact:
@@ -414,6 +429,98 @@ async def vector_search(
     return [dict(row) for row in result.mappings().all()]
 
 
+async def search_artifacts_text(
+    session: AsyncSession,
+    phrases: list[str],
+    *,
+    validation_status: str = "validated",
+    limit: int = 12,
+) -> list[dict]:
+    predicate = _contains_any([Artifact.summary, Artifact.raw_text], phrases)
+    if predicate is None:
+        return []
+
+    final_class = select(Classification).where(Classification.is_final == True).subquery()
+    query = (
+        select(
+            Artifact,
+            final_class.c.category,
+            final_class.c.capture_intent,
+            final_class.c.validation_status,
+            final_class.c.tags,
+        )
+        .join(final_class, final_class.c.artifact_id == Artifact.id)
+        .where(predicate)
+        .order_by(Artifact.created_at.desc())
+        .limit(limit)
+    )
+    if validation_status:
+        query = query.where(final_class.c.validation_status == validation_status)
+
+    result = await session.execute(query)
+    rows: list[dict] = []
+    cleaned_phrases = [phrase.strip().lower() for phrase in phrases if phrase.strip()]
+    for row in result.all():
+        artifact = row[0]
+        haystacks = " ".join(
+            part for part in ((artifact.summary or "").lower(), (artifact.raw_text or "").lower()) if part
+        )
+        matched = [phrase for phrase in cleaned_phrases if phrase in haystacks]
+        rows.append(
+            {
+                "artifact": artifact,
+                "category": row.category,
+                "capture_intent": row.capture_intent,
+                "validation_status": row.validation_status,
+                "tags": row.tags or [],
+                "matched_phrases": matched,
+            }
+        )
+    return rows
+
+
+async def search_notes_text(
+    session: AsyncSession,
+    phrases: list[str],
+    *,
+    limit: int = 10,
+) -> list[dict]:
+    predicate = _contains_any([Note.title, Note.content], phrases)
+    if predicate is None:
+        return []
+    result = await session.execute(
+        select(Note)
+        .where(predicate)
+        .order_by(Note.updated_at.desc(), Note.created_at.desc())
+        .limit(limit)
+    )
+    cleaned_phrases = [phrase.strip().lower() for phrase in phrases if phrase.strip()]
+    rows: list[dict] = []
+    for note in result.scalars().all():
+        haystacks = " ".join(part for part in ((note.title or "").lower(), (note.content or "").lower()) if part)
+        matched = [phrase for phrase in cleaned_phrases if phrase in haystacks]
+        rows.append({"note": note, "matched_phrases": matched})
+    return rows
+
+
+async def search_source_items_text(
+    session: AsyncSession,
+    phrases: list[str],
+    *,
+    limit: int = 10,
+) -> list[SourceItem]:
+    predicate = _contains_any([SourceItem.title, SourceItem.summary, SourceItem.external_url], phrases)
+    if predicate is None:
+        return []
+    result = await session.execute(
+        select(SourceItem)
+        .where(predicate)
+        .order_by(SourceItem.happened_at.desc().nullslast(), SourceItem.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def create_link(session: AsyncSession, **kwargs) -> Link:
     link = Link(**kwargs)
     session.add(link)
@@ -779,9 +886,15 @@ async def list_artifacts_for_window(
             final_class.c.eligible_for_boards,
             final_class.c.eligible_for_project_state,
             final_class.c.tags,
+            func.coalesce(SourceItem.happened_at, Artifact.created_at).label("event_time"),
+            SourceItem.id.label("source_item_id"),
         )
         .join(final_class, final_class.c.artifact_id == Artifact.id)
-        .where(Artifact.created_at >= start, Artifact.created_at <= end)
+        .outerjoin(SourceItem, SourceItem.artifact_id == Artifact.id)
+        .where(
+            func.coalesce(SourceItem.happened_at, Artifact.created_at) >= start,
+            func.coalesce(SourceItem.happened_at, Artifact.created_at) <= end,
+        )
         .order_by(Artifact.created_at.asc())
         .limit(limit)
     )
@@ -806,6 +919,8 @@ async def list_artifacts_for_window(
             "eligible_for_boards": row.eligible_for_boards,
             "eligible_for_project_state": row.eligible_for_project_state,
             "tags": row.tags or [],
+            "event_time": row.event_time,
+            "source_item_id": str(row.source_item_id) if row.source_item_id else None,
         }
         for row in result.all()
     ]
@@ -1740,3 +1855,146 @@ async def upsert_digest_preference(
     await session.commit()
     await session.refresh(preference)
     return preference
+
+
+async def create_retrieval_trace(
+    session: AsyncSession,
+    *,
+    trace_id: uuid.UUID,
+    question: str,
+    resolved_mode: str,
+    resolved_intent: str,
+    failure_stage: str | None = None,
+    evidence_quality: dict | None = None,
+    used_exact_match: bool = False,
+    used_project_snapshot: bool = False,
+    used_vector_search: bool = False,
+    used_web: bool = False,
+    payload: dict | None = None,
+) -> RetrievalTrace:
+    trace = RetrievalTrace(
+        id=trace_id,
+        question=question,
+        resolved_mode=resolved_mode,
+        resolved_intent=resolved_intent,
+        failure_stage=failure_stage,
+        evidence_quality=evidence_quality or {},
+        used_exact_match=used_exact_match,
+        used_project_snapshot=used_project_snapshot,
+        used_vector_search=used_vector_search,
+        used_web=used_web,
+        payload=payload or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(trace)
+    await session.commit()
+    await session.refresh(trace)
+    return trace
+
+
+async def update_retrieval_trace(
+    session: AsyncSession,
+    trace_id: uuid.UUID,
+    **kwargs,
+) -> RetrievalTrace | None:
+    kwargs.setdefault("updated_at", _utcnow())
+    await session.execute(update(RetrievalTrace).where(RetrievalTrace.id == trace_id).values(**kwargs))
+    await session.commit()
+    result = await session.execute(select(RetrievalTrace).where(RetrievalTrace.id == trace_id))
+    return result.scalar_one_or_none()
+
+
+async def get_retrieval_trace(session: AsyncSession, trace_id: uuid.UUID) -> RetrievalTrace | None:
+    return await session.get(RetrievalTrace, trace_id)
+
+
+async def list_retrieval_traces(
+    session: AsyncSession,
+    *,
+    limit: int = 50,
+) -> list[RetrievalTrace]:
+    result = await session.execute(
+        select(RetrievalTrace).order_by(RetrievalTrace.created_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def create_eval_run(
+    session: AsyncSession,
+    *,
+    run_name: str,
+    status: str = "running",
+    summary: dict | None = None,
+    metadata_: dict | None = None,
+) -> EvalRun:
+    eval_run = EvalRun(
+        run_name=run_name,
+        status=status,
+        summary=summary or {},
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(eval_run)
+    await session.commit()
+    await session.refresh(eval_run)
+    return eval_run
+
+
+async def update_eval_run(session: AsyncSession, eval_run_id: uuid.UUID, **kwargs) -> EvalRun | None:
+    kwargs.setdefault("updated_at", _utcnow())
+    await session.execute(update(EvalRun).where(EvalRun.id == eval_run_id).values(**kwargs))
+    await session.commit()
+    result = await session.execute(select(EvalRun).where(EvalRun.id == eval_run_id))
+    return result.scalar_one_or_none()
+
+
+async def list_eval_runs(session: AsyncSession, *, limit: int = 20) -> list[EvalRun]:
+    result = await session.execute(
+        select(EvalRun).order_by(EvalRun.created_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def create_eval_case_result(
+    session: AsyncSession,
+    *,
+    eval_run_id: uuid.UUID,
+    case_name: str,
+    question: str,
+    expected: dict,
+    actual: dict,
+    status: str,
+    score: float,
+    notes: str | None = None,
+) -> EvalCaseResult:
+    case_result = EvalCaseResult(
+        eval_run_id=eval_run_id,
+        case_name=case_name,
+        question=question,
+        expected=expected,
+        actual=actual,
+        status=status,
+        score=score,
+        notes=notes,
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(case_result)
+    await session.commit()
+    await session.refresh(case_result)
+    return case_result
+
+
+async def list_eval_case_results(
+    session: AsyncSession,
+    *,
+    eval_run_id: uuid.UUID,
+) -> list[EvalCaseResult]:
+    result = await session.execute(
+        select(EvalCaseResult)
+        .where(EvalCaseResult.eval_run_id == eval_run_id)
+        .order_by(EvalCaseResult.created_at.asc())
+    )
+    return list(result.scalars().all())

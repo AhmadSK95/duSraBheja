@@ -19,6 +19,20 @@ def test_detect_query_mode_prefers_explicit_story_modes() -> None:
     assert query_service.detect_query_mode("review project duSraBheja and tell me the holes") == "project_review"
 
 
+def test_build_exact_answer_prefers_recent_ip_and_username() -> None:
+    answer = query_service._build_exact_answer(
+        "what is my droplet account ip ??",
+        [
+            {
+                "content": "My droplet ip is 104.131.63.231 and user account is deployer",
+            }
+        ],
+    )
+
+    assert "104.131.63.231" in answer
+    assert "deployer" in answer
+
+
 def test_parse_since_boundary_supports_yesterday_and_dates() -> None:
     now = datetime(2026, 3, 12, 15, 0, tzinfo=timezone.utc)
     yesterday = query_service.parse_since_boundary("what changed since yesterday", now)

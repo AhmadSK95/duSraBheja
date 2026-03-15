@@ -130,3 +130,8 @@ class ArtifactModerationRequest(BaseModel):
 class BoardRegenerateRequest(BaseModel):
     board_type: str = Field(min_length=1)
     target_date: str = Field(min_length=8)
+
+
+class EvalRunRequest(BaseModel):
+    run_name: str = Field(default="retrieval-reliability", min_length=3)
+    rounds: int = Field(default=3, ge=1, le=10)

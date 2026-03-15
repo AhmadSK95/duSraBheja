@@ -107,3 +107,45 @@ def test_build_board_payload_excludes_low_signal_collector_snapshots(monkeypatch
     assert source_ids == ["a1"]
     assert "a2" in excluded_ids
     assert payload["what_mattered"] == ["duSraBheja closeout"]
+
+
+def test_build_board_payload_says_no_direct_project_work_when_only_derived_events_exist(monkeypatch) -> None:
+    async def fake_list_artifacts_for_window(session, *, start, end, eligible_for_boards=None, validation_status=None, eligible_for_project_state=None, limit=250):
+        base = [
+            {
+                "artifact": FakeArtifact("a1", "Saturday planner page", "Job applications\nInterview prep"),
+                "category": "daily_planner",
+                "capture_intent": "plan_capture",
+                "validation_status": "validated",
+                "eligible_for_boards": True,
+                "tags": [],
+                "event_time": datetime(2026, 3, 14, 14, 0, tzinfo=timezone.utc),
+            }
+        ]
+        return base
+
+    class FakeEvent:
+        id = "e1"
+        project_note_id = None
+        title = "dataGenie x barbershop"
+        summary = "Derived cross-project connection"
+        entry_type = "synapse"
+        actor_type = "system"
+        happened_at = datetime(2026, 3, 14, 15, 0, tzinfo=timezone.utc)
+
+    async def fake_list_story_events(session, *, since=None, until=None, limit=50, ascending=False, project_note_id=None, subject_ref=None):
+        return [FakeEvent()]
+
+    monkeypatch.setattr(board_service.store, "list_artifacts_for_window", fake_list_artifacts_for_window)
+    monkeypatch.setattr(board_service.store, "list_story_events", fake_list_story_events)
+
+    payload, _, _ = asyncio.run(
+        board_service.build_board_payload(
+            object(),
+            window=board_service.daily_board_window(date(2026, 3, 14)),
+        )
+    )
+
+    assert "no direct project work evidence" in payload["story"].lower()
+    assert payload["derived_source_count"] == 1
+    assert payload["had_direct_project_work"] is False

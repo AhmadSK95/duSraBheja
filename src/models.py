@@ -604,3 +604,69 @@ class DigestPreference(Base):
         UniqueConstraint("profile_name"),
         Index("idx_digest_preferences_profile", "profile_name"),
     )
+
+
+class RetrievalTrace(Base):
+    __tablename__ = "retrieval_traces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    question = Column(Text, nullable=False)
+    resolved_mode = Column(String, nullable=False, default="answer")
+    resolved_intent = Column(String, nullable=False, default="general_answer")
+    failure_stage = Column(String, nullable=True)
+    evidence_quality = Column(JSONB, default=dict)
+    used_exact_match = Column(Boolean, nullable=False, default=False)
+    used_project_snapshot = Column(Boolean, nullable=False, default=False)
+    used_vector_search = Column(Boolean, nullable=False, default=False)
+    used_web = Column(Boolean, nullable=False, default=False)
+    payload = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_retrieval_traces_created", "created_at"),
+        Index("idx_retrieval_traces_mode", "resolved_mode"),
+        Index("idx_retrieval_traces_failure", "failure_stage"),
+    )
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_name = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="running")
+    summary = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    case_results = relationship("EvalCaseResult", back_populates="eval_run", cascade="all, delete")
+
+    __table_args__ = (
+        Index("idx_eval_runs_created", "created_at"),
+        Index("idx_eval_runs_status", "status"),
+    )
+
+
+class EvalCaseResult(Base):
+    __tablename__ = "eval_case_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    eval_run_id = Column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False)
+    case_name = Column(String, nullable=False)
+    question = Column(Text, nullable=False)
+    expected = Column(JSONB, default=dict)
+    actual = Column(JSONB, default=dict)
+    status = Column(String, nullable=False, default="pending")
+    score = Column(Float, nullable=False, default=0.0)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    eval_run = relationship("EvalRun", back_populates="case_results")
+
+    __table_args__ = (
+        Index("idx_eval_case_results_run", "eval_run_id"),
+        Index("idx_eval_case_results_status", "status"),
+    )
