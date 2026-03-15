@@ -17,7 +17,21 @@ from src.services.identity import is_low_signal_project_name
 RECENT_WINDOW_DAYS = 14
 DORMANT_WINDOW_DAYS = 30
 MAX_ASSESSED_PROJECTS = 5
-LOW_SIGNAL_ENTRY_TYPES = {"context_dump", "repo_snapshot"}
+LOW_SIGNAL_ENTRY_TYPES = {
+    "context_dump",
+    "context_signal_dump",
+    "directory_inventory",
+    "repo_snapshot",
+    "repo_signal_summary",
+    "workspace_signal_summary",
+    "workspace_landscape_summary",
+    "agent_memory_snapshot",
+    "plan_snapshot",
+    "todo_snapshot",
+    "agent_reference_signal",
+    "agent_plan_signal",
+    "agent_todo_signal",
+}
 INDIRECT_ACTIVITY_ENTRY_TYPES = {"knowledge_refresh", "voice_refresh"}
 DIRECT_STATE_ENTRY_TYPES = {"session_closeout", "progress_update", "decision", "conversation_session"}
 
@@ -115,6 +129,27 @@ def _dedupe_nonempty(values: list[str | None]) -> list[str]:
         seen.add(cleaned)
         result.append(cleaned)
     return result
+
+
+def _source_item_entry_type(item) -> str:
+    payload = getattr(item, "payload", None) or {}
+    return str(payload.get("entry_type") or "")
+
+
+def _source_item_is_meaningful(item) -> bool:
+    payload = getattr(item, "payload", None) or {}
+    entry_type = _source_item_entry_type(item)
+    if entry_type in LOW_SIGNAL_ENTRY_TYPES:
+        return False
+    if payload.get("eligible_for_project_state") is False:
+        return False
+    metadata = payload.get("metadata") or {}
+    if (metadata.get("snapshot_kind") or "").lower() in {"repo", "directory_inventory", "repo_signal", "workspace_landscape", "context_workspace_signal"}:
+        return False
+    tags = {str(tag).lower() for tag in payload.get("tags") or []}
+    if {"repo-snapshot", "inventory", "workspace-landscape"} & tags:
+        return False
+    return True
 
 
 def _compact_text(value: str | None, *, limit: int = 280) -> str | None:
@@ -220,8 +255,10 @@ def _score_project(
         payload = item.payload or {}
         tags = payload.get("tags") or []
         metadata = payload.get("metadata") or {}
-        if "repo-snapshot" in tags or metadata.get("snapshot_kind") == "repo":
+        if "repo-snapshot" in tags or metadata.get("snapshot_kind") in {"repo", "repo_signal"}:
             repo_snapshots += 1
+        if not _source_item_is_meaningful(item):
+            continue
         happened = _extract_iso(item.happened_at)
         if happened:
             source_dates.append(happened)

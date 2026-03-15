@@ -11,6 +11,26 @@ from src.lib import store
 from src.lib.provenance import DERIVED_ENTRY_TYPES, signal_kind_for_artifact, signal_kind_for_event
 from src.lib.time import describe_event_time, format_display_datetime
 
+LOW_SIGNAL_BOARD_ENTRY_TYPES = {
+    "context_dump",
+    "context_signal_dump",
+    "directory_inventory",
+    "repo_signal_summary",
+    "workspace_signal_summary",
+    "workspace_landscape_summary",
+    "agent_reference_signal",
+    "agent_plan_signal",
+    "agent_todo_signal",
+}
+LOW_SIGNAL_BOARD_SNAPSHOT_KINDS = {
+    "repo",
+    "context_workspace",
+    "directory_inventory",
+    "repo_signal",
+    "context_workspace_signal",
+    "workspace_landscape",
+}
+
 
 @dataclass(frozen=True)
 class BoardWindow:
@@ -89,14 +109,19 @@ def _is_low_signal_board_item(item: dict) -> bool:
     snapshot_kind = source_metadata.get("snapshot_kind") or metadata.get("snapshot_kind")
     entry_type = metadata.get("entry_type")
 
-    if source in {"collector", "github"} and snapshot_kind in {"repo", "context_workspace", "directory_inventory"}:
+    if source in {"collector", "github"} and snapshot_kind in LOW_SIGNAL_BOARD_SNAPSHOT_KINDS:
         return True
-    if source == "collector" and entry_type in {"context_dump", "context_signal_dump"}:
+    if entry_type in LOW_SIGNAL_BOARD_ENTRY_TYPES:
         return True
-    if {"repo-snapshot", "inventory", "local-context"} & tags:
+    if {"repo-snapshot", "inventory", "local-context", "repo-signal", "workspace-signal"} & tags:
         return True
     summary = (artifact.summary or "").lower()
-    if source == "collector" and ("local snapshot" in summary or "agent context snapshot" in summary):
+    if source == "collector" and (
+        "local snapshot" in summary
+        or "agent context snapshot" in summary
+        or "repo signal" in summary
+        or "workspace landscape" in summary
+    ):
         return True
     return False
 

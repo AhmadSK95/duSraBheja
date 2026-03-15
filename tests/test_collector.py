@@ -37,9 +37,12 @@ def test_build_repo_snapshot_includes_git_and_context_files(tmp_path: Path) -> N
     assert snapshot["project_ref"] == "brain-repo"
     assert snapshot["repo"]["name"] == "brain-repo"
     assert snapshot["external_id"].startswith("collector:repo:")
-    assert "Recent Commits" in snapshot["body_markdown"]
-    assert "Context File: README.md" in snapshot["body_markdown"]
-    assert "Context File: CLAUDE.md" in snapshot["body_markdown"]
+    assert snapshot["entry_type"] == "repo_signal_summary"
+    assert snapshot["eligible_for_boards"] is False
+    assert snapshot["eligible_for_project_state"] is False
+    assert "Recent Commit Signals" in snapshot["body_markdown"]
+    assert "README.md:" in snapshot["body_markdown"]
+    assert "CLAUDE.md:" in snapshot["body_markdown"]
 
 
 def test_discover_repo_roots_finds_nested_repositories(tmp_path: Path) -> None:
@@ -71,7 +74,8 @@ def test_build_context_workspace_snapshot_handles_non_repo_agent_signals(tmp_pat
 
     assert snapshot is not None
     assert snapshot["project_ref"] == "agent-signals"
-    assert snapshot["entry_type"] == "context_signal_dump"
+    assert snapshot["entry_type"] == "workspace_signal_summary"
+    assert snapshot["eligible_for_boards"] is False
     assert "Session notes for the agent" in snapshot["body_markdown"]
 
 
@@ -102,7 +106,7 @@ def test_collect_entries_skips_unchanged_items_in_sync_mode(tmp_path: Path) -> N
     )
 
     assert len(initial_entries) == 2
-    assert {entry["entry_type"] for entry in initial_entries} == {"context_dump", "directory_inventory"}
+    assert {entry["entry_type"] for entry in initial_entries} == {"repo_signal_summary", "workspace_landscape_summary"}
     assert repeat_entries == []
 
 

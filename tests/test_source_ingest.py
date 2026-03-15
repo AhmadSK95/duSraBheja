@@ -221,3 +221,110 @@ def test_ingest_source_entries_prefers_entry_summary_for_story_entry(monkeypatch
     assert result["items_imported"] == 1
     assert touched["summary"] == "short structured summary"
     assert touched["conversation_session"]["transcript_excerpt"] == "short structured summary"
+
+
+def test_ingest_source_entries_respects_entry_quality_flags(monkeypatch) -> None:
+    touched = {}
+
+    async def fake_upsert_sync_source(session, source_type, name, status="active", config=None):
+        return SimpleNamespace(id=uuid4())
+
+    async def fake_start_sync_run(session, sync_source_id, mode, metadata_=None):
+        return SimpleNamespace(id=uuid4())
+
+    async def fake_resolve_project(session, **kwargs):
+        return None
+
+    async def fake_infer_project_from_text(session, text):
+        return None
+
+    async def fake_get_source_item_by_external_id(session, sync_source_id, external_id):
+        return None
+
+    async def fake_create_artifact(session, **kwargs):
+        return SimpleNamespace(id=uuid4())
+
+    async def fake_create_classification(session, **kwargs):
+        touched["classification"] = kwargs
+        return None
+
+    async def fake_upsert_source_item(session, **kwargs):
+        return SimpleNamespace(id=uuid4()), True
+
+    async def fake_publish_story_entry(session, **kwargs):
+        return {"journal_entry": SimpleNamespace(id=uuid4())}
+
+    async def fake_finish_sync_run(session, sync_run_id, status, items_seen, items_imported, error=None):
+        return None
+
+    async def fake_touch_sync_source(session, sync_source_id):
+        return None
+
+    async def fake_extract_story_fields(session, **kwargs):
+        return {
+            "subject_type": "topic",
+            "subject_ref": None,
+            "entry_type": kwargs.get("source_type") or "note",
+            "title": kwargs["title"],
+            "summary": kwargs["body_markdown"][:120],
+            "decision": None,
+            "rationale": None,
+            "constraint": None,
+            "outcome": None,
+            "impact": None,
+            "open_question": None,
+            "evidence_refs": [],
+            "tags": [],
+        }
+
+    monkeypatch.setattr(source_ingest.store, "upsert_sync_source", fake_upsert_sync_source)
+    monkeypatch.setattr(source_ingest.store, "start_sync_run", fake_start_sync_run)
+    monkeypatch.setattr(source_ingest.store, "get_source_item_by_external_id", fake_get_source_item_by_external_id)
+    monkeypatch.setattr(source_ingest.store, "create_artifact", fake_create_artifact)
+    monkeypatch.setattr(source_ingest.store, "create_classification", fake_create_classification)
+    monkeypatch.setattr(source_ingest.store, "upsert_source_item", fake_upsert_source_item)
+    monkeypatch.setattr(source_ingest.store, "finish_sync_run", fake_finish_sync_run)
+    monkeypatch.setattr(source_ingest.store, "touch_sync_source", fake_touch_sync_source)
+    monkeypatch.setattr(source_ingest, "resolve_project", fake_resolve_project)
+    monkeypatch.setattr(source_ingest, "infer_project_from_text", fake_infer_project_from_text)
+    monkeypatch.setattr(source_ingest, "ensure_project_aliases", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(source_ingest, "recompute_project_states", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(source_ingest, "index_artifact", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(source_ingest, "publish_story_entry", fake_publish_story_entry)
+
+    source_ingest_module_sync = __import__("src.services.sync", fromlist=["_publish_sync_event"])
+    monkeypatch.setattr(source_ingest_module_sync, "_publish_sync_event", lambda *args, **kwargs: asyncio.sleep(0))
+    monkeypatch.setattr(source_ingest_module_sync, "_extract_story_fields", fake_extract_story_fields)
+
+    asyncio.run(
+        source_ingest.ingest_source_entries(
+            object(),
+            source_type="collector",
+            source_name="mac-collector",
+            mode="sync",
+            device_name="macbook",
+            entries=[
+                {
+                    "external_id": "collector:repo:test",
+                    "title": "duSraBheja local repo signal",
+                    "summary": "Curated repo signal",
+                    "entry_type": "repo_signal_summary",
+                    "category": "project",
+                    "body_markdown": "# Local Repo Signal",
+                    "content_hash": "hash-collector-signal",
+                    "capture_intent": "reference",
+                    "intent_confidence": 0.93,
+                    "validation_status": "validated",
+                    "quality_issues": [],
+                    "eligible_for_boards": False,
+                    "eligible_for_project_state": False,
+                    "metadata": {"snapshot_kind": "repo_signal"},
+                }
+            ],
+        )
+    )
+
+    assert touched["classification"]["capture_intent"] == "reference"
+    assert touched["classification"]["intent_confidence"] == 0.93
+    assert touched["classification"]["eligible_for_boards"] is False
+    assert touched["classification"]["eligible_for_project_state"] is False

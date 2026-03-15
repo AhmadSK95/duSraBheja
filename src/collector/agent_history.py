@@ -39,6 +39,7 @@ CLAUDE_EXCLUDED_PARTS = {
 TEXT_FILE_SUFFIXES = {".json", ".jsonl", ".md", ".txt"}
 MAX_REQUEST_BYTES = 1_500_000
 MAX_ENTRIES_PER_REQUEST = 20
+MAX_REFERENCE_SIGNAL_LINES = 8
 
 ASSIGNMENT_SECRET_RE = re.compile(
     r"(?im)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b\s*[:=]\s*([^\s]+)"
@@ -46,6 +47,25 @@ ASSIGNMENT_SECRET_RE = re.compile(
 BEARER_SECRET_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._-]+")
 OPENAI_KEY_RE = re.compile(r"\bsk-[a-zA-Z0-9_-]{20,}\b")
 DISCORD_TOKEN_RE = re.compile(r"\b[a-zA-Z0-9_-]{24}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{20,}\b")
+SIGNAL_HINT_RE = re.compile(
+    r"\b(todo|next|plan|ship|fix|block|blocked|question|decide|decision|need|should|must|focus|priority|launch|deploy)\b",
+    re.I,
+)
+SIGNAL_JSON_KEYS = {
+    "title",
+    "task",
+    "todo",
+    "summary",
+    "content",
+    "description",
+    "status",
+    "note",
+    "question",
+    "decision",
+    "next_step",
+    "next",
+    "priority",
+}
 
 
 def _utcnow() -> datetime:
@@ -62,6 +82,84 @@ def redact_text(text: str) -> str:
     redacted = OPENAI_KEY_RE.sub("<redacted-openai-key>", redacted)
     redacted = DISCORD_TOKEN_RE.sub("<redacted-discord-token>", redacted)
     return redacted
+
+
+def _clean_signal_line(value: str) -> str:
+    cleaned = " ".join((value or "").strip().split())
+    cleaned = cleaned.lstrip("-*•0123456789.[]() ").strip()
+    return cleaned
+
+
+def _dedupe(values: list[str], *, limit: int | None = None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        key = cleaned.lower()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+        if limit is not None and len(result) >= limit:
+            break
+    return result
+
+
+def _extract_json_signal_lines(value: object, *, depth: int = 0) -> list[str]:
+    if depth > 4:
+        return []
+    if isinstance(value, str):
+        cleaned = _clean_signal_line(value)
+        if len(cleaned) < 8:
+            return []
+        return [cleaned[:220]]
+    if isinstance(value, list):
+        lines: list[str] = []
+        for item in value:
+            lines.extend(_extract_json_signal_lines(item, depth=depth + 1))
+        return lines
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, str) and key.lower() in SIGNAL_JSON_KEYS:
+                cleaned = _clean_signal_line(item)
+                if cleaned:
+                    lines.append(f"{key}: {cleaned[:200]}")
+            else:
+                lines.extend(_extract_json_signal_lines(item, depth=depth + 1))
+        return lines
+    return []
+
+
+def _reference_signal_lines(content: str) -> list[str]:
+    text = redact_text(content or "")
+    candidates: list[tuple[int, str]] = []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is not None:
+        for line in _extract_json_signal_lines(parsed):
+            score = 2 + int(bool(SIGNAL_HINT_RE.search(line)))
+            candidates.append((score, line))
+
+    for raw_line in text.splitlines():
+        cleaned = _clean_signal_line(raw_line)
+        if len(cleaned) < 8 or cleaned.startswith(("{", "}", "[", "]")):
+            continue
+        score = 0
+        if raw_line.lstrip().startswith(("-", "*", "[")):
+            score += 2
+        if SIGNAL_HINT_RE.search(cleaned):
+            score += 2
+        if ":" in cleaned and len(cleaned) < 160:
+            score += 1
+        if len(cleaned) <= 220:
+            score += 1
+        candidates.append((score, cleaned[:220]))
+
+    ranked = [line for _, line in sorted(candidates, key=lambda item: (-item[0], len(item[1]), item[1].lower()))]
+    return _dedupe(ranked, limit=MAX_REFERENCE_SIGNAL_LINES)
 
 
 def is_idle(path: Path) -> bool:
@@ -290,22 +388,43 @@ def parse_codex_memory(path: Path) -> dict | None:
     if not content.strip():
         return None
 
-    title = f"Codex memory: {path.name}"
+    signal_lines = _reference_signal_lines(content)
+    if not signal_lines:
+        return None
+
+    title = f"Codex reference signal: {path.name}"
+    body_markdown = "\n".join(
+        [
+            f"# {title}",
+            f"Path: {path}",
+            "",
+            "## High-Signal Lines",
+            *[f"- {line}" for line in signal_lines],
+        ]
+    ).strip()
     return {
         "source_type": "codex_history",
         "external_id": f"codex:memory:{stable_id(str(path))}",
         "project_ref": infer_project_ref(None, path),
         "title": title,
-        "summary": content[:240],
-        "category": "note",
-        "entry_type": "agent_memory_snapshot",
-        "body_markdown": f"# {title}\n\nPath: {path}\n\n{content[:12000]}",
-        "tags": ["codex", "memory", "agent-history"],
+        "summary": " | ".join(signal_lines[:2])[:240],
+        "category": "project" if infer_project_ref(None, path) else "note",
+        "entry_type": "agent_reference_signal",
+        "body_markdown": body_markdown,
+        "tags": ["codex", "memory", "agent-history", "curated"],
         "source_links": [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.9,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "agent_kind": "codex",
             "source_path": str(path),
-            "redacted_content": content,
+            "redacted_content": content[:4000],
+            "signal_lines": signal_lines,
+            "snapshot_type": "agent_memory_snapshot",
         },
         "happened_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
@@ -406,23 +525,48 @@ def parse_text_snapshot(path: Path, *, source_type: str, entry_type: str, title_
     if not content.strip():
         return None
 
+    signal_lines = _reference_signal_lines(content)
+    if not signal_lines:
+        return None
+
     project_ref = infer_project_ref(None, path)
-    title = f"{title_prefix}: {path.stem}"
+    if entry_type == "plan_snapshot":
+        signal_entry_type = "agent_plan_signal"
+    else:
+        signal_entry_type = "agent_reference_signal"
+    title = f"{title_prefix} signal: {path.stem}"
+    body_markdown = "\n".join(
+        [
+            f"# {title}",
+            f"Path: {path}",
+            "",
+            "## High-Signal Lines",
+            *[f"- {line}" for line in signal_lines],
+        ]
+    ).strip()
     return {
         "source_type": source_type,
         "external_id": f"{source_type}:{entry_type}:{stable_id(str(path))}",
         "project_ref": project_ref,
         "title": title,
-        "summary": content[:240],
+        "summary": " | ".join(signal_lines[:2])[:240],
         "category": "project" if project_ref else "note",
-        "entry_type": entry_type,
-        "body_markdown": f"# {title}\n\nPath: {path}\n\n{content[:12000]}",
-        "tags": [source_type.replace("_history", ""), entry_type, "agent-history"],
+        "entry_type": signal_entry_type,
+        "body_markdown": body_markdown,
+        "tags": [source_type.replace("_history", ""), signal_entry_type, "agent-history", "curated"],
         "source_links": [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.88,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "agent_kind": source_type.replace("_history", ""),
             "source_path": str(path),
-            "redacted_content": content,
+            "redacted_content": content[:4000],
+            "signal_lines": signal_lines,
+            "snapshot_type": entry_type,
         },
         "happened_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
@@ -437,23 +581,43 @@ def parse_todo_snapshot(path: Path) -> dict | None:
     if not content.strip():
         return None
 
+    signal_lines = _reference_signal_lines(content)
+    if not signal_lines:
+        return None
+
     project_ref = infer_project_ref(None, path)
-    title = f"Claude todo snapshot: {path.stem}"
+    title = f"Claude todo signal: {path.stem}"
     return {
         "source_type": "claude_history",
         "external_id": f"claude_history:todo_snapshot:{stable_id(str(path))}",
         "project_ref": project_ref,
         "title": title,
-        "summary": content[:240],
+        "summary": " | ".join(signal_lines[:2])[:240],
         "category": "project" if project_ref else "note",
-        "entry_type": "todo_snapshot",
-        "body_markdown": f"# {title}\n\nPath: {path}\n\n{content[:12000]}",
-        "tags": ["claude", "todo", "agent-history"],
+        "entry_type": "agent_todo_signal",
+        "body_markdown": "\n".join(
+            [
+                f"# {title}",
+                f"Path: {path}",
+                "",
+                "## High-Signal Lines",
+                *[f"- {line}" for line in signal_lines],
+            ]
+        ).strip(),
+        "tags": ["claude", "todo", "agent-history", "curated"],
         "source_links": [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.9,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "agent_kind": "claude",
             "source_path": str(path),
-            "redacted_content": content,
+            "redacted_content": content[:4000],
+            "signal_lines": signal_lines,
+            "snapshot_type": "todo_snapshot",
         },
         "happened_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
         "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),

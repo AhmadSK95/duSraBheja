@@ -15,7 +15,23 @@ from src.services.source_ingest import ingest_source_entries
 from src.services.story import build_project_story_payload
 
 
-BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES = {"context_dump", "repo_snapshot", "knowledge_refresh", "voice_refresh"}
+BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES = {
+    "context_dump",
+    "context_signal_dump",
+    "directory_inventory",
+    "repo_snapshot",
+    "repo_signal_summary",
+    "workspace_signal_summary",
+    "workspace_landscape_summary",
+    "agent_memory_snapshot",
+    "plan_snapshot",
+    "todo_snapshot",
+    "agent_reference_signal",
+    "agent_plan_signal",
+    "agent_todo_signal",
+    "knowledge_refresh",
+    "voice_refresh",
+}
 BOOTSTRAP_PRIORITY = {
     "session_closeout": 5,
     "conversation_session": 4,

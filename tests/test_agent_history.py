@@ -93,3 +93,52 @@ def test_redact_text_masks_tokens_and_keys() -> None:
     assert "abcdefghijklmnopqrstuvwxyz123456" not in redacted
     assert "<redacted-openai-key>" in redacted
     assert "Bearer <redacted>" in redacted
+
+
+def test_parse_text_snapshot_curates_reference_signal(tmp_path: Path) -> None:
+    path = tmp_path / "plan.md"
+    path.write_text(
+        "\n".join(
+            [
+                "# Plan",
+                "- Ship the cleaner collector pipeline",
+                "- Remove dump-shaped records from the brain",
+                "Notes: keep the ongoing sync curated and lightweight",
+            ]
+        )
+    )
+
+    parsed = agent_history.parse_text_snapshot(
+        path,
+        source_type="claude_history",
+        entry_type="plan_snapshot",
+        title_prefix="Claude plan",
+    )
+
+    assert parsed is not None
+    assert parsed["entry_type"] == "agent_plan_signal"
+    assert parsed["eligible_for_boards"] is False
+    assert parsed["eligible_for_project_state"] is False
+    assert "High-Signal Lines" in parsed["body_markdown"]
+    assert "cleaner collector pipeline" in parsed["body_markdown"]
+
+
+def test_parse_todo_snapshot_curates_json_into_signal_lines(tmp_path: Path) -> None:
+    path = tmp_path / "todos.json"
+    path.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {"title": "Prune low-signal dump records", "status": "open"},
+                    {"task": "Backfill curated signals after cleanup", "priority": "high"},
+                ]
+            }
+        )
+    )
+
+    parsed = agent_history.parse_todo_snapshot(path)
+
+    assert parsed is not None
+    assert parsed["entry_type"] == "agent_todo_signal"
+    assert parsed["eligible_for_boards"] is False
+    assert "Prune low-signal dump records" in parsed["body_markdown"]

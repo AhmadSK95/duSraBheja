@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MAX_FILE_CHARS = 4_000
+MAX_CONTEXT_HIGHLIGHTS = 8
+MAX_COMMIT_HIGHLIGHTS = 4
+MAX_WORKTREE_HIGHLIGHTS = 8
+MAX_RECENT_PATH_HIGHLIGHTS = 8
 TEXT_FILE_SUFFIXES = {
     ".c",
     ".cc",
@@ -144,6 +148,94 @@ def read_text_excerpt(path: Path) -> str:
         return "[unreadable file]"
 
 
+def _clean_line(value: str) -> str:
+    collapsed = " ".join((value or "").strip().split())
+    collapsed = collapsed.lstrip("-*•0123456789. ").strip()
+    return collapsed
+
+
+def _dedupe(values: list[str], *, limit: int | None = None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        key = cleaned.lower()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+        if limit is not None and len(result) >= limit:
+            break
+    return result
+
+
+def _highlight_lines(text: str, *, limit: int = 3) -> list[str]:
+    lines: list[str] = []
+    for raw_line in (text or "").splitlines():
+        cleaned = _clean_line(raw_line)
+        if not cleaned or len(cleaned) < 12:
+            continue
+        if cleaned.startswith("[binary") or cleaned.startswith("[unreadable"):
+            continue
+        lines.append(cleaned[:220])
+    return _dedupe(lines, limit=limit)
+
+
+def _context_highlights(context_files: list[dict], *, per_file_limit: int = 2) -> list[str]:
+    highlights: list[str] = []
+    for context_file in context_files[:MAX_CONTEXT_HIGHLIGHTS]:
+        lines = _highlight_lines(context_file["content"], limit=per_file_limit)
+        for line in lines:
+            highlights.append(f"{context_file['relative_path']}: {line}")
+    return _dedupe(highlights, limit=MAX_CONTEXT_HIGHLIGHTS)
+
+
+def _recent_commit_highlights(recent_commits: str) -> list[str]:
+    lines = [_clean_line(line) for line in (recent_commits or "").splitlines()]
+    return _dedupe([line[:160] for line in lines if line], limit=MAX_COMMIT_HIGHLIGHTS)
+
+
+def _working_tree_highlights(status: str) -> tuple[list[str], dict[str, int]]:
+    counts = {"modified": 0, "untracked": 0, "added": 0, "deleted": 0, "renamed": 0}
+    highlights: list[str] = []
+    for raw_line in (status or "").splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        code = line[:2]
+        path = line[3:].strip() or line
+        label = "changed"
+        if "?" in code:
+            counts["untracked"] += 1
+            label = "untracked"
+        elif "R" in code:
+            counts["renamed"] += 1
+            label = "renamed"
+        elif "D" in code:
+            counts["deleted"] += 1
+            label = "deleted"
+        elif "A" in code:
+            counts["added"] += 1
+            label = "added"
+        else:
+            counts["modified"] += 1
+            label = "modified"
+        highlights.append(f"{label}: {path[:180]}")
+    return _dedupe(highlights, limit=MAX_WORKTREE_HIGHLIGHTS), counts
+
+
+def _recent_path_highlights(paths: list[tuple[float, Path]], *, root: Path, limit: int = MAX_RECENT_PATH_HIGHLIGHTS) -> list[str]:
+    lines: list[str] = []
+    for modified_at, path in paths[:limit]:
+        stamp = datetime.fromtimestamp(modified_at, tz=timezone.utc).isoformat()
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            relative = path
+        lines.append(f"{stamp} {relative}")
+    return lines
+
+
 def discover_repo_roots(search_roots: list[Path], max_depth: int) -> list[Path]:
     repos: set[Path] = set()
     for root in search_roots:
@@ -216,33 +308,40 @@ def build_repo_snapshot(root: Path, *, max_depth: int) -> dict | None:
     remote_url = run_git(["config", "--get", "remote.origin.url"], cwd=root)
     branch = run_git(["branch", "--show-current"], cwd=root)
     recent_commits = run_git(["log", "--oneline", "-n", "5"], cwd=root)
-    diff_summary = run_git(["diff", "--stat", "HEAD~1..HEAD"], cwd=root)
     status = run_git(["status", "--short"], cwd=root)
     context_files = collect_context_files(root, max_depth=max_depth)
+    commit_highlights = _recent_commit_highlights(recent_commits)
+    worktree_highlights, worktree_counts = _working_tree_highlights(status)
+    context_highlights = _context_highlights(context_files)
+
+    dirty_count = sum(worktree_counts.values())
+    summary_bits = [f"branch {branch or 'unknown'}"]
+    if dirty_count:
+        summary_bits.append(f"{dirty_count} local file changes")
+    else:
+        summary_bits.append("clean working tree")
+    if commit_highlights:
+        summary_bits.append(f"{len(commit_highlights)} recent commit signals")
+    if context_highlights:
+        summary_bits.append(f"{len(context_highlights)} context highlights")
 
     body_sections = [
-        f"# Project Snapshot: {root.name}",
+        f"# Local Repo Signal: {root.name}",
         f"Path: {root}",
         f"Branch: {branch or 'unknown'}",
         "",
-        "## Recent Commits",
-        recent_commits or "No recent commits",
+        "## Signal Summary",
+        f"- {'; '.join(summary_bits)}",
         "",
-        "## Diff Summary",
-        diff_summary or "No diff summary",
+        "## Recent Commit Signals",
+        *(f"- {line}" for line in (commit_highlights or ["No recent commits found"])),
         "",
-        "## Working Tree",
-        status or "Clean working tree",
+        "## Working Tree Highlights",
+        *(f"- {line}" for line in (worktree_highlights or ["Clean working tree"])),
+        "",
+        "## Context Highlights",
+        *(f"- {line}" for line in (context_highlights or ["No context highlights found"])),
     ]
-
-    for context_file in context_files:
-        body_sections.extend(
-            [
-                "",
-                f"## Context File: {context_file['relative_path']}",
-                context_file["content"],
-            ]
-        )
 
     body_markdown = "\n".join(body_sections).strip()
     content_hash = hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
@@ -260,20 +359,29 @@ def build_repo_snapshot(root: Path, *, max_depth: int) -> dict | None:
         "_state_key": f"repo:{root}",
         "external_id": f"collector:repo:{stable_id(str(root))}",
         "project_ref": root.name,
-        "title": f"{root.name} local snapshot",
-        "summary": f"Local repo and context snapshot for {root.name}",
+        "title": f"{root.name} local repo signal",
+        "summary": f"Curated repo signal for {root.name}: {'; '.join(summary_bits)}",
         "category": "project",
-        "entry_type": "context_dump",
+        "entry_type": "repo_signal_summary",
         "body_markdown": body_markdown,
-        "tags": ["collector", "local-context", "repo-snapshot"],
+        "tags": ["collector", "curated", "repo-signal", "local-context"],
         "source_links": [normalized_remote] if normalized_remote else [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.95,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "root": str(root),
             "branch": branch,
-            "recent_commits": recent_commits,
-            "working_tree": status,
+            "recent_commit_highlights": commit_highlights,
+            "working_tree_highlights": worktree_highlights,
+            "working_tree_counts": worktree_counts,
             "context_file_count": len(context_files),
-            "snapshot_kind": "repo",
+            "context_highlights": context_highlights,
+            "snapshot_kind": "repo_signal",
+            "content_quality": "curated",
         },
         "repo": {
             "name": repo_name,
@@ -292,20 +400,14 @@ def build_context_workspace_snapshot(workspace_root: Path, *, max_depth: int) ->
     if not context_files:
         return None
 
+    context_highlights = _context_highlights(context_files, per_file_limit=2)
     body_sections = [
-        f"# Context Workspace Snapshot: {workspace_root.name}",
+        f"# Workspace Context Signal: {workspace_root.name}",
         f"Path: {workspace_root}",
         "",
-        "## Context Files",
+        "## Signal Highlights",
     ]
-    for context_file in context_files:
-        body_sections.extend(
-            [
-                "",
-                f"### {context_file['relative_path']}",
-                context_file["content"],
-            ]
-        )
+    body_sections.extend(f"- {line}" for line in (context_highlights or ["No context highlights found"]))
 
     body_markdown = "\n".join(body_sections).strip()
     content_hash = hashlib.sha256(body_markdown.encode("utf-8")).hexdigest()
@@ -314,17 +416,25 @@ def build_context_workspace_snapshot(workspace_root: Path, *, max_depth: int) ->
         "_state_key": f"context:{workspace_root}",
         "external_id": f"collector:context:{stable_id(str(workspace_root))}",
         "project_ref": workspace_root.name,
-        "title": f"{workspace_root.name} agent context snapshot",
-        "summary": f"Agent context signal snapshot for {workspace_root.name}",
+        "title": f"{workspace_root.name} workspace context signal",
+        "summary": f"Curated workspace context signal for {workspace_root.name}",
         "category": "project",
-        "entry_type": "context_signal_dump",
+        "entry_type": "workspace_signal_summary",
         "body_markdown": body_markdown,
-        "tags": ["collector", "agent-context"],
+        "tags": ["collector", "curated", "workspace-signal", "agent-context"],
         "source_links": [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.9,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "root": str(workspace_root),
             "context_file_count": len(context_files),
-            "snapshot_kind": "context_workspace",
+            "context_highlights": context_highlights,
+            "snapshot_kind": "context_workspace_signal",
+            "content_quality": "curated",
         },
         "content_hash": content_hash,
     }
@@ -356,44 +466,49 @@ def build_directory_inventory_snapshot(
             total_files += 1
             recent_files.append((stat.st_mtime, path))
 
-    top_types = sorted(file_counts.items(), key=lambda item: item[1], reverse=True)[:10]
+    top_types = sorted(file_counts.items(), key=lambda item: item[1], reverse=True)[:8]
     recent_files.sort(reverse=True)
-    recent_lines = []
-    for modified_at, path in recent_files[:recent_files_limit]:
-        stamp = datetime.fromtimestamp(modified_at, tz=timezone.utc).isoformat()
-        recent_lines.append(f"- {stamp} {path}")
+    recent_lines = _recent_path_highlights(recent_files[:recent_files_limit], root=root)
 
     repo_lines = [
-        f"- {repo.name}: {repo}"
+        f"{repo.name}: {repo}"
         for repo in repo_roots
         if is_within(repo, root)
-    ] or ["- None discovered"]
+    ] or ["None discovered"]
 
     context_lines = [
-        f"- {workspace.name}: {workspace}"
+        f"{workspace.name}: {workspace}"
         for workspace in context_workspaces
         if is_within(workspace, root)
-    ] or ["- None discovered"]
+    ] or ["None discovered"]
 
-    type_lines = [f"- {suffix}: {count}" for suffix, count in top_types] or ["- No files found"]
+    type_lines = [f"{suffix}: {count}" for suffix, count in top_types] or ["No files found"]
+
+    summary_bits = [
+        f"{total_files} files scanned",
+        f"{len([repo for repo in repo_roots if is_within(repo, root)])} repos",
+        f"{len([workspace for workspace in context_workspaces if is_within(workspace, root)])} context workspaces",
+    ]
 
     body_markdown = "\n".join(
         [
-            f"# Directory Inventory: {root.name}",
+            f"# Workspace Landscape Signal: {root.name}",
             f"Path: {root}",
-            f"Total Files Seen: {total_files}",
+            "",
+            "## Signal Summary",
+            f"- {'; '.join(summary_bits)}",
             "",
             "## Repositories",
-            *repo_lines,
+            *(f"- {line}" for line in repo_lines),
             "",
             "## Context Workspaces",
-            *context_lines,
+            *(f"- {line}" for line in context_lines),
             "",
             "## Top File Types",
-            *type_lines,
+            *(f"- {line}" for line in type_lines),
             "",
-            "## Recent Files",
-            *(recent_lines or ["- No files found"]),
+            "## Freshest Paths",
+            *(f"- {line}" for line in (recent_lines or ["No files found"])),
         ]
     ).strip()
 
@@ -401,19 +516,28 @@ def build_directory_inventory_snapshot(
     return {
         "_state_key": f"inventory:{root}",
         "external_id": f"collector:inventory:{stable_id(str(root))}",
-        "title": f"{root.name} directory inventory",
-        "summary": f"Bootstrap inventory for {root.name} with {total_files} files",
+        "title": f"{root.name} workspace landscape signal",
+        "summary": f"Curated workspace landscape for {root.name}: {'; '.join(summary_bits)}",
         "category": "resource",
-        "entry_type": "directory_inventory",
+        "entry_type": "workspace_landscape_summary",
         "body_markdown": body_markdown,
-        "tags": ["collector", "inventory", root.name.lower()],
+        "tags": ["collector", "curated", "workspace-landscape", root.name.lower()],
         "source_links": [],
+        "capture_intent": "reference",
+        "intent_confidence": 0.88,
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": False,
+        "eligible_for_project_state": False,
         "metadata": {
             "root": str(root),
             "total_files": total_files,
             "repo_count": len([repo for repo in repo_roots if is_within(repo, root)]),
             "context_workspace_count": len([workspace for workspace in context_workspaces if is_within(workspace, root)]),
-            "snapshot_kind": "directory_inventory",
+            "snapshot_kind": "workspace_landscape",
+            "top_file_types": type_lines[:5],
+            "freshest_paths": recent_lines[:5],
+            "content_quality": "curated",
         },
         "content_hash": content_hash,
     }

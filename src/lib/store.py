@@ -543,6 +543,39 @@ async def list_source_items_with_sources(
     return rows
 
 
+async def list_source_cleanup_candidates(
+    session: AsyncSession,
+    *,
+    source_types: list[str] | None = None,
+    entry_types: list[str] | None = None,
+    limit: int = 1000,
+) -> list[dict]:
+    query = (
+        select(SourceItem, SyncSource, Artifact, Note)
+        .join(SyncSource, SyncSource.id == SourceItem.sync_source_id)
+        .outerjoin(Artifact, Artifact.id == SourceItem.artifact_id)
+        .outerjoin(Note, Note.id == SourceItem.project_note_id)
+        .order_by(SourceItem.happened_at.desc().nullslast(), SourceItem.created_at.desc())
+        .limit(limit)
+    )
+    if source_types:
+        query = query.where(SyncSource.source_type.in_(source_types))
+    if entry_types:
+        query = query.where(SourceItem.payload["entry_type"].astext.in_(entry_types))
+    result = await session.execute(query)
+    rows: list[dict] = []
+    for source_item, sync_source, artifact, note in result.all():
+        rows.append(
+            {
+                "source_item": source_item,
+                "sync_source": sync_source,
+                "artifact": artifact,
+                "project_note": note,
+            }
+        )
+    return rows
+
+
 async def create_link(session: AsyncSession, **kwargs) -> Link:
     link = Link(**kwargs)
     session.add(link)
@@ -1186,6 +1219,55 @@ async def upsert_source_item(
     await session.commit()
     await session.refresh(source_item)
     return source_item, True
+
+
+async def purge_source_items(
+    session: AsyncSession,
+    *,
+    source_item_ids: list[uuid.UUID],
+) -> dict:
+    if not source_item_ids:
+        return {
+            "source_items_deleted": 0,
+            "artifacts_deleted": 0,
+            "protected_contents_deleted": 0,
+            "project_note_ids_touched": [],
+        }
+
+    result = await session.execute(
+        select(SourceItem, SyncSource).join(SyncSource, SyncSource.id == SourceItem.sync_source_id).where(SourceItem.id.in_(source_item_ids))
+    )
+    rows = list(result.all())
+    artifact_ids = {source_item.artifact_id for source_item, _ in rows if source_item.artifact_id}
+    project_note_ids = {source_item.project_note_id for source_item, _ in rows if source_item.project_note_id}
+
+    protected_deleted = 0
+    for source_item, sync_source in rows:
+        await session.execute(delete(ConversationSession).where(ConversationSession.source_item_id == source_item.id))
+        await session.execute(delete(JournalEntry).where(JournalEntry.source_item_id == source_item.id))
+        protected_result = await session.execute(
+            delete(ProtectedContent).where(
+                ProtectedContent.source_type == sync_source.source_type,
+                ProtectedContent.source_ref == source_item.external_id,
+            )
+        )
+        protected_deleted += protected_result.rowcount or 0
+
+    if artifact_ids:
+        await session.execute(delete(ReviewQueue).where(ReviewQueue.artifact_id.in_(artifact_ids)))
+        await session.execute(delete(JournalEntry).where(JournalEntry.artifact_id.in_(artifact_ids)))
+        await session.execute(delete(Chunk).where(Chunk.artifact_id.in_(artifact_ids)))
+        await session.execute(delete(Classification).where(Classification.artifact_id.in_(artifact_ids)))
+        await session.execute(delete(Artifact).where(Artifact.id.in_(artifact_ids)))
+
+    deleted_source_items = await session.execute(delete(SourceItem).where(SourceItem.id.in_(source_item_ids)))
+    await session.commit()
+    return {
+        "source_items_deleted": deleted_source_items.rowcount or 0,
+        "artifacts_deleted": len(artifact_ids),
+        "protected_contents_deleted": protected_deleted,
+        "project_note_ids_touched": [str(value) for value in sorted(project_note_ids)],
+    }
 
 
 async def upsert_project_repo(
