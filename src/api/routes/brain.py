@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.schemas import (
+    AgentSessionStoryRequest,
     AgentSessionBootstrapRequest,
     AgentSessionCloseoutRequest,
     CollectorIngestRequest,
@@ -31,7 +32,11 @@ from src.services.identity import resolve_project
 from src.services.query import query_brain
 from src.services.reminders import store_reminder
 from src.services.project_state import recompute_project_states
-from src.services.session_bootstrap import build_session_bootstrap, record_session_closeout
+from src.services.session_bootstrap import (
+    build_session_bootstrap,
+    publish_curated_session_story,
+    record_session_closeout,
+)
 from src.services.story import build_project_brief_payload, build_project_story_payload
 from src.services.voice import refresh_voice_profile
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
@@ -320,4 +325,24 @@ async def agent_session_closeout_route(payload: AgentSessionCloseoutRequest) -> 
             open_questions=payload.open_questions,
             source_links=payload.source_links,
             transcript_excerpt=payload.transcript_excerpt,
+        )
+
+
+@router.post("/agent/session/story", dependencies=[Depends(require_api_token)])
+async def agent_session_story_route(payload: AgentSessionStoryRequest) -> dict:
+    async with async_session() as session:
+        return await publish_curated_session_story(
+            session,
+            agent_kind=payload.agent_kind,
+            session_id=payload.session_id,
+            project_ref=payload.project_ref,
+            title=payload.title,
+            summary=payload.summary,
+            direction=payload.direction,
+            changes=payload.changes,
+            open_loops=payload.open_loops,
+            source_links=payload.source_links,
+            transcript_excerpt=payload.transcript_excerpt,
+            tags=payload.tags,
+            actor_name=payload.actor_name,
         )

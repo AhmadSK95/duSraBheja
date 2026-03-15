@@ -154,6 +154,20 @@ def _format_closeout_markdown(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_story_markdown(payload: dict) -> str:
+    project = payload.get("project") or {}
+    lines = [
+        "# Brain Progress Update",
+        "",
+        f"- Status: {payload.get('status')}",
+        f"- Entry Type: {payload.get('entry_type')}",
+        f"- Journal Entry ID: {payload.get('journal_entry_id')}",
+    ]
+    if project.get("title"):
+        lines.append(f"- Project: {project['title']}")
+    return "\n".join(lines)
+
+
 async def _post_json(path: str, payload: dict) -> dict:
     async with httpx.AsyncClient(base_url=_base_url(), timeout=90) as client:
         response = await client.post(path, headers=_headers(), json=payload)
@@ -199,6 +213,29 @@ async def closeout_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def story_command(args: argparse.Namespace) -> int:
+    payload = {
+        "agent_kind": args.agent_kind,
+        "session_id": args.session_id or _default_session_id(args.agent_kind),
+        "project_ref": args.project_ref,
+        "title": args.title,
+        "summary": args.summary,
+        "direction": args.direction,
+        "changes": args.change or [],
+        "open_loops": args.open_loop or [],
+        "source_links": args.source_link or [],
+        "transcript_excerpt": _read_transcript_excerpt(args.transcript_file) or args.transcript_excerpt,
+        "tags": args.tag or [],
+        "actor_name": args.actor_name,
+    }
+    response = await _post_json("/api/agent/session/story", payload)
+    if args.format == "json":
+        print(json.dumps(response, indent=2))
+    else:
+        print(_format_story_markdown(response))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Brain session bootstrap and closeout CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +264,23 @@ def build_parser() -> argparse.ArgumentParser:
     closeout.add_argument("--transcript-excerpt")
     closeout.add_argument("--format", choices=("markdown", "json"), default="markdown")
     closeout.set_defaults(func=closeout_command)
+
+    story = subparsers.add_parser("story", help="Publish a curated progress update for a session")
+    story.add_argument("--agent-kind", default="codex")
+    story.add_argument("--session-id")
+    story.add_argument("--project-ref", required=True)
+    story.add_argument("--title", required=True)
+    story.add_argument("--summary", required=True)
+    story.add_argument("--direction")
+    story.add_argument("--change", action="append")
+    story.add_argument("--open-loop", action="append")
+    story.add_argument("--source-link", action="append")
+    story.add_argument("--tag", action="append")
+    story.add_argument("--actor-name")
+    story.add_argument("--transcript-file")
+    story.add_argument("--transcript-excerpt")
+    story.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    story.set_defaults(func=story_command)
 
     return parser
 

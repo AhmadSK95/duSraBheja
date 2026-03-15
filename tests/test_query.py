@@ -19,6 +19,25 @@ def test_detect_query_mode_prefers_explicit_story_modes() -> None:
     assert query_service.detect_query_mode("review project duSraBheja and tell me the holes") == "project_review"
 
 
+def test_detect_query_intent_supports_facet_questions() -> None:
+    assert (
+        query_service._detect_query_intent(
+            "What has been on my mind lately?",
+            resolved_mode="answer",
+            project_payload=None,
+        )
+        == "facet_thoughts"
+    )
+    assert (
+        query_service._detect_query_intent(
+            "What media themes are shaping my thinking?",
+            resolved_mode="answer",
+            project_payload=None,
+        )
+        == "facet_media"
+    )
+
+
 def test_build_exact_answer_prefers_recent_ip_and_username() -> None:
     answer = query_service._build_exact_answer(
         "what is my droplet account ip ??",
@@ -220,6 +239,65 @@ async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -
     assert result["brain_sources"][0]["title"] == "duSraBheja"
     assert result["projects"][0]["what_changed"].startswith("Codex closeout")
     assert result["answer"] == "duSraBheja is the clearest current focus."
+
+
+@pytest.mark.asyncio
+async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> None:
+    class FakeSnapshot:
+        def as_dict(self):
+            return {
+                "facets": [
+                    {
+                        "id": "facet:thought:1",
+                        "title": "Interview preparation",
+                        "summary": "Interview prep and job-search pressure have been recurring strongly.",
+                        "facet_type": "thoughts",
+                        "attention_score": 0.82,
+                        "signal_kind": "direct_sync",
+                        "happened_at_utc": "2026-03-15T10:00:00+00:00",
+                        "open_loops": ["Which interview track deserves the next focused block?"],
+                    }
+                ],
+                "story_river": [],
+            }
+
+    async def fake_build_brain_atlas_snapshot(session):
+        return FakeSnapshot()
+
+    async def fake_resolve_project_payload(session, question):
+        return None
+
+    async def fake_resolve_subject_ref(session, question):
+        return None
+
+    async def fake_collect_sources(session, question, *, category=None, limit=8):
+        return []
+
+    async def fake_list_story_events(session, **kwargs):
+        return []
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_narrate_status_answer(session, *, question, context_text, use_opus, trace_id):
+        assert "Interview prep and job-search pressure" in context_text
+        return {"text": "Interview prep has been the clearest recurring thought lately.", "model": "test-model", "cost_usd": 0}
+
+    monkeypatch.setattr(query_service, "build_brain_atlas_snapshot", fake_build_brain_atlas_snapshot)
+    monkeypatch.setattr(query_service, "resolve_project_payload", fake_resolve_project_payload)
+    monkeypatch.setattr(query_service, "resolve_subject_ref", fake_resolve_subject_ref)
+    monkeypatch.setattr(query_service, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(query_service.store, "list_story_events", fake_list_story_events)
+    monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
+    monkeypatch.setattr(query_service, "narrate_status_answer", fake_narrate_status_answer)
+
+    result = await query_service.query_brain(object(), question="What has been on my mind lately?")
+
+    assert result["ok"] is True
+    assert result["intent"] == "facet_thoughts"
+    assert result["used_project_snapshot"] is True
+    assert result["brain_sources"][0]["retrieval_kind"] == "facet_snapshot"
+    assert "Interview prep" in result["answer"]
 
 
 @pytest.mark.asyncio

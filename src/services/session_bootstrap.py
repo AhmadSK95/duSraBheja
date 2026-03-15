@@ -12,7 +12,7 @@ from src.services.openai_web import research_topic_brief
 from src.services.project_state import recompute_project_states
 from src.services.query import collect_sources
 from src.services.source_ingest import ingest_source_entries
-from src.services.story import build_project_story_payload
+from src.services.story import build_project_story_payload, publish_story_entry
 
 
 BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES = {
@@ -248,4 +248,81 @@ async def record_session_closeout(
         "status": "stored",
         "project": project_payload["project"] if project_payload else None,
         "sync": result,
+    }
+
+
+async def publish_curated_session_story(
+    session: AsyncSession,
+    *,
+    agent_kind: str,
+    session_id: str,
+    project_ref: str,
+    title: str,
+    summary: str,
+    direction: str | None = None,
+    changes: list[str] | None = None,
+    open_loops: list[str] | None = None,
+    source_links: list[str] | None = None,
+    transcript_excerpt: str | None = None,
+    tags: list[str] | None = None,
+    actor_name: str | None = None,
+) -> dict:
+    body_lines = [
+        f"# {title}",
+        "",
+        "## Summary",
+        summary.strip(),
+    ]
+    if direction:
+        body_lines.extend(["", "## Direction", direction.strip()])
+    if changes:
+        body_lines.extend(["", "## What Changed", *[f"- {item}" for item in changes if item]])
+    if open_loops:
+        body_lines.extend(["", "## Open Loops", *[f"- {item}" for item in open_loops if item]])
+    if transcript_excerpt:
+        body_lines.extend(["", "## Session Excerpt", transcript_excerpt[:2000]])
+
+    result = await publish_story_entry(
+        session,
+        actor_type="agent",
+        actor_name=actor_name or agent_kind,
+        subject_type="project",
+        subject_ref=project_ref,
+        entry_type="progress_update",
+        title=title,
+        body_markdown="\n".join(body_lines).strip(),
+        project_ref=project_ref,
+        summary=summary[:280],
+        outcome=changes[0] if changes else None,
+        impact=direction[:280] if direction else None,
+        open_question=open_loops[0] if open_loops else None,
+        tags=["curated-session-story", agent_kind, *(tags or [])],
+        source_links=source_links or [],
+        source="agent",
+        category="project",
+        metadata_={
+            "agent_kind": agent_kind,
+            "session_id": session_id,
+            "story_kind": "curated_session_story",
+            "changes": changes or [],
+            "open_loops": open_loops or [],
+        },
+    )
+
+    project = await resolve_project(
+        session,
+        project_hint=project_ref,
+        source_refs=[title, summary],
+        create_if_missing=False,
+    )
+    if project:
+        await recompute_project_states(session, project_note_ids=[project.id])
+        project_payload = await build_project_story_payload(session, project.id)
+    else:
+        project_payload = None
+    return {
+        "status": "stored",
+        "journal_entry_id": str(result["journal_entry"].id),
+        "project": project_payload["project"] if project_payload else None,
+        "entry_type": "progress_update",
     }

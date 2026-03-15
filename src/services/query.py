@@ -24,7 +24,8 @@ from src.lib.provenance import (
     signal_kind_for_artifact,
     signal_kind_for_event,
 )
-from src.lib.time import describe_event_time, format_display_datetime
+from src.lib.time import coerce_datetime, describe_event_time, format_display_datetime
+from src.services.brain_atlas import build_brain_atlas_snapshot
 from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
 from src.services.project_state import recompute_project_states
@@ -107,6 +108,35 @@ EXACT_FACT_HINTS = (
     "account",
     "port",
 )
+FACET_QUERY_HINTS: dict[str, tuple[str, ...]] = {
+    "facet_story": (
+        "what story am i living through",
+        "story across projects",
+        "story am i living",
+    ),
+    "facet_media": (
+        "youtube been about",
+        "media themes",
+        "watching lately",
+        "entertainment patterns",
+    ),
+    "facet_interests": (
+        "interests are getting stronger",
+        "recurring search themes",
+        "what am i interested in",
+        "what interests keep recurring",
+    ),
+    "facet_ideas": (
+        "ideas keep recurring",
+        "best ideas from my brain",
+        "what ideas keep showing up",
+    ),
+    "facet_thoughts": (
+        "on my mind lately",
+        "what has been on my mind",
+        "what am i thinking about lately",
+    ),
+}
 EXTERNAL_WEB_HINTS = (
     "web",
     "online",
@@ -186,6 +216,8 @@ def should_use_web_enrichment(
 ) -> bool:
     if resolved_mode in {"sources", "timeline", "changed_since", "active_projects"}:
         return False
+    if resolved_intent.startswith("facet_"):
+        return False
     if resolved_intent == "exact_fact":
         return False
     lowered = (question or "").strip().lower()
@@ -242,6 +274,14 @@ def _extract_exact_fact_kind(question: str) -> str | None:
     return None
 
 
+def _detect_facet_intent(question: str) -> str | None:
+    lowered = (question or "").lower()
+    for intent, hints in FACET_QUERY_HINTS.items():
+        if any(hint in lowered for hint in hints):
+            return intent
+    return None
+
+
 def _detect_query_intent(question: str, *, resolved_mode: str, project_payload: dict | None) -> str:
     if resolved_mode == "active_projects":
         return "active_projects"
@@ -249,6 +289,9 @@ def _detect_query_intent(question: str, *, resolved_mode: str, project_payload: 
         return "timeline_review"
     if resolved_mode == "project_review":
         return "project_review"
+    facet_intent = _detect_facet_intent(question)
+    if facet_intent:
+        return facet_intent
     if _extract_exact_fact_kind(question):
         return "exact_fact"
     if project_payload and resolved_mode in {"latest", "answer"}:
@@ -450,6 +493,89 @@ async def resolve_subject_ref(session: AsyncSession, question: str) -> str | Non
         if hit.subject_ref:
             return hit.subject_ref
     return subject_hits[0].title
+
+
+def _facet_source(
+    *,
+    source_id: str,
+    title: str,
+    summary: str,
+    facet_type: str,
+    signal_kind: str,
+    happened_at: str | datetime | None,
+    similarity: float,
+    retrieval_kind: str,
+    metadata: dict | None = None,
+) -> dict:
+    return _build_source_item(
+        source_id=source_id,
+        title=title,
+        category=facet_type,
+        content=summary,
+        similarity=similarity,
+        retrieval_kind=retrieval_kind,
+        signal_kind=signal_kind,
+        source_name="brain_atlas",
+        event_time=coerce_datetime(happened_at),
+        metadata=metadata or {},
+    )
+
+
+async def _collect_facet_sources(
+    session: AsyncSession,
+    *,
+    intent: str,
+    now: datetime,
+    limit: int = 8,
+) -> list[dict]:
+    snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    sources: list[dict] = []
+    if intent == "facet_story":
+        for event in list(snapshot.get("story_river") or [])[:limit]:
+            sources.append(
+                _facet_source(
+                    source_id=event.get("id") or "story-river",
+                    title=event.get("title") or "Story",
+                    summary=event.get("summary") or "",
+                    facet_type="stories",
+                    signal_kind=event.get("signal_kind") or "direct_sync",
+                    happened_at=event.get("happened_at_utc"),
+                    similarity=min(0.92, 0.68 + _recency_score(event.get("happened_at_utc"), now=now) * 0.22),
+                    retrieval_kind="facet_story_river",
+                    metadata={"event_type": event.get("event_type")},
+                )
+            )
+        return sources[:limit]
+
+    facet_type = {
+        "facet_media": "media",
+        "facet_interests": "interests",
+        "facet_ideas": "ideas",
+        "facet_thoughts": "thoughts",
+    }.get(intent)
+    if not facet_type:
+        return []
+    matching = [facet for facet in list(snapshot.get("facets") or []) if facet.get("facet_type") == facet_type]
+    for facet in matching[:limit]:
+        sources.append(
+            _facet_source(
+                source_id=facet.get("id") or facet.get("title") or facet_type,
+                title=facet.get("title") or facet_type.title(),
+                summary=facet.get("summary") or "",
+                facet_type=facet_type,
+                signal_kind=facet.get("signal_kind") or "direct_sync",
+                happened_at=facet.get("happened_at_utc"),
+                similarity=min(
+                    0.93,
+                    0.62
+                    + float(facet.get("attention_score") or 0.0) * 0.16
+                    + _recency_score(facet.get("happened_at_utc"), now=now) * 0.16,
+                ),
+                retrieval_kind="facet_snapshot",
+                metadata={"open_loops": facet.get("open_loops") or []},
+            )
+        )
+    return sources[:limit]
 
 
 def format_story_context(
@@ -1219,9 +1345,7 @@ async def query_brain(
                     "similarity": round(float(item["active_score"]), 3),
                     "retrieval_kind": "project_snapshot",
                     "signal_kind": "derived_system",
-                    "event_time_utc": item["last_signal_at"],
-                    "event_time_local": item["last_signal_at"],
-                    "display_timezone": settings.digest_timezone,
+                    **describe_event_time(item["last_signal_at"]),
                 }
                 for item in projects
             ]
@@ -1310,6 +1434,14 @@ async def query_brain(
             )
 
         filtered_events = _project_events_for_mode(events, intent=resolved_intent)
+        facet_sources = []
+        if resolved_intent.startswith("facet_"):
+            facet_sources = await _collect_facet_sources(
+                session,
+                intent=resolved_intent,
+                now=current_time,
+                limit=8,
+            )
         exact_sources = await _collect_exact_sources(
             session,
             question,
@@ -1319,7 +1451,13 @@ async def query_brain(
             limit=8,
         )
         exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]
-        project_sources = [_coerce_source_item(item, retrieval_kind="project_snapshot") for item in _collect_project_sources(project_payload, now=current_time, limit=8)]
+        if facet_sources:
+            project_sources = [_coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources]
+        else:
+            project_sources = [
+                _coerce_source_item(item, retrieval_kind="project_snapshot")
+                for item in _collect_project_sources(project_payload, now=current_time, limit=8)
+            ]
         vector_sources = [_coerce_source_item(item, retrieval_kind="vector") for item in await collect_sources(session, question, category=category, limit=8)]
         selected_sources = _merge_sources(
             intent=resolved_intent,
@@ -1334,7 +1472,10 @@ async def query_brain(
             intent=resolved_intent,
         )
         used_exact_match = any(item["retrieval_kind"].startswith("exact_") for item in selected_sources)
-        used_project_snapshot = any(item["retrieval_kind"] == "project_snapshot" for item in selected_sources)
+        used_project_snapshot = any(
+            item["retrieval_kind"] in {"project_snapshot", "facet_snapshot", "facet_story_river"}
+            for item in selected_sources
+        )
         used_vector_search = any(item["retrieval_kind"] == "vector" for item in selected_sources)
 
         trace_payload["candidate_lists"] = {
@@ -1342,6 +1483,8 @@ async def query_brain(
             "project": _sanitize_sources(project_sources),
             "vector": _sanitize_sources(vector_sources),
         }
+        if facet_sources:
+            trace_payload["candidate_lists"]["facet"] = _sanitize_sources(project_sources)
 
         if resolved_mode == "sources":
             answer = "I don't have strong source matches for that yet."

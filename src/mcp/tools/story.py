@@ -9,7 +9,11 @@ from src.services.identity import resolve_project
 from src.services.project_state import recompute_project_states
 from src.services.query import build_active_projects_overview, query_brain
 from src.services.reminders import store_reminder
-from src.services.session_bootstrap import build_session_bootstrap, record_session_closeout
+from src.services.session_bootstrap import (
+    build_session_bootstrap,
+    publish_curated_session_story,
+    record_session_closeout,
+)
 from src.services.story import (
     build_project_story_payload,
     publish_story_entry,
@@ -173,6 +177,39 @@ def register(mcp: FastMCP):
                 open_questions=open_questions or [],
                 source_links=source_links or [],
                 transcript_excerpt=transcript_excerpt,
+            )
+
+    @mcp.tool()
+    async def publish_curated_session_story_tool(
+        agent_kind: str,
+        session_id: str,
+        project_ref: str,
+        title: str,
+        summary: str,
+        direction: str | None = None,
+        changes: list[str] | None = None,
+        open_loops: list[str] | None = None,
+        source_links: list[str] | None = None,
+        transcript_excerpt: str | None = None,
+        tags: list[str] | None = None,
+        actor_name: str | None = None,
+    ) -> dict:
+        """Publish a curated planning/design story as a progress update."""
+        async with async_session() as session:
+            return await publish_curated_session_story(
+                session,
+                agent_kind=agent_kind,
+                session_id=session_id,
+                project_ref=project_ref,
+                title=title,
+                summary=summary,
+                direction=direction,
+                changes=changes or [],
+                open_loops=open_loops or [],
+                source_links=source_links or [],
+                transcript_excerpt=transcript_excerpt,
+                tags=tags or [],
+                actor_name=actor_name,
             )
 
     @mcp.tool()

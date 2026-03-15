@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>$page_title</title>
+    <link rel="stylesheet" href="/static/dashboard/brain_atlas.css" />
+  </head>
+  <body class="atlas-body">
+    <div class="atlas-app-shell">
+      <aside class="atlas-sidebar">
+        <div class="atlas-mark">
+          <div class="atlas-mark-orb"></div>
+          <div>
+            <div class="atlas-mark-title">Brain Atlas</div>
+            <div class="atlas-mark-subtitle">Ahmad's private second brain</div>
+          </div>
+        </div>
+        <nav class="atlas-nav">
+          $nav_html
+        </nav>
+      </aside>
+      <main class="atlas-main">
+        <header class="atlas-hero">
+          <div class="atlas-kicker">$hero_kicker</div>
+          <h1>$hero_title</h1>
+          <p>$hero_subtitle</p>
+        </header>
+        <section class="atlas-content">
+          $content_html
+        </section>
+      </main>
+    </div>
+    <script id="atlas-page-data" type="application/json">$page_data_json</script>
+    <script src="/static/dashboard/brain_atlas.js"></script>
+    <script>$page_script</script>
+  </body>
+</html>

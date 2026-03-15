@@ -135,3 +135,50 @@ def test_record_session_closeout_emits_structured_story_fields(monkeypatch) -> N
     assert captured["entry"]["outcome"] == "Added an active-project fast path"
     assert captured["entry"]["open_question"] == "Does the digest now focus on duSraBheja?"
     assert result["project"]["title"] == "duSraBheja"
+
+
+def test_publish_curated_session_story_writes_progress_update(monkeypatch) -> None:
+    project = SimpleNamespace(id=uuid4(), title="duSraBheja")
+    captured = {}
+
+    async def fake_publish_story_entry(session, **kwargs):
+        captured["kwargs"] = kwargs
+        return {"journal_entry": SimpleNamespace(id=uuid4())}
+
+    async def fake_resolve_project(session, **kwargs):
+        return project
+
+    async def fake_recompute_project_states(session, **kwargs):
+        return []
+
+    async def fake_build_project_story_payload(session, project_note_id):
+        return {"project": {"id": str(project_note_id), "title": "duSraBheja"}}
+
+    monkeypatch.setattr(session_bootstrap, "publish_story_entry", fake_publish_story_entry)
+    monkeypatch.setattr(session_bootstrap, "resolve_project", fake_resolve_project)
+    monkeypatch.setattr(session_bootstrap, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(session_bootstrap, "build_project_story_payload", fake_build_project_story_payload)
+
+    result = asyncio.run(
+        session_bootstrap.publish_curated_session_story(
+            object(),
+            agent_kind="codex",
+            session_id="story-1",
+            project_ref="duSraBheja",
+            title="Brain Atlas direction",
+            summary="We are moving from admin tables to a visual atlas.",
+            direction="Use a derived facet layer for projects, ideas, media, and stories.",
+            changes=["Added a Brain Atlas read model", "Added a curated session-story API path"],
+            open_loops=["How should subconscious insights surface in digest and atlas?"],
+            source_links=["commit:abc123"],
+            tags=["atlas", "design"],
+        )
+    )
+
+    assert captured["kwargs"]["entry_type"] == "progress_update"
+    assert captured["kwargs"]["summary"] == "We are moving from admin tables to a visual atlas."
+    assert captured["kwargs"]["outcome"] == "Added a Brain Atlas read model"
+    assert captured["kwargs"]["open_question"] == "How should subconscious insights surface in digest and atlas?"
+    assert "## Direction" in captured["kwargs"]["body_markdown"]
+    assert result["entry_type"] == "progress_update"
+    assert result["project"]["title"] == "duSraBheja"

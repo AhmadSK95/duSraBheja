@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import uuid
 from datetime import date, timedelta
 
@@ -10,11 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
+from src.api.dashboard_ui import dashboard_url, render_dashboard_shell
 from src.constants import normalize_category
 from src.database import async_session
 from src.lib import store
 from src.lib.auth import require_api_token, require_dashboard_token
 from src.lib.time import format_display_datetime
+from src.services.brain_atlas import build_brain_atlas_snapshot, build_library_items
 from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
 from src.services.digest import generate_or_refresh_digest
@@ -28,6 +31,30 @@ api_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 def _fmt_dt(value) -> str:
     return format_display_datetime(value)
+
+
+def _pill(text: str, *, warm: bool = False) -> str:
+    classes = "atlas-pill atlas-pill--warm" if warm else "atlas-pill"
+    return f'<span class="{classes}">{html.escape(text)}</span>'
+
+
+def _meta_line(values: list[str]) -> str:
+    return '<div class="atlas-meta">' + "".join(f"<span>{html.escape(value)}</span>" for value in values if value) + "</div>"
+
+
+def _list_item(title: str, summary: str, *, meta: list[str] | None = None) -> str:
+    meta_html = _meta_line(meta or [])
+    return (
+        '<div class="atlas-list-item">'
+        f"<strong>{html.escape(title)}</strong>"
+        f"<div>{html.escape(summary)}</div>"
+        f"{meta_html}"
+        "</div>"
+    )
+
+
+def _serialize_json(payload: object) -> str:
+    return json.dumps(payload, default=str).replace("</", "<\\/")
 
 
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
@@ -51,9 +78,15 @@ def _page(title: str, body: str, *, token: str) -> HTMLResponse:
   </head>
   <body>
     <div class="nav">
+      <a href="/dashboard/atlas?token={safe_token}">Atlas</a>
+      <a href="/dashboard/story-river?token={safe_token}">Story River</a>
+      <a href="/dashboard/library?token={safe_token}">Library</a>
+      <a href="/dashboard/projects?token={safe_token}">Projects</a>
+      <a href="/dashboard/media?token={safe_token}">Media</a>
+      <a href="/dashboard/subconscious?token={safe_token}">Subconscious</a>
+      <a href="/dashboard/health?token={safe_token}">Health</a>
       <a href="/dashboard/artifacts?token={safe_token}">Artifacts</a>
       <a href="/dashboard/notes?token={safe_token}">Notes</a>
-      <a href="/dashboard/projects?token={safe_token}">Projects</a>
       <a href="/dashboard/chrome-signals?token={safe_token}">Chrome Signals</a>
       <a href="/dashboard/review?token={safe_token}">Review</a>
       <a href="/dashboard/boards?token={safe_token}">Boards</a>
@@ -86,9 +119,339 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
     return "".join(rows)
 
 
+def _metric(label: str, value: str) -> str:
+    return (
+        '<div class="atlas-metric">'
+        f'<div class="atlas-metric-label">{html.escape(label)}</div>'
+        f'<div class="atlas-metric-value">{html.escape(value)}</div>'
+        "</div>"
+    )
+
+
+def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
+    facets = list(snapshot.get("facets") or [])
+    story_river = list(snapshot.get("story_river") or [])
+    subconscious = list(snapshot.get("subconscious") or [])
+    library_preview = list(snapshot.get("library_preview") or [])
+    health = dict(snapshot.get("health") or {})
+    top_facets = facets[:6]
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {_metric('Facets', str(health.get('facet_count', len(facets))))}
+          {_metric('Projects', str(health.get('project_count', 0)))}
+          {_metric('Review Queue', str(health.get('pending_review_count', 0)))}
+          {_metric('Trace Failures', str(health.get('recent_trace_failures', 0)))}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-atlas-shell">
+          <div class="atlas-card atlas-map-wrap">
+            <div class="atlas-section-title">Cognitive Map</div>
+            <div class="atlas-map" data-atlas-map></div>
+          </div>
+          <aside class="atlas-detail" data-atlas-detail>
+            <div class="atlas-panel-card"><div class="atlas-empty">Select a node to inspect its evidence, story, and open loops.</div></div>
+          </aside>
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Highlights</h2>
+        <p>The strongest active clusters in your brain right now, derived from projects, ideas, media, stories, and system health.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Facet', item.get('summary') or '', meta=[item.get('facet_type') or '', item.get('happened_at_local') or '']) for item in top_facets)}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Quiet Subconscious</h2>
+        <p>Replay, map, dream, and foresight outputs stay quiet here and feed the digest, boards, and agent bootstraps when they matter.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Insight', item.get('summary') or '', meta=[item.get('lane') or '', item.get('certainty') or '']) for item in subconscious[:4])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Story River</h2>
+        <p>Major boards and sessions flowing through the current narrative.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Story Event', item.get('summary') or '', meta=[item.get('event_type') or '', item.get('happened_at_local') or '']) for item in story_river[:5])}
+        </div>
+        <div class="atlas-meta"><a href="{dashboard_url('/dashboard/story-river', token)}">Open the full Story River</a></div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Library Preview</h2>
+        <p>A live slice of the searchable vault underneath the atlas.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Item', item.get('summary') or '', meta=[item.get('facet_type') or '', item.get('source_name') or '', item.get('happened_at_local') or '']) for item in library_preview[:5])}
+        </div>
+        <div class="atlas-meta"><a href="{dashboard_url('/dashboard/library', token)}">Browse the Library Explorer</a></div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Brain Atlas",
+        token=token,
+        active_page="atlas",
+        hero_kicker="Visual Brain",
+        hero_title="Brain Atlas",
+        hero_subtitle="A whole-brain view of projects, interests, people, ideas, thoughts, media, stories, and system health, all rendered in New York local time.",
+        content_html=content_html,
+        page_data_json=_serialize_json(
+            {
+                "facets": facets,
+                "links": list(snapshot.get("links") or []),
+            }
+        ),
+    )
+
+
+def _render_library_page(items: list[dict], *, token: str, q: str, facet: str, source_name: str, category: str) -> HTMLResponse:
+    cards = "".join(
+        _list_item(
+            item.get("title") or "Item",
+            item.get("summary") or "",
+            meta=[
+                item.get("facet_type") or "",
+                item.get("source_name") or "",
+                item.get("category") or "",
+                item.get("happened_at_local") or "",
+            ],
+        )
+        for item in items
+    ) or '<div class="atlas-empty">No library items matched these filters.</div>'
+    content_html = f"""
+    <section class="atlas-card atlas-card--span-12">
+      <form class="atlas-form" method="get" action="/dashboard/library">
+        <input type="hidden" name="token" value="{html.escape(token)}" />
+        <label>Search<input type="text" name="q" value="{html.escape(q)}" placeholder="Search the vault" /></label>
+        <label>Facet
+          <select name="facet">
+            <option value="">All facets</option>
+            {''.join(f'<option value="{name}" {"selected" if facet == name else ""}>{name.title()}</option>' for name in ('projects','interests','people','ideas','thoughts','media','stories','systems'))}
+          </select>
+        </label>
+        <label>Source<input type="text" name="source_name" value="{html.escape(source_name)}" placeholder="discord, chrome_activity, note" /></label>
+        <label>Category<input type="text" name="category" value="{html.escape(category)}" placeholder="project, idea, progress_update" /></label>
+        <button type="submit">Filter</button>
+      </form>
+      <div class="atlas-list">{cards}</div>
+    </section>
+    """
+    return render_dashboard_shell(
+        title="Library Explorer",
+        token=token,
+        active_page="library",
+        hero_kicker="Full Vault",
+        hero_title="Library Explorer",
+        hero_subtitle="Browse the stored universe directly. This is the human-readable ledger view beneath the atlas.",
+        content_html=content_html,
+    )
+
+
+def _render_story_river_page(events: list[dict], *, token: str) -> HTMLResponse:
+    timeline = "".join(
+        (
+            '<article class="atlas-timeline-card">'
+            f"<strong>{html.escape(item.get('title') or 'Event')}</strong>"
+            f"<p>{html.escape(item.get('summary') or '')}</p>"
+            f"{_meta_line([item.get('event_type') or '', item.get('signal_kind') or '', item.get('happened_at_local') or ''])}"
+            "</article>"
+        )
+        for item in events
+    ) or '<div class="atlas-empty">No story events yet.</div>'
+    content_html = f'<section class="atlas-card atlas-card--span-12"><div class="atlas-timeline">{timeline}</div></section>'
+    return render_dashboard_shell(
+        title="Story River",
+        token=token,
+        active_page="story-river",
+        hero_kicker="Narrative Flow",
+        hero_title="Story River",
+        hero_subtitle="Boards, sessions, and major updates arranged as one flowing narrative instead of disconnected database rows.",
+        content_html=content_html,
+    )
+
+
+def _render_media_page(media_facets: list[dict], *, token: str) -> HTMLResponse:
+    content_html = (
+        '<section class="atlas-card atlas-card--span-12"><div class="atlas-grid">'
+        + "".join(
+            (
+                '<article class="atlas-card atlas-card--span-4">'
+                f"<h2>{html.escape(item.get('title') or 'Media')}</h2>"
+                f"<p>{html.escape(item.get('summary') or '')}</p>"
+                f"<div class=\"atlas-list\">"
+                + "".join(
+                    _list_item(
+                        evidence.get("title") or "Evidence",
+                        evidence.get("summary") or "",
+                        meta=[evidence.get("signal_kind") or "", evidence.get("happened_at_local") or ""],
+                    )
+                    for evidence in (item.get("evidence") or [])[:3]
+                )
+                + "</div></article>"
+            )
+            for item in media_facets
+        )
+        + "</div></section>"
+    )
+    return render_dashboard_shell(
+        title="Media Signals",
+        token=token,
+        active_page="media",
+        hero_kicker="Taste & Consumption",
+        hero_title="Media Signals",
+        hero_subtitle="YouTube, OTT, and other recurring media patterns distilled into themes rather than raw click clutter.",
+        content_html=content_html,
+    )
+
+
+def _render_subconscious_page(subconscious: list[dict], *, token: str) -> HTMLResponse:
+    certainty_class = {
+        "grounded observation": "atlas-badge atlas-badge--grounded",
+        "plausible inference": "atlas-badge atlas-badge--plausible",
+        "speculative hypothesis": "atlas-badge atlas-badge--speculative",
+    }
+    content_html = (
+        '<section class="atlas-card atlas-card--span-12"><div class="atlas-columns">'
+        + "".join(
+            (
+                '<article class="atlas-card">'
+                f"<div class=\"atlas-chip-row\"><span class=\"atlas-pill atlas-pill--warm\">{html.escape(item.get('lane') or 'Lane')}</span>"
+                f"<span class=\"{certainty_class.get(item.get('certainty') or '', 'atlas-badge')}\">{html.escape(item.get('certainty') or 'unknown')}</span></div>"
+                f"<h2>{html.escape(item.get('title') or 'Insight')}</h2>"
+                f"<p>{html.escape(item.get('summary') or '')}</p>"
+                f"<div class=\"atlas-section-title\">Why now</div><p>{html.escape(item.get('why_now') or '')}</p>"
+                f"<div class=\"atlas-list\">"
+                + "".join(
+                    _list_item(
+                        evidence.get("title") or "Evidence",
+                        evidence.get("summary") or "",
+                        meta=[evidence.get("signal_kind") or "", evidence.get("happened_at_local") or ""],
+                    )
+                    for evidence in (item.get("evidence") or [])[:2]
+                )
+                + "</div></article>"
+            )
+            for item in subconscious
+        )
+        + "</div></section>"
+    )
+    return render_dashboard_shell(
+        title="Subconscious Lab",
+        token=token,
+        active_page="subconscious",
+        hero_kicker="Quiet Churn",
+        hero_title="Subconscious Lab",
+        hero_subtitle="Replay, mapping, dream recombination, and foresight stay quiet here until they are useful enough to surface elsewhere.",
+        content_html=content_html,
+    )
+
+
+def _render_health_page(snapshot: dict, *, token: str) -> HTMLResponse:
+    health = dict(snapshot.get("health") or {})
+    latest_syncs = list(health.get("latest_syncs") or [])
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {_metric('Timezone', health.get('display_timezone') or 'unknown')}
+          {_metric('Generated', health.get('generated_at_local') or 'unknown')}
+          {_metric('Facet Count', str(health.get('facet_count', 0)))}
+          {_metric('Pending Review', str(health.get('pending_review_count', 0)))}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Sync Freshness</h2>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('source_id') or 'sync', f"mode={item.get('mode')} | status={item.get('status')} | seen={item.get('items_seen')} | imported={item.get('items_imported')}", meta=[item.get('started_at_local') or '']) for item in latest_syncs)}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Inspector Links</h2>
+        <div class="atlas-list">
+          {_list_item('Artifacts', 'Open the raw intake ledger and moderation state.', meta=[])}
+          {_list_item('Boards', 'Inspect included and excluded board inputs.', meta=[])}
+          {_list_item('Query Traces', 'Trace exact retrieval and narration decisions.', meta=[])}
+          {_list_item('Evals', 'Check the regression harness and scoring.', meta=[])}
+        </div>
+        <div class="atlas-meta">
+          <a href="{dashboard_url('/dashboard/artifacts', token)}">Artifacts</a>
+          <a href="{dashboard_url('/dashboard/boards', token)}">Boards</a>
+          <a href="{dashboard_url('/dashboard/query-traces', token)}">Query Traces</a>
+          <a href="{dashboard_url('/dashboard/evals', token)}">Evals</a>
+        </div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Brain Health",
+        token=token,
+        active_page="health",
+        hero_kicker="Operations",
+        hero_title="Brain Health",
+        hero_subtitle="Freshness, ingest quality, review pressure, and retrieval reliability, all normalized to New York local time.",
+        content_html=content_html,
+    )
+
+
 @router.get("/dashboard", dependencies=[Depends(require_dashboard_token)])
 async def dashboard_root(token: str = Query(default="")) -> RedirectResponse:
-    return RedirectResponse(url=f"/dashboard/artifacts?token={token}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=f"/dashboard/atlas?token={token}", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/dashboard/atlas", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_atlas(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return _render_atlas_page(snapshot, token=token)
+
+
+@router.get("/dashboard/library", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_library(
+    token: str = Query(default=""),
+    q: str = Query(default=""),
+    facet: str = Query(default=""),
+    source_name: str = Query(default=""),
+    category: str = Query(default=""),
+) -> HTMLResponse:
+    async with async_session() as session:
+        items = await build_library_items(
+            session,
+            q=q or None,
+            facet=facet or None,
+            source_name=source_name or None,
+            category=category or None,
+        )
+    return _render_library_page(items, token=token, q=q, facet=facet, source_name=source_name, category=category)
+
+
+@router.get("/dashboard/story-river", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_story_river(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return _render_story_river_page(list(snapshot.get("story_river") or []), token=token)
+
+
+@router.get("/dashboard/media", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_media(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    media_facets = [facet for facet in snapshot.get("facets", []) if facet.get("facet_type") == "media"]
+    return _render_media_page(media_facets, token=token)
+
+
+@router.get("/dashboard/subconscious", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_subconscious(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session, include_web=False)).as_dict()
+    return _render_subconscious_page(list(snapshot.get("subconscious") or []), token=token)
+
+
+@router.get("/dashboard/health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_health(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return _render_health_page(snapshot, token=token)
 
 
 @router.get("/dashboard/artifacts", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -183,32 +546,47 @@ async def dashboard_notes(token: str = Query(default="")) -> HTMLResponse:
 @router.get("/dashboard/projects", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
-        snapshots = await store.list_project_state_snapshots(session, limit=50)
-        rows = []
-        for snapshot in snapshots:
-            project = await store.get_note(session, snapshot.project_note_id)
-            if not project:
-                continue
-            blockers = ", ".join((snapshot.blockers or [])[:2]) or "none"
-            rows.append(
-                "<tr>"
-                f"<td>{html.escape(project.title)}</td>"
-                f"<td>{html.escape(snapshot.status)}</td>"
-                f"<td>{snapshot.active_score:.2f}</td>"
-                f"<td>{html.escape((snapshot.implemented or '')[:220])}</td>"
-                f"<td>{html.escape((snapshot.what_changed or '')[:180])}</td>"
-                f"<td>{html.escape(blockers)}</td>"
-                f"<td>{_fmt_dt(snapshot.updated_at)}</td>"
-                "</tr>"
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    project_facets = [facet for facet in snapshot.get("facets", []) if facet.get("facet_type") == "projects"]
+    cards = "".join(
+        (
+            '<article class="atlas-card atlas-card--span-6">'
+            f"<div class=\"atlas-chip-row\">{_pill(facet.get('metadata', {}).get('status') or 'unknown', warm=True)} {_pill(facet.get('happened_at_local') or 'unknown')}</div>"
+            f"<h2>{html.escape(facet.get('title') or 'Project')}</h2>"
+            f"<p>{html.escape(facet.get('summary') or '')}</p>"
+            f"<div class=\"atlas-section-title\">Open loops</div>"
+            + (
+                f"<div class=\"atlas-tag-grid\">{''.join(f'<span class=\"atlas-chip\">{html.escape(value)}</span>' for value in (facet.get('open_loops') or []))}</div>"
+                if facet.get("open_loops")
+                else '<div class="atlas-empty">No explicit blockers or open loops.</div>'
             )
-    body = (
-        "<h1>Projects</h1>"
-        "<p>Current project-state snapshots ranked by activity score.</p>"
-        "<table><thead><tr><th>Project</th><th>Status</th><th>Score</th><th>Where It Stands</th><th>What Changed</th><th>Blockers</th><th>Updated</th></tr></thead><tbody>"
-        + ("".join(rows) or "<tr><td colspan='7'>No project snapshots yet.</td></tr>")
-        + "</tbody></table>"
+            + f"<div class=\"atlas-list\">"
+            + "".join(
+                _list_item(
+                    evidence.get("title") or "Evidence",
+                    evidence.get("summary") or "",
+                    meta=[evidence.get("signal_kind") or "", evidence.get("happened_at_local") or ""],
+                )
+                for evidence in (facet.get("evidence") or [])[:2]
+            )
+            + "</div></article>"
+        )
+        for facet in project_facets
     )
-    return _page("Projects", body, token=token)
+    body = (
+        '<div class="atlas-grid">'
+        + (cards or '<section class="atlas-card atlas-card--span-12"><div class="atlas-empty">No project facets yet.</div></section>')
+        + "</div>"
+    )
+    return render_dashboard_shell(
+        title="Projects",
+        token=token,
+        active_page="projects",
+        hero_kicker="Active Work",
+        hero_title="Project Constellation",
+        hero_subtitle="Project state now reads like a field guide: where each project stands, what changed, and what still needs attention.",
+        content_html=body,
+    )
 
 
 @router.get("/dashboard/chrome-signals", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -221,7 +599,7 @@ async def dashboard_chrome_signals(token: str = Query(default="")) -> HTMLRespon
         f"<td>{html.escape(row['source_item'].title)}</td>"
         f"<td>{html.escape(((row['project_note'].title if row['project_note'] else '') or 'none'))}</td>"
         f"<td>{html.escape(str(((row['source_item'].payload or {}).get('metadata') or {}).get('profile_email') or 'unknown'))}</td>"
-        f"<td>{html.escape(str(((row['source_item'].payload or {}).get('metadata') or {}).get('coverage_start_local') or ''))}</td>"
+        f"<td>{_fmt_dt(((row['source_item'].payload or {}).get('metadata') or {}).get('coverage_start_local'))}</td>"
         f"<td>{html.escape((row['source_item'].summary or '')[:220])}</td>"
         f"<td>{_fmt_dt(row['source_item'].happened_at or row['source_item'].created_at)}</td>"
         "</tr>"
@@ -273,7 +651,7 @@ async def dashboard_board_detail(board_id: uuid.UUID, token: str = Query(default
         f"<td>{html.escape(item.get('title') or 'source')}</td>"
         f"<td>{html.escape(item.get('signal_kind') or 'unknown')}</td>"
         f"<td>{html.escape(item.get('reason') or '')}</td>"
-        f"<td>{html.escape(item.get('event_time_local') or 'unknown')}</td>"
+        f"<td>{_fmt_dt(item.get('event_time_local'))}</td>"
         "</tr>"
         for item in payload.get("included_source_reasons", [])
     ) or "<tr><td colspan='4'>None</td></tr>"
@@ -282,7 +660,7 @@ async def dashboard_board_detail(board_id: uuid.UUID, token: str = Query(default
         f"<td>{html.escape(item.get('title') or 'source')}</td>"
         f"<td>{html.escape(item.get('signal_kind') or 'unknown')}</td>"
         f"<td>{html.escape(item.get('reason') or '')}</td>"
-        f"<td>{html.escape(item.get('event_time_local') or 'unknown')}</td>"
+        f"<td>{_fmt_dt(item.get('event_time_local'))}</td>"
         "</tr>"
         for item in payload.get("excluded_source_reasons", [])
     ) or "<tr><td colspan='4'>None</td></tr>"
@@ -432,6 +810,71 @@ async def list_dashboard_artifacts(validation_status: str | None = None) -> list
     ]
 
 
+@api_router.get("/atlas", dependencies=[Depends(require_api_token)])
+async def get_dashboard_atlas() -> dict:
+    async with async_session() as session:
+        return (await build_brain_atlas_snapshot(session)).as_dict()
+
+
+@api_router.get("/library", dependencies=[Depends(require_api_token)])
+async def get_dashboard_library(
+    q: str | None = None,
+    facet: str | None = None,
+    source_name: str | None = None,
+    category: str | None = None,
+) -> dict:
+    async with async_session() as session:
+        items = await build_library_items(
+            session,
+            q=q,
+            facet=facet,
+            source_name=source_name,
+            category=category,
+        )
+    return {
+        "display_timezone": "America/New_York",
+        "count": len(items),
+        "items": items,
+    }
+
+
+@api_router.get("/story-river", dependencies=[Depends(require_api_token)])
+async def get_dashboard_story_river() -> dict:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return {
+        "display_timezone": snapshot.get("display_timezone"),
+        "events": snapshot.get("story_river", []),
+    }
+
+
+@api_router.get("/media", dependencies=[Depends(require_api_token)])
+async def get_dashboard_media() -> dict:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return {
+        "display_timezone": snapshot.get("display_timezone"),
+        "facets": [facet for facet in snapshot.get("facets", []) if facet.get("facet_type") == "media"],
+    }
+
+
+@api_router.get("/subconscious", dependencies=[Depends(require_api_token)])
+async def get_dashboard_subconscious() -> dict:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session, include_web=False)).as_dict()
+    return {
+        "display_timezone": snapshot.get("display_timezone"),
+        "insights": snapshot.get("subconscious", []),
+    }
+
+
+@api_router.get("/health", dependencies=[Depends(require_api_token)])
+async def get_dashboard_health() -> dict:
+    async with async_session() as session:
+        snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    return snapshot.get("health", {})
+
+
 @api_router.get("/artifacts/{artifact_id}", dependencies=[Depends(require_api_token)])
 async def get_dashboard_artifact(artifact_id: uuid.UUID) -> dict:
     async with async_session() as session:
@@ -551,8 +994,8 @@ async def list_dashboard_chrome_signals() -> list[dict]:
             "summary": row["source_item"].summary,
             "project": row["project_note"].title if row["project_note"] else None,
             "profile_email": ((row["source_item"].payload or {}).get("metadata") or {}).get("profile_email"),
-            "coverage_start_local": ((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_start_local"),
-            "coverage_end_local": ((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_end_local"),
+            "coverage_start_local": _fmt_dt(((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_start_local")),
+            "coverage_end_local": _fmt_dt(((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_end_local")),
             "happened_at_local": _fmt_dt(row["source_item"].happened_at or row["source_item"].created_at),
         }
         for row in rows

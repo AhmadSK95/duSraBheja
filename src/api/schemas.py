@@ -116,6 +116,21 @@ class AgentSessionCloseoutRequest(BaseModel):
     transcript_excerpt: str | None = None
 
 
+class AgentSessionStoryRequest(BaseModel):
+    agent_kind: str
+    session_id: str
+    project_ref: str = Field(min_length=1)
+    title: str = Field(min_length=3)
+    summary: str = Field(min_length=3)
+    direction: str | None = None
+    changes: list[str] = Field(default_factory=list)
+    open_loops: list[str] = Field(default_factory=list)
+    source_links: list[str] = Field(default_factory=list)
+    transcript_excerpt: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    actor_name: str | None = None
+
+
 class ArtifactModerationRequest(BaseModel):
     category: str | None = None
     capture_intent: str | None = None
