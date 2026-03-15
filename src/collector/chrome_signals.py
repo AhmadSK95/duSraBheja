@@ -215,6 +215,7 @@ ADMIN_HINT_RE = re.compile(r"\b(tax|insurance|form|forms|payment|bill|billing|re
 WORK_HINT_RE = re.compile(r"\b(api|deploy|deployment|database|discord|llm|mcp|postgres|rag|redis|vector)\b", re.I)
 TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9\-_]{2,}")
 MIN_GENERAL_BROWSING_LABEL_REPEAT = 2
+CHROME_INGEST_BATCH_SIZE = 8
 
 
 @dataclass(slots=True)
@@ -389,6 +390,12 @@ def _period_label(kind: str, start: date, end: date) -> str:
 def _content_hash(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, ensure_ascii=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _chunk_entries(entries: list[dict[str, Any]], batch_size: int) -> list[list[dict[str, Any]]]:
+    if batch_size <= 0:
+        return [entries]
+    return [entries[index : index + batch_size] for index in range(0, len(entries), batch_size)]
 
 
 def resolve_chrome_profile(
@@ -1319,15 +1326,33 @@ async def push_entries(
         "source_name": f"mac-chrome-{preview['profile']['directory'].lower().replace(' ', '-')}",
         "mode": mode,
         "device_name": settings.collector_device_name,
-        "emit_sync_event": True,
-        "entries": entries,
     }
+    batches = _chunk_entries(entries, CHROME_INGEST_BATCH_SIZE if mode == "bootstrap" else len(entries))
     headers = {"Authorization": f"Bearer {settings.api_token}"} if settings.api_token else {}
+    batch_results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(base_url=settings.collector_api_base_url, timeout=180) as client:
-        response = await client.post("/api/ingest/collector", headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-    return {"preview": preview, "ingest": result}
+        for index, batch in enumerate(batches):
+            response = await client.post(
+                "/api/ingest/collector",
+                headers=headers,
+                json={
+                    **payload,
+                    "mode": mode if len(batches) == 1 else f"{mode}-batch",
+                    "emit_sync_event": index == len(batches) - 1,
+                    "entries": batch,
+                },
+            )
+            response.raise_for_status()
+            batch_results.append(response.json())
+
+    ingest_result = {
+        "status": "completed" if batch_results else "noop",
+        "items_seen": sum(int(item.get("items_seen", 0)) for item in batch_results),
+        "items_imported": sum(int(item.get("items_imported", 0)) for item in batch_results),
+        "batches": len(batch_results),
+        "batch_sizes": [len(batch) for batch in batches],
+    }
+    return {"preview": preview, "ingest": ingest_result, "batch_results": batch_results}
 
 
 def main() -> None:
