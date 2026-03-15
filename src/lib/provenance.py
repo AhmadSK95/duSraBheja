@@ -20,6 +20,7 @@ DIRECT_AGENT_ENTRY_TYPES = {
 DIRECT_SYNC_SOURCES = {
     "apple_notes",
     "browser_activity",
+    "chrome_activity",
     "claude_history",
     "codex_history",
     "collector",

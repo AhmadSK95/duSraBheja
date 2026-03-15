@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     apple_notes_exclude_folders: str = ""
     browser_activity_state_path: str = "~/.brain-collector/browser-activity-state.json"
     browser_activity_lookback_days: int = 1
+    chrome_signal_profile_email: str = "ahmad2609.as@gmail.com"
+    chrome_signal_profile_name: str = "Ahmad"
+    chrome_signal_bootstrap_recent_days: int = 90
+    chrome_signal_daily_run_hour: int = 5
+    chrome_signal_daily_run_minute: int = 30
+    chrome_signal_excluded_domains: str = ""
+    chrome_signal_excluded_url_patterns: str = ""
+    chrome_signal_max_exemplars_per_signal: int = 5
 
     # Story retrieval
     story_max_events: int = 25

@@ -67,6 +67,7 @@ SOURCE_TYPES = (
     "google_keep",
     "apple_notes",
     "browser_activity",
+    "chrome_activity",
     "youtube_history",
     "google_search_history",
     "ott_history",

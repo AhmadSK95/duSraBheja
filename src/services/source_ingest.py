@@ -228,6 +228,7 @@ async def ingest_source_entries(
                     "google_keep",
                     "apple_notes",
                     "browser_activity",
+                    "chrome_activity",
                     "github",
                     "youtube_history",
                     "google_search_history",

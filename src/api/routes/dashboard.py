@@ -54,6 +54,7 @@ def _page(title: str, body: str, *, token: str) -> HTMLResponse:
       <a href="/dashboard/artifacts?token={safe_token}">Artifacts</a>
       <a href="/dashboard/notes?token={safe_token}">Notes</a>
       <a href="/dashboard/projects?token={safe_token}">Projects</a>
+      <a href="/dashboard/chrome-signals?token={safe_token}">Chrome Signals</a>
       <a href="/dashboard/review?token={safe_token}">Review</a>
       <a href="/dashboard/boards?token={safe_token}">Boards</a>
       <a href="/dashboard/query-traces?token={safe_token}">Query Traces</a>
@@ -208,6 +209,32 @@ async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
         + "</tbody></table>"
     )
     return _page("Projects", body, token=token)
+
+
+@router.get("/dashboard/chrome-signals", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_chrome_signals(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        rows = await store.list_source_items_with_sources(session, source_type="chrome_activity", limit=100)
+    table_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape((row['source_item'].payload or {}).get('entry_type') or 'unknown')}</td>"
+        f"<td>{html.escape(row['source_item'].title)}</td>"
+        f"<td>{html.escape(((row['project_note'].title if row['project_note'] else '') or 'none'))}</td>"
+        f"<td>{html.escape(str(((row['source_item'].payload or {}).get('metadata') or {}).get('profile_email') or 'unknown'))}</td>"
+        f"<td>{html.escape(str(((row['source_item'].payload or {}).get('metadata') or {}).get('coverage_start_local') or ''))}</td>"
+        f"<td>{html.escape((row['source_item'].summary or '')[:220])}</td>"
+        f"<td>{_fmt_dt(row['source_item'].happened_at or row['source_item'].created_at)}</td>"
+        "</tr>"
+        for row in rows
+    ) or "<tr><td colspan='7'>No Chrome signals yet.</td></tr>"
+    body = (
+        "<h1>Chrome Signals</h1>"
+        "<p>Distilled Chrome profile summaries, daily signals, and project-linked browser signals.</p>"
+        "<table><thead><tr><th>Entry Type</th><th>Title</th><th>Project</th><th>Profile</th><th>Coverage Start</th><th>Summary</th><th>Created</th></tr></thead><tbody>"
+        + table_rows
+        + "</tbody></table>"
+    )
+    return _page("Chrome Signals", body, token=token)
 
 
 @router.get("/dashboard/boards", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -509,6 +536,44 @@ async def list_dashboard_boards(board_type: str | None = None) -> list[dict]:
             "excluded_artifact_ids": board.excluded_artifact_ids or [],
         }
         for board in boards
+    ]
+
+
+@api_router.get("/chrome-signals", dependencies=[Depends(require_api_token)])
+async def list_dashboard_chrome_signals() -> list[dict]:
+    async with async_session() as session:
+        rows = await store.list_source_items_with_sources(session, source_type="chrome_activity", limit=100)
+    return [
+        {
+            "source_item_id": str(row["source_item"].id),
+            "entry_type": (row["source_item"].payload or {}).get("entry_type"),
+            "title": row["source_item"].title,
+            "summary": row["source_item"].summary,
+            "project": row["project_note"].title if row["project_note"] else None,
+            "profile_email": ((row["source_item"].payload or {}).get("metadata") or {}).get("profile_email"),
+            "coverage_start_local": ((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_start_local"),
+            "coverage_end_local": ((row["source_item"].payload or {}).get("metadata") or {}).get("coverage_end_local"),
+            "happened_at_local": _fmt_dt(row["source_item"].happened_at or row["source_item"].created_at),
+        }
+        for row in rows
+    ]
+
+
+@api_router.get("/project-aliases", dependencies=[Depends(require_api_token)])
+async def list_dashboard_project_aliases() -> list[dict]:
+    async with async_session() as session:
+        projects = await store.list_project_notes(session, limit=200)
+        aliases = await store.list_project_aliases(session, limit=500)
+    titles_by_id = {str(project.id): project.title for project in projects}
+    grouped: dict[str, set[str]] = {project.title: {project.title} for project in projects}
+    for alias in aliases:
+        project_title = titles_by_id.get(str(alias.project_note_id))
+        if not project_title:
+            continue
+        grouped.setdefault(project_title, {project_title}).add(alias.alias)
+    return [
+        {"project_title": project_title, "aliases": sorted(values)}
+        for project_title, values in sorted(grouped.items())
     ]
 
 

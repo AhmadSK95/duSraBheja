@@ -521,6 +521,28 @@ async def search_source_items_text(
     return list(result.scalars().all())
 
 
+async def list_source_items_with_sources(
+    session: AsyncSession,
+    *,
+    source_type: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    query = (
+        select(SourceItem, SyncSource, Note)
+        .join(SyncSource, SyncSource.id == SourceItem.sync_source_id)
+        .outerjoin(Note, Note.id == SourceItem.project_note_id)
+        .order_by(SourceItem.happened_at.desc().nullslast(), SourceItem.created_at.desc())
+        .limit(limit)
+    )
+    if source_type:
+        query = query.where(SyncSource.source_type == source_type)
+    result = await session.execute(query)
+    rows = []
+    for source_item, sync_source, note in result.all():
+        rows.append({"source_item": source_item, "sync_source": sync_source, "project_note": note})
+    return rows
+
+
 async def create_link(session: AsyncSession, **kwargs) -> Link:
     link = Link(**kwargs)
     session.add(link)
