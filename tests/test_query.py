@@ -339,13 +339,23 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
         return []
 
     async def fake_list_story_events(session, **kwargs):
-        return []
+        return [
+            SimpleNamespace(
+                id="evt-1",
+                title="Evidence gap: dataGenie",
+                summary="Noisy derived event that should not leak into facet answers.",
+                entry_type="blind_spot",
+                actor_type="system",
+                happened_at=datetime(2026, 3, 15, 11, 0, tzinfo=timezone.utc),
+            )
+        ]
 
     async def fake_get_voice_profile(session, profile_name="ahmad-default"):
         return None
 
     async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
         assert "Interview prep and job-search pressure" in context_text
+        assert "dataGenie" not in context_text
         assert "Current headspace" in persona_context
         return {"text": "Interview prep has been the clearest recurring thought lately.", "model": "test-model", "cost_usd": 0}
 

@@ -1770,7 +1770,9 @@ async def query_brain(
         project_note_id = uuid.UUID(project_payload["project"]["id"]) if project_payload else None
 
         event_limit = settings.story_max_events
-        if resolved_mode in {"latest", "project_review"}:
+        if resolved_intent.startswith("facet_"):
+            events = []
+        elif resolved_mode in {"latest", "project_review"}:
             events = await store.list_story_events(
                 session,
                 project_note_id=project_note_id,
