@@ -33,7 +33,7 @@ def dashboard_cookie_secure() -> bool:
 
 
 def is_dashboard_session_authenticated(request: Request) -> bool:
-    session = getattr(request, "session", {}) or {}
+    session = request.scope.get("session") or {}
     return bool(session.get("dashboard_authenticated"))
 
 
