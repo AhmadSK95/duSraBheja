@@ -163,11 +163,11 @@ async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project:
         if entry.entry_type in LOW_SIGNAL_ENTRY_TYPES:
             continue
         project_refs = thread_ids_by_project.get(str(entry.project_note_id), []) if entry.project_note_id else []
+        title = entry.title
+        summary = _excerpt(entry.summary or entry.body_markdown)
+        body = _excerpt(entry.body_markdown, limit=2000)
         base_values = {
             "project_note_id": entry.project_note_id,
-            "title": entry.title,
-            "summary": _excerpt(entry.summary or entry.body_markdown),
-            "body": _excerpt(entry.body_markdown, limit=2000),
             "provenance_kind": signal_kind_for_event(entry_type=entry.entry_type, actor_type=entry.actor_type),
             "thread_ids": project_refs[:1],
             "entity_ids": project_refs[1:2],
@@ -189,9 +189,9 @@ async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project:
                 source_kind="journal_entry",
                 source_ref=str(entry.id),
                 synthesis_type=entry.entry_type,
-                title=entry.title,
-                summary=_excerpt(entry.summary or entry.body_markdown),
-                body=_excerpt(entry.body_markdown, limit=2000),
+                title=title,
+                summary=summary,
+                body=body,
                 certainty_class="plausible_inference",
                 source_refs=list(entry.evidence_refs or []),
                 **base_values,
@@ -203,6 +203,9 @@ async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project:
             source_kind="journal_entry",
             source_ref=str(entry.id),
             observation_type=observation_type,
+            title=title,
+            summary=summary,
+            body=body,
             certainty=0.92 if entry.actor_type in {"human", "agent"} else 0.78,
             actor=entry.actor_name,
             evidence_ids=list(entry.evidence_refs or []),
