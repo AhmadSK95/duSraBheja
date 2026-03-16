@@ -26,6 +26,47 @@ Claude uses the same flow:
   --project-hint duSraBheja
 ```
 
+## From Any Directory
+
+If you open Codex or Claude Code in some other repo, you do not need to copy the brain code into that repo. Call the shared brain CLI from this repo with an explicit `--cwd`.
+
+Codex:
+
+```bash
+/Users/moenuddeenahmadshaik/code/duSraBheja/.venv/bin/python \
+  /Users/moenuddeenahmadshaik/code/duSraBheja/scripts/brain_session.py bootstrap \
+  --agent-kind codex \
+  --cwd "$PWD" \
+  --project-hint "<project-name>"
+```
+
+Claude Code:
+
+```bash
+/Users/moenuddeenahmadshaik/code/duSraBheja/.venv/bin/python \
+  /Users/moenuddeenahmadshaik/code/duSraBheja/scripts/brain_session.py bootstrap \
+  --agent-kind claude \
+  --cwd "$PWD" \
+  --project-hint "<project-name>"
+```
+
+If you want a copy-paste prompt for the agent, generate it with:
+
+```bash
+./.venv/bin/python scripts/brain_agent_prompt.py \
+  --agent-kind codex \
+  --project-hint duSraBheja \
+  --task-hint "tighten Atlas weighting"
+```
+
+Or for Claude Code:
+
+```bash
+./.venv/bin/python scripts/brain_agent_prompt.py \
+  --agent-kind claude \
+  --project-hint duSraBheja
+```
+
 ## During The Session
 
 The MCP tools are the shared working surface:
@@ -53,6 +94,17 @@ Publish a structured closeout so the next session starts from the last saved poi
 ```
 
 The closeout sits alongside the transcript backfill from `run_agent_history_sync.sh`, but it is much cleaner for project-state and digest generation because it is already structured.
+
+If the session was mostly planning, architecture, or product direction, also publish a curated story:
+
+```bash
+./.venv/bin/python scripts/brain_session.py story \
+  --agent-kind codex \
+  --session-id codex-1234abcd \
+  --project-ref duSraBheja \
+  --title "Atlas direction update" \
+  --summary "Shifted the dashboard toward a visual whole-brain Atlas."
+```
 
 ## One-Time Personal Context Import
 

@@ -108,6 +108,9 @@ EXACT_FACT_HINTS = (
     "account",
     "port",
 )
+PROJECT_FOCUSED_INTENTS = {"project_latest", "project_status", "project_review", "timeline_review", "latest_status"}
+LEGACY_WORKSPACE_HINTS = ("/desktop/", "\\desktop\\")
+CURRENT_WORKSPACE_HINTS = ("/code/", "/opt/dusrabheja", "/users/moenuddeenahmadshaik/code/")
 FACET_QUERY_HINTS: dict[str, tuple[str, ...]] = {
     "facet_story": (
         "what story am i living through",
@@ -282,6 +285,11 @@ def _detect_facet_intent(question: str) -> str | None:
     return None
 
 
+def _contains_legacy_workspace(value: str | None) -> bool:
+    lowered = (value or "").lower()
+    return any(hint in lowered for hint in LEGACY_WORKSPACE_HINTS)
+
+
 def _detect_query_intent(question: str, *, resolved_mode: str, project_payload: dict | None) -> str:
     if resolved_mode == "active_projects":
         return "active_projects"
@@ -365,6 +373,98 @@ def _matches_project_context(text: str | None, project_title: str | None) -> boo
     if not project_tokens:
         return False
     return all(token in normalized_text for token in project_tokens)
+
+
+def _project_alias_terms(project_payload: dict | None) -> list[str]:
+    if not project_payload:
+        return []
+    candidates: list[str] = []
+    project = project_payload.get("project") or {}
+    if project.get("title"):
+        candidates.append(str(project["title"]))
+    for alias in project_payload.get("aliases") or []:
+        value = str(alias.get("alias") or "").strip()
+        if value:
+            candidates.append(value)
+    for repo in project_payload.get("repos") or []:
+        for value in (
+            repo.get("name"),
+            repo.get("url"),
+            repo.get("local_path"),
+            f"{repo.get('owner')}/{repo.get('name')}" if repo.get("owner") and repo.get("name") else None,
+        ):
+            cleaned = str(value or "").strip()
+            if cleaned:
+                candidates.append(cleaned)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        lowered = candidate.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(candidate)
+    return deduped
+
+
+def _project_match_strength(text: str | None, project_payload: dict | None) -> float:
+    haystack = text or ""
+    if not haystack or not project_payload:
+        return 0.0
+    normalized_haystack = _normalize_project_text(haystack)
+    compact_haystack = normalized_haystack.replace(" ", "")
+    best = 0.0
+    for candidate in _project_alias_terms(project_payload):
+        normalized_candidate = _normalize_project_text(candidate)
+        if not normalized_candidate:
+            continue
+        compact_candidate = normalized_candidate.replace(" ", "")
+        if normalized_candidate in normalized_haystack or (compact_candidate and compact_candidate in compact_haystack):
+            best = max(best, 1.0 if candidate == (project_payload.get("project") or {}).get("title") else 0.92)
+            continue
+        tokens = [token for token in normalized_candidate.split() if len(token) >= 3]
+        if tokens and all(token in normalized_haystack for token in tokens):
+            best = max(best, 0.72)
+    return round(best, 3)
+
+
+def _workspace_signal_adjustment(text: str | None, project_payload: dict | None) -> float:
+    haystack = (text or "").lower()
+    if not haystack or not project_payload:
+        return 0.0
+    has_current_workspace = any(
+        hint in haystack for hint in CURRENT_WORKSPACE_HINTS
+    ) or any(str(repo.get("local_path") or "").lower() in haystack for repo in (project_payload.get("repos") or []) if repo.get("local_path"))
+    project_has_current_workspace = any(
+        any(hint in str(repo.get("local_path") or "").lower() for hint in CURRENT_WORKSPACE_HINTS)
+        for repo in (project_payload.get("repos") or [])
+    )
+    if has_current_workspace:
+        return 0.08
+    if any(hint in haystack for hint in LEGACY_WORKSPACE_HINTS) and project_has_current_workspace:
+        return -0.2
+    return 0.0
+
+
+def _source_merge_score(item: dict) -> float:
+    score = float(item.get("similarity", 0.0))
+    signal_kind = str(item.get("signal_kind") or "")
+    retrieval_kind = str(item.get("retrieval_kind") or "")
+    if signal_kind == "direct_human":
+        score += 0.08
+    elif signal_kind == "direct_agent":
+        score += 0.07
+    elif signal_kind == "derived_system":
+        score -= 0.1
+    if retrieval_kind == "project_event":
+        score += 0.08
+    elif retrieval_kind == "project_snapshot":
+        score += 0.05
+    elif retrieval_kind == "vector":
+        score -= 0.04
+    if item.get("event_time_utc"):
+        score += min(0.08, _recency_score(item.get("event_time_utc"), now=datetime.now(timezone.utc)) * 0.08)
+    return round(score, 3)
 
 
 def _directness_similarity_bonus(signal_kind: str) -> float:
@@ -713,6 +813,47 @@ async def collect_sources(
     return items
 
 
+def _curate_vector_sources(
+    sources: list[dict],
+    *,
+    project_payload: dict | None,
+    intent: str,
+    now: datetime,
+) -> list[dict]:
+    curated: list[dict] = []
+    project_focused = intent in PROJECT_FOCUSED_INTENTS
+    for item in sources:
+        candidate = dict(item)
+        combined_text = "\n".join(
+            part for part in (candidate.get("title"), candidate.get("content")) if part
+        )
+        project_match = _project_match_strength(combined_text, project_payload)
+        workspace_adjustment = _workspace_signal_adjustment(combined_text, project_payload)
+        adjusted = float(candidate.get("similarity", 0.0))
+        if project_focused:
+            adjusted += project_match * 0.16
+            adjusted += workspace_adjustment
+            if candidate.get("signal_kind") == "derived_system":
+                adjusted -= 0.12
+            if candidate.get("event_time_utc"):
+                adjusted += _recency_score(candidate.get("event_time_utc"), now=now) * 0.06
+            if project_payload and project_match <= 0 and candidate.get("signal_kind") == "derived_system":
+                adjusted -= 0.15
+            if _contains_legacy_workspace(combined_text) and project_payload and workspace_adjustment < 0:
+                adjusted -= 0.08
+        candidate["similarity"] = round(max(0.0, min(0.99, adjusted)), 3)
+        candidate["metadata"] = {
+            **dict(candidate.get("metadata") or {}),
+            "project_match": project_match,
+            "workspace_adjustment": round(workspace_adjustment, 3),
+        }
+        if project_focused and candidate["similarity"] < 0.34:
+            continue
+        curated.append(candidate)
+    curated.sort(key=lambda item: (_source_merge_score(item), item.get("event_time_utc") or ""), reverse=True)
+    return curated[:8]
+
+
 async def _collect_exact_sources(
     session: AsyncSession,
     question: str,
@@ -725,8 +866,9 @@ async def _collect_exact_sources(
     try:
         phrases = candidate_lookup_phrases(question)
         project_title = (project_payload or {}).get("project", {}).get("title")
-        if project_title and project_title not in phrases:
-            phrases.append(project_title)
+        for candidate in _project_alias_terms(project_payload):
+            if candidate and candidate not in phrases:
+                phrases.append(candidate)
 
         exact_sources: list[dict] = []
         seen: set[str] = set()
@@ -744,19 +886,17 @@ async def _collect_exact_sources(
             )
             matched_count = max(1, len(hit.get("matched_phrases") or []))
             content = f"{artifact.summary or ''}\n{artifact.raw_text or ''}"
-            if strict_project_match and project_title and not _matches_project_context(content, project_title):
+            project_match = _project_match_strength(content, project_payload)
+            if strict_project_match and project_payload and project_match <= 0:
                 continue
-            alignment = _content_alignment(
-                content,
-                project_title,
-            )
             similarity = min(
                 0.99,
                 0.68
                 + matched_count * 0.08
-                + alignment * 0.12
+                + project_match * 0.16
                 + _recency_score(artifact.created_at, now=now) * 0.1
                 + _directness_similarity_bonus(signal_kind),
+                + _workspace_signal_adjustment(content, project_payload),
             )
             exact_sources.append(
                 _build_source_item(
@@ -770,7 +910,10 @@ async def _collect_exact_sources(
                     source_name=getattr(artifact, "source", "artifact"),
                     event_time=getattr(artifact, "created_at", None),
                     matched_phrases=hit.get("matched_phrases"),
-                    metadata={"capture_intent": hit.get("capture_intent")},
+                    metadata={
+                        "capture_intent": hit.get("capture_intent"),
+                        "project_match": project_match,
+                    },
                 )
             )
 
@@ -783,10 +926,17 @@ async def _collect_exact_sources(
             seen.add(source_id)
             matched_count = max(1, len(hit.get("matched_phrases") or []))
             note_text = f"{note.title}\n{note.content or ''}"
-            if strict_project_match and project_title and not _matches_project_context(note_text, project_title):
+            project_match = _project_match_strength(note_text, project_payload)
+            if strict_project_match and project_payload and project_match <= 0:
                 continue
-            alignment = _content_alignment(note_text, project_title)
-            similarity = min(0.96, 0.66 + matched_count * 0.08 + alignment * 0.14 + _recency_score(note.updated_at, now=now) * 0.12)
+            similarity = min(
+                0.96,
+                0.66
+                + matched_count * 0.08
+                + project_match * 0.16
+                + _recency_score(note.updated_at, now=now) * 0.12
+                + _workspace_signal_adjustment(note_text, project_payload),
+            )
             exact_sources.append(
                 _build_source_item(
                     source_id=source_id,
@@ -799,6 +949,7 @@ async def _collect_exact_sources(
                     source_name="note",
                     event_time=getattr(note, "updated_at", None) or getattr(note, "created_at", None),
                     matched_phrases=hit.get("matched_phrases"),
+                    metadata={"project_match": project_match},
                 )
             )
 
@@ -809,9 +960,16 @@ async def _collect_exact_sources(
                 continue
             seen.add(source_id)
             content = "\n".join(part for part in (source_item.title, source_item.summary, source_item.external_url) if part)
-            if strict_project_match and project_title and not _matches_project_context(content, project_title):
+            project_match = _project_match_strength(content, project_payload)
+            if strict_project_match and project_payload and project_match <= 0:
                 continue
-            similarity = min(0.92, 0.64 + _content_alignment(content, project_title) * 0.14 + _recency_score(source_item.happened_at or source_item.created_at, now=now) * 0.12)
+            similarity = min(
+                0.92,
+                0.64
+                + project_match * 0.16
+                + _recency_score(source_item.happened_at or source_item.created_at, now=now) * 0.12
+                + _workspace_signal_adjustment(content, project_payload),
+            )
             exact_sources.append(
                 _build_source_item(
                     source_id=source_id,
@@ -823,6 +981,7 @@ async def _collect_exact_sources(
                     signal_kind="direct_sync",
                     source_name="source_item",
                     event_time=source_item.happened_at or source_item.created_at,
+                    metadata={"project_match": project_match},
                 )
             )
 
@@ -837,6 +996,15 @@ def _build_snapshot_source(project_payload: dict, *, now: datetime) -> dict | No
     snapshot = project_payload.get("snapshot") or {}
     if not project:
         return None
+    repos = list(project_payload.get("repos") or [])
+    preferred_workspace = next(
+        (
+            repo.get("local_path")
+            for repo in repos
+            if repo.get("local_path") and not _contains_legacy_workspace(repo.get("local_path"))
+        ),
+        None,
+    ) or next((repo.get("local_path") for repo in repos if repo.get("local_path")), None)
     content = "\n".join(
         [
             f"Where it stands: {snapshot.get('implemented') or project.get('content') or 'unknown'}",
@@ -844,6 +1012,7 @@ def _build_snapshot_source(project_payload: dict, *, now: datetime) -> dict | No
             f"What is left: {snapshot.get('remaining') or 'unknown'}",
             f"Blockers: {', '.join(snapshot.get('blockers') or []) or 'none'}",
             f"Holes: {', '.join(snapshot.get('holes') or []) or 'none'}",
+            f"Preferred workspace: {preferred_workspace or 'unknown'}",
         ]
     )
     last_signal = snapshot.get("last_signal_at")
@@ -858,7 +1027,7 @@ def _build_snapshot_source(project_payload: dict, *, now: datetime) -> dict | No
         signal_kind="derived_system",
         source_name="project_snapshot",
         event_time=datetime.fromisoformat(last_signal) if last_signal else None,
-        metadata={"project_id": project.get("id")},
+        metadata={"project_id": project.get("id"), "preferred_workspace": preferred_workspace},
     )
 
 
@@ -954,7 +1123,7 @@ def _merge_sources(
     merged.sort(
         key=lambda item: (
             -int(item.get("_group_priority", 99)),
-            item["similarity"],
+            _source_merge_score(item),
             1 if item["signal_kind"] in {"direct_human", "direct_agent"} else 0,
             item.get("event_time_utc") or "",
         ),
@@ -1010,6 +1179,7 @@ def _build_evidence_quality(
     sources: list[dict],
     project_payload: dict | None,
     intent: str,
+    now: datetime,
 ) -> dict:
     if not sources and not project_payload:
         return {
@@ -1021,7 +1191,7 @@ def _build_evidence_quality(
             "contradiction_risk": 0.0,
         }
 
-    freshness = max((float(item.get("similarity", 0.0)) if item.get("event_time_utc") else 0.2 for item in sources), default=0.2)
+    freshness = max((_recency_score(item.get("event_time_utc"), now=now) for item in sources), default=0.2)
     directness_weights = {
         "direct_human": 1.0,
         "direct_agent": 0.95,
@@ -1034,10 +1204,7 @@ def _build_evidence_quality(
     if project_title and sources:
         project_alignment = max(
             0.35,
-            sum(
-                1.0 if project_title.lower() in (item["title"] + " " + item["content"]).lower() else 0.0
-                for item in sources[:5]
-            )
+            sum(_project_match_strength(item["title"] + " " + item["content"], project_payload) for item in sources[:5])
             / max(1, min(len(sources), 5)),
         )
     exactness = 1.0 if any(item["retrieval_kind"].startswith("exact_") for item in sources) else 0.0
@@ -1458,7 +1625,16 @@ async def query_brain(
                 _coerce_source_item(item, retrieval_kind="project_snapshot")
                 for item in _collect_project_sources(project_payload, now=current_time, limit=8)
             ]
-        vector_sources = [_coerce_source_item(item, retrieval_kind="vector") for item in await collect_sources(session, question, category=category, limit=8)]
+        vector_sources = [
+            _coerce_source_item(item, retrieval_kind="vector")
+            for item in await collect_sources(session, question, category=category, limit=8)
+        ]
+        vector_sources = _curate_vector_sources(
+            vector_sources,
+            project_payload=project_payload,
+            intent=resolved_intent,
+            now=current_time,
+        )
         selected_sources = _merge_sources(
             intent=resolved_intent,
             exact_sources=exact_sources,
@@ -1470,6 +1646,7 @@ async def query_brain(
             sources=selected_sources,
             project_payload=project_payload,
             intent=resolved_intent,
+            now=current_time,
         )
         used_exact_match = any(item["retrieval_kind"].startswith("exact_") for item in selected_sources)
         used_project_snapshot = any(

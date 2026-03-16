@@ -58,6 +58,18 @@ def test_matches_project_context_handles_compact_and_spaced_titles() -> None:
     assert not query_service._matches_project_context("barbershop project sync", "duSraBheja")
 
 
+def test_project_match_strength_uses_aliases_and_repo_paths() -> None:
+    payload = {
+        "project": {"title": "duSraBheja"},
+        "aliases": [{"alias": "brain-bot"}],
+        "repos": [{"name": "duSraBheja", "local_path": "/Users/moenuddeenahmadshaik/code/duSraBheja"}],
+    }
+
+    assert query_service._project_match_strength("brain-bot retrieval fixes", payload) >= 0.9
+    assert query_service._project_match_strength("/Users/moenuddeenahmadshaik/code/duSraBheja snapshot", payload) >= 0.9
+    assert query_service._project_match_strength("barbershop snapshot", payload) == 0.0
+
+
 def test_merge_sources_prefers_project_group_for_project_queries() -> None:
     merged = query_service._merge_sources(
         intent="project_status",
@@ -88,6 +100,45 @@ def test_merge_sources_prefers_project_group_for_project_queries() -> None:
     )
 
     assert merged[0]["id"] == "project-1"
+
+
+def test_curate_vector_sources_penalizes_legacy_workspace_for_project_queries() -> None:
+    payload = {
+        "project": {"title": "duSraBheja"},
+        "aliases": [],
+        "repos": [{"name": "duSraBheja", "local_path": "/Users/moenuddeenahmadshaik/code/duSraBheja"}],
+    }
+    now = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
+    curated = query_service._curate_vector_sources(
+        [
+            {
+                "id": "legacy",
+                "title": "Desktop snapshot",
+                "content": "/Users/moenuddeenahmadshaik/Desktop/duSraBheja snapshot",
+                "similarity": 0.72,
+                "signal_kind": "derived_system",
+                "event_time_utc": "2026-03-10T12:00:00+00:00",
+                "retrieval_kind": "vector",
+                "metadata": {},
+            },
+            {
+                "id": "current",
+                "title": "Current repo snapshot",
+                "content": "/Users/moenuddeenahmadshaik/code/duSraBheja local snapshot",
+                "similarity": 0.68,
+                "signal_kind": "direct_sync",
+                "event_time_utc": "2026-03-16T10:00:00+00:00",
+                "retrieval_kind": "vector",
+                "metadata": {},
+            },
+        ],
+        project_payload=payload,
+        intent="project_status",
+        now=now,
+    )
+
+    assert curated[0]["id"] == "current"
+    assert curated[0]["similarity"] > curated[1]["similarity"]
 
 
 def test_parse_since_boundary_supports_yesterday_and_dates() -> None:

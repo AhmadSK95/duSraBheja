@@ -25,7 +25,8 @@ def test_interest_and_media_facets_are_derived_from_chrome_payloads() -> None:
         },
     )
     interest_facets, media_facets = brain_atlas._interest_and_media_facets(
-        [{"source_item": source_item, "sync_source": None, "project_note": None}]
+        [{"source_item": source_item, "sync_source": None, "project_note": None}],
+        now=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
     )
 
     assert interest_facets[0].facet_type == "interests"
@@ -75,3 +76,44 @@ def test_build_links_uses_story_connections_and_story_overlap() -> None:
     links = brain_atlas._build_links([project, story], [connection])
 
     assert any(link.relation == "co_signal" for link in links)
+
+
+def test_story_river_filters_noisy_derived_entries() -> None:
+    board = SimpleNamespace(
+        id="board-1",
+        board_type="daily",
+        payload={"story": "Yesterday was light but intentional."},
+        updated_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+        coverage_end=datetime(2026, 3, 15, 3, 59, tzinfo=timezone.utc),
+    )
+    noisy = SimpleNamespace(
+        id="event-1",
+        entry_type="chrome_project_signal",
+        actor_type="system",
+        actor_name="collector",
+        title="Chrome project signal: barbershop",
+        summary="barbershop surfaced six times.",
+        project_note_id=None,
+        happened_at=datetime(2026, 3, 15, 14, 0, tzinfo=timezone.utc),
+    )
+    curated = SimpleNamespace(
+        id="event-2",
+        entry_type="progress_update",
+        actor_type="agent",
+        actor_name="codex",
+        title="Atlas weighting pass",
+        summary="Tightened current-headspace weighting.",
+        project_note_id="project-1",
+        happened_at=datetime(2026, 3, 15, 15, 0, tzinfo=timezone.utc),
+    )
+
+    events = brain_atlas._story_river_events(
+        [board],
+        [noisy, curated],
+        now=datetime(2026, 3, 15, 16, 0, tzinfo=timezone.utc),
+    )
+
+    titles = [event.title for event in events]
+    assert "Atlas weighting pass" in titles
+    assert "Chrome project signal: barbershop" not in titles

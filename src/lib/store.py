@@ -821,6 +821,19 @@ async def list_recent_sync_runs(session: AsyncSession, *, limit: int = 25) -> li
     return list(result.scalars().all())
 
 
+async def list_recent_sync_runs_with_sources(session: AsyncSession, *, limit: int = 25) -> list[dict]:
+    result = await session.execute(
+        select(SyncRun, SyncSource)
+        .join(SyncSource, SyncRun.sync_source_id == SyncSource.id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(limit)
+    )
+    rows: list[dict] = []
+    for run, source in result.all():
+        rows.append({"run": run, "sync_source": source})
+    return rows
+
+
 async def list_artifact_interpretations(
     session: AsyncSession,
     *,

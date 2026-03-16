@@ -74,6 +74,24 @@ KEYWORD_STOPWORDS = {
     "chrome",
 }
 
+CURRENT_HEADSPACE_WINDOW_DAYS = 45
+CURRENT_ARTIFACT_WINDOW_DAYS = 30
+CURRENT_STORY_WINDOW_DAYS = 30
+LEGACY_WORKSPACE_HINTS = ("/desktop/", "\\desktop\\")
+CURRENT_WORKSPACE_HINTS = ("/code/", "/opt/dusrabheja", "/users/moenuddeenahmadshaik/code/")
+CURATED_STORY_ENTRY_TYPES = {"progress_update", "session_closeout", "decision", "conversation_session"}
+NOISY_STORY_ENTRY_TYPES = {
+    "chrome_project_signal",
+    "chrome_period_summary",
+    "chrome_profile_signal",
+    "chrome_daily_signals",
+    "knowledge_refresh",
+    "voice_refresh",
+    "blind_spot",
+    "synapse",
+    "research_thread",
+}
+
 
 @dataclass(slots=True)
 class BrainFacet:
@@ -159,8 +177,11 @@ class FacetSnapshot:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "as_of_local": self.generated_at_local,
             "generated_at_local": self.generated_at_local,
             "display_timezone": self.display_timezone,
+            "facet_count": len(self.facets),
+            "link_count": len(self.links),
             "facets": [facet.as_dict() for facet in self.facets],
             "links": [link.as_dict() for link in self.links],
             "story_river": [event.as_dict() for event in self.story_river],
@@ -206,6 +227,49 @@ def _recency_score(value: datetime | str | None, *, now: datetime | None = None)
     if age <= timedelta(days=30):
         return 0.25
     return 0.1
+
+
+def _is_recent(value: datetime | str | None, *, now: datetime, days: int) -> bool:
+    parsed = coerce_datetime(value)
+    if parsed is None:
+        return False
+    return parsed.astimezone(timezone.utc) >= now - timedelta(days=days)
+
+
+def _contains_legacy_workspace(value: str | None) -> bool:
+    lowered = (value or "").lower()
+    return any(hint in lowered for hint in LEGACY_WORKSPACE_HINTS)
+
+
+def _contains_current_workspace(value: str | None) -> bool:
+    lowered = (value or "").lower()
+    return any(hint in lowered for hint in CURRENT_WORKSPACE_HINTS)
+
+
+def _preferred_workspace_path(repos: list[Any]) -> str | None:
+    preferred_paths = [str(getattr(repo, "local_path", "") or "") for repo in repos if getattr(repo, "local_path", None)]
+    if not preferred_paths:
+        return None
+    non_legacy = [path for path in preferred_paths if not _contains_legacy_workspace(path)]
+    if non_legacy:
+        return non_legacy[0]
+    return preferred_paths[0]
+
+
+def _current_headspace_bonus(*, summary: str | None, title: str | None, happened_at: datetime | str | None, signal_kind: str) -> float:
+    bonus = 0.0
+    if signal_kind in {"direct_human", "direct_agent"}:
+        bonus += 0.1
+    elif signal_kind == "direct_sync":
+        bonus += 0.04
+    else:
+        bonus -= 0.08
+    if _contains_current_workspace(summary) or _contains_current_workspace(title):
+        bonus += 0.08
+    if _contains_legacy_workspace(summary) or _contains_legacy_workspace(title):
+        bonus -= 0.14
+    bonus += _recency_score(happened_at) * 0.08
+    return bonus
 
 
 def _utc_iso(value: datetime | str | None) -> str | None:
@@ -262,9 +326,30 @@ def _make_evidence(
     }
 
 
-def _project_facet(project, snapshot) -> BrainFacet:
+def _project_facet(project, snapshot, *, story: dict | None = None, now: datetime | None = None) -> BrainFacet:
+    current_time = now or _utcnow()
+    journal_entries = list((story or {}).get("journal_entries") or [])
+    curated_entries = [
+        entry
+        for entry in journal_entries
+        if (getattr(entry, "entry_type", "") or "") in CURATED_STORY_ENTRY_TYPES
+        and _is_recent(getattr(entry, "happened_at", None), now=current_time, days=CURRENT_STORY_WINDOW_DAYS)
+    ]
+    latest_curated = curated_entries[0] if curated_entries else None
+    repos = list((story or {}).get("repos") or [])
+    workspace_path = _preferred_workspace_path(repos)
+    latest_summary = _truncate(
+        getattr(latest_curated, "summary", None)
+        or getattr(latest_curated, "outcome", None)
+        or getattr(latest_curated, "title", None),
+        limit=240,
+    )
     summary = _truncate(
-        snapshot.implemented or snapshot.what_changed or project.content or "Project state is still forming.",
+        latest_summary
+        or snapshot.implemented
+        or snapshot.what_changed
+        or project.content
+        or "Project state is still forming.",
         limit=240,
     )
     open_loops = _safe_list(
@@ -272,6 +357,18 @@ def _project_facet(project, snapshot) -> BrainFacet:
         limit=5,
     )
     evidence = [
+        _make_evidence(
+            title="Latest curated signal",
+            summary=latest_summary,
+            signal_kind=signal_kind_for_event(
+                entry_type=getattr(latest_curated, "entry_type", None),
+                actor_type=getattr(latest_curated, "actor_type", None),
+            )
+            if latest_curated
+            else "derived_system",
+            happened_at=getattr(latest_curated, "happened_at", None),
+            metadata={"entry_type": getattr(latest_curated, "entry_type", None)},
+        ),
         _make_evidence(
             title="Where it stands",
             summary=snapshot.implemented or project.content,
@@ -286,18 +383,55 @@ def _project_facet(project, snapshot) -> BrainFacet:
             happened_at=snapshot.last_signal_at or snapshot.updated_at,
         ),
     ]
+    if workspace_path:
+        evidence.append(
+            _make_evidence(
+                title="Current workspace",
+                summary=workspace_path,
+                signal_kind="direct_sync",
+                happened_at=snapshot.last_signal_at or snapshot.updated_at,
+            )
+        )
+    attention_score = round(
+        min(
+            1.0,
+            float(snapshot.active_score or 0.0)
+            + _current_headspace_bonus(
+                summary=summary,
+                title=project.title,
+                happened_at=getattr(latest_curated, "happened_at", None) or snapshot.last_signal_at or snapshot.updated_at,
+                signal_kind=signal_kind_for_event(
+                    entry_type=getattr(latest_curated, "entry_type", None),
+                    actor_type=getattr(latest_curated, "actor_type", None),
+                )
+                if latest_curated
+                else ("direct_agent" if snapshot.manual_state == "pinned" else "derived_system"),
+            ),
+        ),
+        3,
+    )
     return BrainFacet(
         id=f"facet:project:{project.id}",
         facet_type="projects",
         title=project.title,
         summary=summary,
-        attention_score=round(float(snapshot.active_score or 0.0), 3),
-        recency_score=round(_recency_score(snapshot.last_signal_at or snapshot.updated_at), 3),
-        signal_kind="direct_agent" if snapshot.manual_state == "pinned" else "derived_system",
+        attention_score=attention_score,
+        recency_score=round(
+            _recency_score(getattr(latest_curated, "happened_at", None) or snapshot.last_signal_at or snapshot.updated_at, now=current_time),
+            3,
+        ),
+        signal_kind=(
+            signal_kind_for_event(
+                entry_type=getattr(latest_curated, "entry_type", None),
+                actor_type=getattr(latest_curated, "actor_type", None),
+            )
+            if latest_curated
+            else ("direct_agent" if snapshot.manual_state == "pinned" else "derived_system")
+        ),
         created_at_utc=_utc_iso(project.created_at),
-        happened_at_utc=_utc_iso(snapshot.last_signal_at or snapshot.updated_at),
+        happened_at_utc=_utc_iso(getattr(latest_curated, "happened_at", None) or snapshot.last_signal_at or snapshot.updated_at),
         created_at_local=format_display_datetime(project.created_at),
-        happened_at_local=format_display_datetime(snapshot.last_signal_at or snapshot.updated_at),
+        happened_at_local=format_display_datetime(getattr(latest_curated, "happened_at", None) or snapshot.last_signal_at or snapshot.updated_at),
         display_timezone=display_timezone().key,
         open_loops=open_loops,
         evidence=evidence,
@@ -309,6 +443,8 @@ def _project_facet(project, snapshot) -> BrainFacet:
             "what_changed": snapshot.what_changed,
             "why_active": snapshot.why_active,
             "why_not_active": snapshot.why_not_active,
+            "workspace_path": workspace_path,
+            "latest_curated_entry_type": getattr(latest_curated, "entry_type", None),
         },
     )
 
@@ -456,19 +592,23 @@ def _story_facet_from_entry(entry) -> BrainFacet | None:
     )
 
 
-def _system_facets(sync_runs: list, reviews: list, traces: list, eval_runs: list) -> list[BrainFacet]:
-    by_source: dict[str, list] = defaultdict(list)
-    for run in sync_runs:
-        by_source[str(run.sync_source_id)].append(run)
+def _system_facets(sync_runs: list[dict], reviews: list, traces: list, eval_runs: list) -> list[BrainFacet]:
+    by_source: dict[str, list[dict]] = defaultdict(list)
+    for row in sync_runs:
+        run = row["run"]
+        source = row["sync_source"]
+        by_source[str(source.id)].append({"run": run, "sync_source": source})
 
     facets: list[BrainFacet] = []
-    for source_id, runs in list(by_source.items())[:6]:
-        latest = sorted(runs, key=lambda item: item.started_at, reverse=True)[0]
+    for source_id, rows in list(by_source.items())[:6]:
+        latest_row = sorted(rows, key=lambda item: item["run"].started_at, reverse=True)[0]
+        latest = latest_row["run"]
+        source = latest_row["sync_source"]
         facets.append(
             BrainFacet(
                 id=f"facet:system:sync:{source_id}",
                 facet_type="systems",
-                title=f"Sync {source_id[:8]}",
+                title=f"{source.name}",
                 summary=_truncate(
                     f"Latest {latest.mode} run finished with status={latest.status}, seen={latest.items_seen}, imported={latest.items_imported}.",
                     limit=220,
@@ -489,7 +629,7 @@ def _system_facets(sync_runs: list, reviews: list, traces: list, eval_runs: list
                         happened_at=latest.started_at,
                     )
                 ],
-                metadata={"status": latest.status, "mode": latest.mode},
+                metadata={"status": latest.status, "mode": latest.mode, "source_type": source.source_type},
             )
         )
 
@@ -591,11 +731,13 @@ def _system_facets(sync_runs: list, reviews: list, traces: list, eval_runs: list
     return facets
 
 
-def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet], list[BrainFacet]]:
-    interest_counts: Counter[str] = Counter()
+def _interest_and_media_facets(chrome_rows: list[dict], *, now: datetime) -> tuple[list[BrainFacet], list[BrainFacet]]:
+    interest_counts: dict[str, float] = defaultdict(float)
     interest_refs: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    media_counts: Counter[str] = Counter()
+    interest_latest: dict[str, datetime] = {}
+    media_counts: dict[str, float] = defaultdict(float)
     media_refs: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    media_latest: dict[str, datetime] = {}
 
     for row in chrome_rows:
         source_item = row["source_item"]
@@ -603,11 +745,18 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
         metadata = dict(payload.get("metadata") or {})
         title = source_item.title
         signal_time = source_item.happened_at or source_item.created_at
+        recency_weight = _recency_score(signal_time, now=now)
         for theme in metadata.get("keyword_themes") or []:
             term = str(theme.get("term") or "").strip()
             if not term or term.lower() in KEYWORD_STOPWORDS:
                 continue
-            interest_counts[term] += int(theme.get("count") or 1)
+            weighted_count = max(0.4, float(theme.get("count") or 1) * recency_weight)
+            interest_counts[term] += weighted_count
+            if signal_time and (
+                term not in interest_latest
+                or coerce_datetime(signal_time) > interest_latest[term]
+            ):
+                interest_latest[term] = coerce_datetime(signal_time) or now
             interest_refs[term].append(
                 _make_evidence(
                     title=title,
@@ -623,7 +772,13 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
                 label = str(example.get("label") or example.get("title") or "").strip()
                 if not label:
                     continue
-                media_counts[label] += int(example.get("count") or 1)
+                weighted_count = max(0.4, float(example.get("count") or 1) * recency_weight)
+                media_counts[label] += weighted_count
+                if signal_time and (
+                    label not in media_latest
+                    or coerce_datetime(signal_time) > media_latest[label]
+                ):
+                    media_latest[label] = coerce_datetime(signal_time) or now
                 media_refs[label].append(
                     _make_evidence(
                         title=label,
@@ -639,9 +794,12 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
             id=f"facet:interest:{_normalize_key(term)}",
             facet_type="interests",
             title=term,
-            summary=f"Recurring interest signal across Chrome activity with {count} weighted mentions.",
-            attention_score=min(0.95, 0.25 + count / 8),
-            recency_score=0.55,
+            summary=f"Recurring interest signal across recent Chrome activity with {count:.1f} weighted mentions.",
+            attention_score=round(
+                min(0.95, 0.22 + count / 8 + _recency_score(interest_latest.get(term), now=now) * 0.18),
+                3,
+            ),
+            recency_score=round(_recency_score(interest_latest.get(term), now=now), 3),
             signal_kind="direct_sync",
             created_at_utc=None,
             happened_at_utc=interest_refs[term][0]["event_time_utc"] if interest_refs[term] else None,
@@ -649,9 +807,10 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
             happened_at_local=interest_refs[term][0]["happened_at_local"] if interest_refs[term] else None,
             display_timezone=display_timezone().key,
             evidence=interest_refs[term][:3],
-            metadata={"count": count},
+            metadata={"count": round(count, 2), "latest_at": _utc_iso(interest_latest.get(term))},
         )
-        for term, count in interest_counts.most_common(8)
+        for term, count in sorted(interest_counts.items(), key=lambda item: item[1], reverse=True)
+        if count >= 1.2
     ]
 
     media_facets = [
@@ -659,9 +818,12 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
             id=f"facet:media:{_normalize_key(label)}",
             facet_type="media",
             title=label,
-            summary=f"Media pattern surfacing repeatedly in Chrome activity with {count} weighted mentions.",
-            attention_score=min(0.9, 0.24 + count / 8),
-            recency_score=0.52,
+            summary=f"Media pattern surfacing repeatedly in recent Chrome activity with {count:.1f} weighted mentions.",
+            attention_score=round(
+                min(0.92, 0.22 + count / 8 + _recency_score(media_latest.get(label), now=now) * 0.18),
+                3,
+            ),
+            recency_score=round(_recency_score(media_latest.get(label), now=now), 3),
             signal_kind="direct_sync",
             created_at_utc=None,
             happened_at_utc=media_refs[label][0]["event_time_utc"] if media_refs[label] else None,
@@ -669,14 +831,36 @@ def _interest_and_media_facets(chrome_rows: list[dict]) -> tuple[list[BrainFacet
             happened_at_local=media_refs[label][0]["happened_at_local"] if media_refs[label] else None,
             display_timezone=display_timezone().key,
             evidence=media_refs[label][:3],
-            metadata={"count": count},
+            metadata={"count": round(count, 2), "latest_at": _utc_iso(media_latest.get(label))},
         )
-        for label, count in media_counts.most_common(8)
+        for label, count in sorted(media_counts.items(), key=lambda item: item[1], reverse=True)
+        if count >= 1.2
     ]
-    return interest_facets, media_facets
+    return interest_facets[:8], media_facets[:8]
 
 
-def _story_river_events(boards: list, recent_activity: list) -> list[StoryRiverEvent]:
+def _story_river_entry_score(entry, *, now: datetime) -> float:
+    entry_type = (getattr(entry, "entry_type", "") or "").lower()
+    if entry_type in NOISY_STORY_ENTRY_TYPES or entry_type in DERIVED_ENTRY_TYPES:
+        return 0.0
+    base = {
+        "progress_update": 1.0,
+        "session_closeout": 0.96,
+        "decision": 0.88,
+        "conversation_session": 0.7,
+    }.get(entry_type, 0.34)
+    signal_kind = signal_kind_for_event(entry_type=getattr(entry, "entry_type", None), actor_type=getattr(entry, "actor_type", None))
+    if signal_kind in {"direct_human", "direct_agent"}:
+        base += 0.08
+    elif signal_kind == "derived_system":
+        base -= 0.2
+    if _contains_legacy_workspace(getattr(entry, "summary", None)) and not _is_recent(getattr(entry, "happened_at", None), now=now, days=7):
+        base -= 0.12
+    base += _recency_score(getattr(entry, "happened_at", None), now=now) * 0.18
+    return round(base, 3)
+
+
+def _story_river_events(boards: list, recent_activity: list, *, now: datetime) -> list[StoryRiverEvent]:
     events: list[StoryRiverEvent] = []
     for board in boards[:10]:
         payload = dict(board.payload or {})
@@ -693,10 +877,16 @@ def _story_river_events(boards: list, recent_activity: list) -> list[StoryRiverE
                 metadata={
                     "coverage_label": payload.get("coverage_label"),
                     "board_id": str(board.id),
+                    "score": round(0.82 + _recency_score(board.coverage_end, now=now) * 0.12, 3),
                 },
             )
         )
-    for entry in recent_activity[:20]:
+    curated_entries = [
+        entry
+        for entry in recent_activity
+        if _story_river_entry_score(entry, now=now) >= 0.48
+    ]
+    for entry in curated_entries[:20]:
         signal_kind = signal_kind_for_event(entry_type=entry.entry_type, actor_type=entry.actor_type)
         events.append(
             StoryRiverEvent(
@@ -712,10 +902,11 @@ def _story_river_events(boards: list, recent_activity: list) -> list[StoryRiverE
                     "entry_type": entry.entry_type,
                     "actor_name": entry.actor_name,
                     "project_note_id": str(entry.project_note_id) if entry.project_note_id else None,
+                    "score": _story_river_entry_score(entry, now=now),
                 },
             )
         )
-    events.sort(key=lambda item: item.happened_at_local or "", reverse=True)
+    events.sort(key=lambda item: item.happened_at_utc or "", reverse=True)
     return events[:24]
 
 
@@ -1044,6 +1235,7 @@ async def build_brain_atlas_snapshot(
     *,
     include_web: bool = False,
 ) -> FacetSnapshot:
+    now = _utcnow()
     project_snapshots = await store.list_project_state_snapshots(session, limit=20)
     notes = await store.list_notes(session, limit=140)
     artifacts = await store.list_artifact_interpretations(session, limit=140)
@@ -1051,7 +1243,7 @@ async def build_brain_atlas_snapshot(
     boards = await store.list_boards(session, limit=18)
     chrome_rows = await store.list_source_items_with_sources(session, source_type="chrome_activity", limit=80)
     story_connections = await store.list_story_connections(session, limit=60)
-    sync_runs = await store.list_recent_sync_runs(session, limit=18)
+    sync_runs = await store.list_recent_sync_runs_with_sources(session, limit=18)
     reviews = await store.get_pending_reviews(session)
     traces = await store.list_retrieval_traces(session, limit=18)
     eval_runs = await store.list_eval_runs(session, limit=8)
@@ -1062,21 +1254,40 @@ async def build_brain_atlas_snapshot(
         project = await store.get_note(session, snapshot.project_note_id)
         if not project:
             continue
-        project_facets.append(_project_facet(project, snapshot))
+        story = await store.get_project_story(session, project.id)
+        project_facets.append(_project_facet(project, snapshot, story=story, now=now))
 
     note_facets: list[BrainFacet] = []
     for note in notes:
         if note.category == "project":
             continue
+        if note.category != "people" and not _is_recent(note.updated_at or note.created_at, now=now, days=CURRENT_HEADSPACE_WINDOW_DAYS):
+            continue
         if note.category in {"people", "idea", "note", "resource"}:
             note_facets.append(_note_facet(note))
 
-    artifact_facets = [facet for facet in (_artifact_facet(item) for item in artifacts[:60]) if facet]
-    interest_facets, media_facets = _interest_and_media_facets(chrome_rows)
-    story_facets = [_story_facet_from_board(board) for board in boards[:6]]
+    artifact_facets = [
+        facet
+        for facet in (
+            _artifact_facet(item)
+            for item in artifacts[:80]
+            if _is_recent(item["artifact"].created_at, now=now, days=CURRENT_ARTIFACT_WINDOW_DAYS)
+        )
+        if facet
+    ]
+    interest_facets, media_facets = _interest_and_media_facets(chrome_rows, now=now)
+    story_facets = [
+        _story_facet_from_board(board)
+        for board in boards[:6]
+        if _is_recent(board.coverage_end or board.updated_at, now=now, days=CURRENT_STORY_WINDOW_DAYS)
+    ]
     story_facets.extend(
         facet
-        for facet in (_story_facet_from_entry(entry) for entry in recent_activity[:24])
+        for facet in (
+            _story_facet_from_entry(entry)
+            for entry in recent_activity[:40]
+            if _story_river_entry_score(entry, now=now) >= 0.58
+        )
         if facet
     )
     system_facets = _system_facets(sync_runs, reviews, traces, eval_runs)
@@ -1092,11 +1303,25 @@ async def build_brain_atlas_snapshot(
         *system_facets[:8],
         *artifact_facets[:10],
     ]
-    facets.sort(key=lambda facet: (facet.attention_score, facet.recency_score), reverse=True)
+    facets = [
+        facet
+        for facet in facets
+        if facet.facet_type in {"projects", "stories", "systems"}
+        or facet.recency_score >= 0.25
+        or facet.attention_score >= 0.52
+        or facet.signal_kind in {"direct_human", "direct_agent"}
+    ]
+    facets.sort(
+        key=lambda facet: (
+            facet.attention_score + facet.recency_score * 0.35 + (0.08 if facet.signal_kind in {"direct_human", "direct_agent"} else 0.0),
+            facet.recency_score,
+        ),
+        reverse=True,
+    )
     facets = facets[:54]
 
     links = _build_links(facets, story_connections)
-    story_river = _story_river_events(boards, recent_activity)
+    story_river = _story_river_events(boards, recent_activity, now=now)
     subconscious = await _subconscious_insights(
         session,
         project_facets=project_facets,
@@ -1117,19 +1342,21 @@ async def build_brain_atlas_snapshot(
         "recent_trace_failures": len([trace for trace in traces if trace.failure_stage]),
         "latest_syncs": [
             {
-                "source_id": str(run.sync_source_id),
-                "mode": run.mode,
-                "status": run.status,
-                "started_at_local": format_display_datetime(run.started_at),
-                "items_seen": run.items_seen,
-                "items_imported": run.items_imported,
+                "source_id": str(row["run"].sync_source_id),
+                "source_name": row["sync_source"].name,
+                "source_type": row["sync_source"].source_type,
+                "mode": row["run"].mode,
+                "status": row["run"].status,
+                "started_at_local": format_display_datetime(row["run"].started_at),
+                "items_seen": row["run"].items_seen,
+                "items_imported": row["run"].items_imported,
             }
-            for run in sync_runs[:6]
+            for row in sync_runs[:6]
         ],
     }
 
     return FacetSnapshot(
-        generated_at_local=format_display_datetime(_utcnow()),
+        generated_at_local=format_display_datetime(now),
         display_timezone=display_timezone().key,
         facets=facets,
         links=links,

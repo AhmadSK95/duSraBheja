@@ -363,7 +363,7 @@ def _render_health_page(snapshot: dict, *, token: str) -> HTMLResponse:
       <section class="atlas-card atlas-card--span-7">
         <h2>Sync Freshness</h2>
         <div class="atlas-list">
-          {''.join(_list_item(item.get('source_id') or 'sync', f"mode={item.get('mode')} | status={item.get('status')} | seen={item.get('items_seen')} | imported={item.get('items_imported')}", meta=[item.get('started_at_local') or '']) for item in latest_syncs)}
+          {''.join(_list_item(item.get('source_name') or item.get('source_id') or 'sync', f"mode={item.get('mode')} | status={item.get('status')} | seen={item.get('items_seen')} | imported={item.get('items_imported')}", meta=[item.get('source_type') or '', item.get('started_at_local') or '']) for item in latest_syncs)}
         </div>
       </section>
       <section class="atlas-card atlas-card--span-5">
@@ -770,17 +770,17 @@ async def dashboard_eval_detail(eval_run_id: uuid.UUID, token: str = Query(defau
 @router.get("/dashboard/sync-health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_sync_health(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
-        runs = await store.list_recent_sync_runs(session, limit=50)
+        runs = await store.list_recent_sync_runs_with_sources(session, limit=50)
     rows = "".join(
         "<tr>"
-        f"<td>{run.sync_source_id}</td>"
-        f"<td>{html.escape(run.mode)}</td>"
-        f"<td>{html.escape(run.status)}</td>"
-        f"<td>{run.items_seen}</td>"
-        f"<td>{run.items_imported}</td>"
-        f"<td>{_fmt_dt(run.started_at)}</td>"
+        f"<td>{html.escape(row['sync_source'].name)}</td>"
+        f"<td>{html.escape(row['run'].mode)}</td>"
+        f"<td>{html.escape(row['run'].status)}</td>"
+        f"<td>{row['run'].items_seen}</td>"
+        f"<td>{row['run'].items_imported}</td>"
+        f"<td>{_fmt_dt(row['run'].started_at)}</td>"
         "</tr>"
-        for run in runs
+        for row in runs
     )
     body = (
         "<h1>Sync Health</h1>"
@@ -1153,19 +1153,21 @@ async def run_eval_route(payload: EvalRunRequest) -> dict:
 @api_router.get("/sync-health", dependencies=[Depends(require_api_token)])
 async def sync_health_route() -> list[dict]:
     async with async_session() as session:
-        runs = await store.list_recent_sync_runs(session, limit=50)
+        runs = await store.list_recent_sync_runs_with_sources(session, limit=50)
     return [
         {
-            "sync_run_id": str(run.id),
-            "sync_source_id": str(run.sync_source_id),
-            "mode": run.mode,
-            "status": run.status,
-            "items_seen": run.items_seen,
-            "items_imported": run.items_imported,
-            "started_at": run.started_at.isoformat(),
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "started_at_local": _fmt_dt(run.started_at),
-            "finished_at_local": _fmt_dt(run.finished_at) if run.finished_at else None,
+            "sync_run_id": str(row["run"].id),
+            "sync_source_id": str(row["run"].sync_source_id),
+            "sync_source_name": row["sync_source"].name,
+            "sync_source_type": row["sync_source"].source_type,
+            "mode": row["run"].mode,
+            "status": row["run"].status,
+            "items_seen": row["run"].items_seen,
+            "items_imported": row["run"].items_imported,
+            "started_at": row["run"].started_at.isoformat(),
+            "finished_at": row["run"].finished_at.isoformat() if row["run"].finished_at else None,
+            "started_at_local": _fmt_dt(row["run"].started_at),
+            "finished_at_local": _fmt_dt(row["run"].finished_at) if row["run"].finished_at else None,
         }
-        for run in runs
+        for row in runs
     ]
