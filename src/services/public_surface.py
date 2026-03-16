@@ -567,14 +567,15 @@ async def seed_public_facts_from_interview_prep(
     for path in markdown_files:
         facts = _derive_public_facts_from_markdown(path, path.read_text(encoding="utf-8"))
         for sort_order, fact in enumerate(facts, start=1):
+            fact_payload = dict(fact)
             await _upsert_public_fact(
                 session,
                 approved=approve,
                 refresh_enabled=False,
                 sort_order=sort_order,
-                source_refs=[fact["source_ref"]],
-                metadata_=fact.get("metadata_", {}),
-                **fact,
+                source_refs=[fact_payload["source_ref"]],
+                metadata_=fact_payload.pop("metadata_", {}),
+                **fact_payload,
             )
             created += 1
     await refresh_public_snapshots(session, force=True)
