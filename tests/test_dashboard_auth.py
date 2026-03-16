@@ -1,5 +1,8 @@
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from src.api.app import app
+from src.config import settings
 from src.lib.auth import is_dashboard_session_authenticated
 
 
@@ -23,3 +26,27 @@ def test_dashboard_session_auth_false_without_session_scope() -> None:
 def test_dashboard_session_auth_true_with_authenticated_session() -> None:
     request = _request({"session": {"dashboard_authenticated": True}})
     assert is_dashboard_session_authenticated(request) is True
+
+
+def test_dashboard_atlas_redirects_to_login_instead_of_crashing() -> None:
+    client = TestClient(app)
+    response = client.get("/dashboard/atlas", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login")
+
+
+def test_dashboard_login_sets_session_cookie(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "dashboard_username", "ahmad")
+    monkeypatch.setattr(settings, "dashboard_password", "super-secret-password")
+    client = TestClient(app)
+    response = client.post(
+        "/dashboard/login",
+        data={
+            "username": "ahmad",
+            "password": "super-secret-password",
+            "next": "/dashboard/atlas",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "brain_dashboard_session=" in response.headers.get("set-cookie", "")

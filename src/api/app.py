@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.api.routes import router
@@ -21,17 +22,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="duSraBheja API", lifespan=lifespan)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=dashboard_session_secret(),
-    session_cookie="brain_dashboard_session",
-    same_site="lax",
-    https_only=dashboard_cookie_secure(),
-)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.middleware("http")
 async def dashboard_login_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/dashboard") and path not in {"/dashboard/login", "/dashboard/logout"}:
@@ -44,6 +36,20 @@ async def dashboard_login_middleware(request: Request, call_next):
                 status_code=303,
             )
     return await call_next(request)
+
+
+app.add_middleware(
+    BaseHTTPMiddleware,
+    dispatch=dashboard_login_middleware,
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=dashboard_session_secret(),
+    session_cookie="brain_dashboard_session",
+    same_site="lax",
+    https_only=dashboard_cookie_secure(),
+)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 app.include_router(router)
