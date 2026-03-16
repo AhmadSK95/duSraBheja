@@ -17,12 +17,14 @@ from src.mcp.tools.search import register as register_search
 from src.mcp.tools.ask import register as register_ask
 from src.mcp.tools.capture import register as register_capture
 from src.mcp.tools.context import register as register_context
+from src.mcp.tools.protocol import register as register_protocol
 from src.mcp.tools.story import register as register_story
 
 register_search(mcp)
 register_ask(mcp)
 register_capture(mcp)
 register_context(mcp)
+register_protocol(mcp)
 register_story(mcp)
 
 

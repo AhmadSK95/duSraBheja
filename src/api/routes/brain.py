@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.api.schemas import (
     AgentSessionStoryRequest,
@@ -17,21 +17,27 @@ from src.api.schemas import (
     ProjectManualStateRequest,
     ProjectStateRefreshRequest,
     QueryRequest,
+    SecretChallengeRequest,
+    SecretRevealRequest,
+    SecretVerifyRequest,
     ReminderCreateRequest,
     SyncReportRequest,
     SyncRunResponse,
 )
 from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
-from src.lib.auth import require_api_token
+from src.lib.auth import require_api_token, require_dashboard_token
 from src.lib.embeddings import embed_text
 from src.lib.store import get_note, vector_search
 from src.lib import store
+from src.services.brain_os import build_brain_self_description
 from src.services.digest import generate_or_refresh_digest
 from src.services.identity import resolve_project
+from src.services.library import build_final_stored_data, build_library_catalog, sync_canonical_library
 from src.services.query import query_brain
 from src.services.reminders import store_reminder
 from src.services.project_state import recompute_project_states
+from src.services.secrets import build_secret_inventory, request_secret_challenge, reveal_secret_once, verify_secret_challenge
 from src.services.session_bootstrap import (
     build_session_bootstrap,
     publish_curated_session_story,
@@ -45,9 +51,184 @@ from src.worker.main import enqueue_ingest
 router = APIRouter(prefix="/api", tags=["brain"])
 
 
+def _requester_identity(request: Request) -> str:
+    session_scope = request.scope.get("session") or {}
+    if session_scope.get("dashboard_username"):
+        return f"dashboard:{session_scope['dashboard_username']}"
+    return "api-client"
+
+
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/brain/self", dependencies=[Depends(require_api_token)])
+async def brain_self_route() -> dict:
+    async with async_session() as session:
+        return await build_brain_self_description(session)
+
+
+@router.get("/library", dependencies=[Depends(require_api_token)])
+async def library_route(
+    q: str | None = None,
+    record_kind: str | None = None,
+    facet: str | None = None,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict:
+    async with async_session() as session:
+        items = await build_library_catalog(
+            session,
+            q=q,
+            record_kind=record_kind,
+            facet=facet,
+            limit=limit,
+        )
+    return {
+        "display_timezone": "America/New_York",
+        "count": len(items),
+        "items": items,
+    }
+
+
+@router.get("/threads", dependencies=[Depends(require_api_token)])
+async def threads_route(
+    q: str | None = None,
+    thread_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict:
+    async with async_session() as session:
+        await sync_canonical_library(session)
+        records = await store.list_thread_records(session, thread_type=thread_type, q=q, limit=limit)
+    return {
+        "count": len(records),
+        "items": [
+            {
+                "id": str(record.id),
+                "thread_type": record.thread_type,
+                "title": record.title,
+                "summary": record.summary,
+                "status": record.status,
+                "priority": record.priority,
+                "subject_ref": record.subject_ref,
+                "aliases": record.aliases or [],
+                "provenance_kind": record.provenance_kind,
+                "last_event_at": record.last_event_at.isoformat() if record.last_event_at else None,
+            }
+            for record in records
+        ],
+    }
+
+
+@router.get("/episodes", dependencies=[Depends(require_api_token)])
+async def episodes_route(
+    q: str | None = None,
+    episode_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict:
+    async with async_session() as session:
+        await sync_canonical_library(session)
+        records = await store.list_episode_records(session, episode_type=episode_type, q=q, limit=limit)
+    return {
+        "count": len(records),
+        "items": [
+            {
+                "id": str(record.id),
+                "episode_type": record.episode_type,
+                "title": record.title,
+                "summary": record.summary,
+                "participants": record.participants or [],
+                "provenance_kind": record.provenance_kind,
+                "coverage_start": record.coverage_start.isoformat() if record.coverage_start else None,
+                "coverage_end": record.coverage_end.isoformat() if record.coverage_end else None,
+            }
+            for record in records
+        ],
+    }
+
+
+@router.get("/entities", dependencies=[Depends(require_api_token)])
+async def entities_route(
+    q: str | None = None,
+    entity_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict:
+    async with async_session() as session:
+        await sync_canonical_library(session)
+        records = await store.list_entity_records(session, entity_type=entity_type, q=q, limit=limit)
+    return {
+        "count": len(records),
+        "items": [
+            {
+                "id": str(record.id),
+                "entity_type": record.entity_type,
+                "name": record.name,
+                "summary": record.summary,
+                "aliases": record.aliases or [],
+                "thread_ids": record.thread_ids or [],
+                "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None,
+            }
+            for record in records
+        ],
+    }
+
+
+@router.get("/syntheses", dependencies=[Depends(require_api_token)])
+async def syntheses_route(
+    q: str | None = None,
+    synthesis_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> dict:
+    async with async_session() as session:
+        await sync_canonical_library(session)
+        records = await store.list_synthesis_records(session, synthesis_type=synthesis_type, q=q, limit=limit)
+    return {
+        "count": len(records),
+        "items": [
+            {
+                "id": str(record.id),
+                "synthesis_type": record.synthesis_type,
+                "title": record.title,
+                "summary": record.summary,
+                "certainty_class": record.certainty_class,
+                "provenance_kind": record.provenance_kind,
+                "event_time": record.event_time.isoformat() if record.event_time else None,
+            }
+            for record in records
+        ],
+    }
+
+
+@router.get("/changes", dependencies=[Depends(require_api_token)])
+async def changes_route(limit: int = Query(default=40, ge=1, le=100)) -> dict:
+    async with async_session() as session:
+        payload = await build_final_stored_data(session)
+    return {
+        "count": min(limit, len(payload["items"])),
+        "items": payload["items"][:limit],
+    }
+
+
+@router.get("/coverage-gaps", dependencies=[Depends(require_api_token)])
+async def coverage_gaps_route() -> dict:
+    async with async_session() as session:
+        await sync_canonical_library(session)
+        threads = await store.list_thread_records(session, limit=300)
+        observations = await store.list_observation_records(session, limit=400)
+    empty_threads = [thread for thread in threads if not (thread.summary or "").strip()]
+    weak_observations = [record for record in observations if float(record.certainty or 0.0) < 0.75]
+    return {
+        "thread_count": len(threads),
+        "observation_count": len(observations),
+        "threads_missing_summary": [
+            {"id": str(thread.id), "title": thread.title, "thread_type": thread.thread_type}
+            for thread in empty_threads[:30]
+        ],
+        "low_certainty_observations": [
+            {"id": str(record.id), "title": record.title, "certainty": record.certainty}
+            for record in weak_observations[:30]
+        ],
+    }
 
 
 @router.post("/ingest/manual", dependencies=[Depends(require_api_token)])
@@ -346,3 +527,62 @@ async def agent_session_story_route(payload: AgentSessionStoryRequest) -> dict:
             tags=payload.tags,
             actor_name=payload.actor_name,
         )
+
+
+@router.get("/secrets", dependencies=[Depends(require_dashboard_token)])
+async def list_secrets_route(request: Request) -> dict:
+    async with async_session() as session:
+        inventory = await build_secret_inventory(session)
+    return {
+        "requester": _requester_identity(request),
+        "count": len(inventory),
+        "items": inventory,
+    }
+
+
+@router.post("/secrets/challenge", dependencies=[Depends(require_dashboard_token)])
+async def request_secret_challenge_route(request: Request, payload: SecretChallengeRequest) -> dict:
+    async with async_session() as session:
+        try:
+            secret_id = uuid.UUID(payload.secret_id) if payload.secret_id else None
+            return await request_secret_challenge(
+                session,
+                requester=_requester_identity(request),
+                purpose=payload.purpose,
+                secret_id=secret_id,
+                alias=payload.alias,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/secrets/verify", dependencies=[Depends(require_dashboard_token)])
+async def verify_secret_challenge_route(request: Request, payload: SecretVerifyRequest) -> dict:
+    async with async_session() as session:
+        try:
+            return await verify_secret_challenge(
+                session,
+                requester=_requester_identity(request),
+                challenge_id=uuid.UUID(payload.challenge_id),
+                otp_code=payload.otp_code,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/secrets/{secret_id}/reveal", dependencies=[Depends(require_dashboard_token)])
+async def reveal_secret_route(
+    request: Request,
+    secret_id: uuid.UUID,
+    payload: SecretRevealRequest,
+) -> dict:
+    async with async_session() as session:
+        try:
+            return await reveal_secret_once(
+                session,
+                requester=_requester_identity(request),
+                secret_id=secret_id,
+                grant_token=payload.grant_token,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

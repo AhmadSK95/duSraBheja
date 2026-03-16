@@ -449,6 +449,319 @@ class ProtectedContent(Base):
     )
 
 
+class EvidenceRecord(Base):
+    __tablename__ = "evidence_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    source_item_id = Column(UUID(as_uuid=True), ForeignKey("source_items.id", ondelete="SET NULL"), nullable=True)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    excerpt = Column(Text, nullable=True)
+    content_kind = Column(String, nullable=False, default="text")
+    source_type = Column(String, nullable=False, default="unknown")
+    provenance_kind = Column(String, nullable=False, default="direct_sync")
+    retention_class = Column(String, nullable=False, default="warm")
+    content_hash = Column(String, nullable=True)
+    is_sensitive = Column(Boolean, nullable=False, default=False)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    event_time = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_evidence_source", "source_type"),
+        Index("idx_evidence_event_time", "event_time"),
+        Index("idx_evidence_project", "project_note_id"),
+    )
+
+
+class ThreadRecord(Base):
+    __tablename__ = "thread_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    thread_type = Column(String, nullable=False, default="topic")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="active")
+    priority = Column(String, nullable=False, default="medium")
+    provenance_kind = Column(String, nullable=False, default="direct_sync")
+    retention_class = Column(String, nullable=False, default="hot")
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    subject_ref = Column(String, nullable=True)
+    aliases = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    last_event_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_threads_type", "thread_type"),
+        Index("idx_threads_status", "status"),
+        Index("idx_threads_last_event", "last_event_at"),
+        Index("idx_threads_project", "project_note_id"),
+    )
+
+
+class EntityRecord(Base):
+    __tablename__ = "entity_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    entity_type = Column(String, nullable=False, default="topic")
+    name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    aliases = Column(JSONB, default=list)
+    thread_ids = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_entities_type", "entity_type"),
+        Index("idx_entities_name", "normalized_name"),
+        Index("idx_entities_last_seen", "last_seen_at"),
+    )
+
+
+class ObservationRecord(Base):
+    __tablename__ = "observation_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    observation_type = Column(String, nullable=False, default="fact")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    body = Column(Text, nullable=True)
+    certainty = Column(Float, nullable=False, default=0.7)
+    provenance_kind = Column(String, nullable=False, default="direct_sync")
+    retention_class = Column(String, nullable=False, default="hot")
+    actor = Column(String, nullable=True)
+    thread_ids = Column(JSONB, default=list)
+    entity_ids = Column(JSONB, default=list)
+    evidence_ids = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    event_time = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_observations_type", "observation_type"),
+        Index("idx_observations_event_time", "event_time"),
+        Index("idx_observations_project", "project_note_id"),
+    )
+
+
+class EpisodeRecord(Base):
+    __tablename__ = "episode_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    episode_type = Column(String, nullable=False, default="session")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    provenance_kind = Column(String, nullable=False, default="direct_sync")
+    retention_class = Column(String, nullable=False, default="hot")
+    participants = Column(JSONB, default=list)
+    thread_ids = Column(JSONB, default=list)
+    entity_ids = Column(JSONB, default=list)
+    observation_ids = Column(JSONB, default=list)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    coverage_start = Column(DateTime(timezone=True), nullable=True)
+    coverage_end = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_episodes_type", "episode_type"),
+        Index("idx_episodes_coverage_start", "coverage_start"),
+        Index("idx_episodes_project", "project_note_id"),
+    )
+
+
+class SynthesisRecord(Base):
+    __tablename__ = "synthesis_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    synthesis_type = Column(String, nullable=False, default="replay")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    body = Column(Text, nullable=True)
+    certainty_class = Column(String, nullable=False, default="grounded_observation")
+    provenance_kind = Column(String, nullable=False, default="derived_system")
+    thread_ids = Column(JSONB, default=list)
+    entity_ids = Column(JSONB, default=list)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    event_time = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_syntheses_type", "synthesis_type"),
+        Index("idx_syntheses_event_time", "event_time"),
+        Index("idx_syntheses_project", "project_note_id"),
+    )
+
+
+class CapabilityRecord(Base):
+    __tablename__ = "capability_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    capability_key = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    protocol = Column(String, nullable=False, default="http")
+    visibility = Column(String, nullable=False, default="private")
+    payload = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("capability_key"),
+        Index("idx_capabilities_protocol", "protocol"),
+    )
+
+
+class SecretRecord(Base):
+    __tablename__ = "secret_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    secret_type = Column(String, nullable=False, default="credential")
+    label = Column(String, nullable=False)
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String, nullable=False)
+    checksum = Column(String, nullable=False)
+    masked_preview = Column(String, nullable=False)
+    owner_scope = Column(String, nullable=False, default="owner")
+    thread_refs = Column(JSONB, default=list)
+    entity_refs = Column(JSONB, default=list)
+    source_refs = Column(JSONB, default=list)
+    rotation_metadata = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    aliases = relationship("SecretAliasRecord", back_populates="secret_record", cascade="all, delete")
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_secret_type", "secret_type"),
+        Index("idx_secret_label", "label"),
+    )
+
+
+class SecretAliasRecord(Base):
+    __tablename__ = "secret_alias_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_id = Column(UUID(as_uuid=True), ForeignKey("secret_records.id", ondelete="CASCADE"), nullable=False)
+    alias = Column(String, nullable=False)
+    normalized_alias = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    secret_record = relationship("SecretRecord", back_populates="aliases")
+
+    __table_args__ = (
+        UniqueConstraint("normalized_alias"),
+        Index("idx_secret_alias_secret", "secret_id"),
+    )
+
+
+class SecretAccessChallenge(Base):
+    __tablename__ = "secret_access_challenges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_id = Column(UUID(as_uuid=True), ForeignKey("secret_records.id", ondelete="SET NULL"), nullable=True)
+    requester = Column(String, nullable=False)
+    purpose = Column(Text, nullable=False)
+    challenge_hash = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=5)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_secret_challenge_secret", "secret_id"),
+        Index("idx_secret_challenge_status", "status"),
+        Index("idx_secret_challenge_expires", "expires_at"),
+    )
+
+
+class SecretAccessGrant(Base):
+    __tablename__ = "secret_access_grants"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_id = Column(UUID(as_uuid=True), ForeignKey("secret_records.id", ondelete="CASCADE"), nullable=False)
+    challenge_id = Column(UUID(as_uuid=True), ForeignKey("secret_access_challenges.id", ondelete="CASCADE"), nullable=False)
+    requester = Column(String, nullable=False)
+    purpose = Column(Text, nullable=False)
+    grant_hash = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_secret_grant_secret", "secret_id"),
+        Index("idx_secret_grant_status", "status"),
+        Index("idx_secret_grant_expires", "expires_at"),
+    )
+
+
+class SecretAuditEntry(Base):
+    __tablename__ = "secret_audit_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_id = Column(UUID(as_uuid=True), ForeignKey("secret_records.id", ondelete="SET NULL"), nullable=True)
+    challenge_id = Column(UUID(as_uuid=True), ForeignKey("secret_access_challenges.id", ondelete="SET NULL"), nullable=True)
+    grant_id = Column(UUID(as_uuid=True), ForeignKey("secret_access_grants.id", ondelete="SET NULL"), nullable=True)
+    requester = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    purpose = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="ok")
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_secret_audit_secret", "secret_id"),
+        Index("idx_secret_audit_created", "created_at"),
+        Index("idx_secret_audit_action", "action"),
+    )
+
+
 class VoiceProfile(Base):
     __tablename__ = "voice_profiles"
 

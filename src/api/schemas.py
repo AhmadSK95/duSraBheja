@@ -150,3 +150,18 @@ class BoardRegenerateRequest(BaseModel):
 class EvalRunRequest(BaseModel):
     run_name: str = Field(default="retrieval-reliability", min_length=3)
     rounds: int = Field(default=3, ge=1, le=10)
+
+
+class SecretChallengeRequest(BaseModel):
+    purpose: str = Field(min_length=3)
+    secret_id: str | None = None
+    alias: str | None = None
+
+
+class SecretVerifyRequest(BaseModel):
+    challenge_id: str
+    otp_code: str = Field(min_length=6, max_length=6)
+
+
+class SecretRevealRequest(BaseModel):
+    grant_token: str = Field(min_length=12)

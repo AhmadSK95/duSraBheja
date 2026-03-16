@@ -17,12 +17,15 @@ from src.database import async_session
 from src.lib import store
 from src.lib.auth import dashboard_credentials_match, dashboard_username, require_api_token, require_dashboard_token
 from src.lib.time import format_display_datetime
-from src.services.brain_atlas import build_brain_atlas_snapshot, build_library_items
+from src.services.brain_atlas import build_brain_atlas_snapshot
+from src.services.brain_os import build_brain_self_description
 from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
 from src.services.digest import generate_or_refresh_digest
 from src.services.evaluation import run_query_eval
+from src.services.library import build_final_stored_data, build_library_catalog
 from src.services.project_state import recompute_project_states
+from src.services.secrets import build_secret_inventory
 from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_pool
 
 router = APIRouter(tags=["dashboard"])
@@ -30,7 +33,7 @@ api_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 def _login_page(*, next_path: str, error: str | None = None) -> HTMLResponse:
-    safe_next = html.escape(next_path or "/dashboard/atlas")
+    safe_next = html.escape(next_path or "/dashboard/library")
     error_html = f'<div class="atlas-login-error">{html.escape(error)}</div>' if error else ""
     return HTMLResponse(
         f"""<!doctype html>
@@ -157,7 +160,7 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
 
 
 @router.get("/dashboard/login", response_class=HTMLResponse)
-async def dashboard_login(next: str = Query(default="/dashboard/atlas")) -> HTMLResponse:
+async def dashboard_login(next: str = Query(default="/dashboard/library")) -> HTMLResponse:
     return _login_page(next_path=next)
 
 
@@ -166,13 +169,13 @@ async def dashboard_login_submit(
     request: Request,
     username: str = Form(default=""),
     password: str = Form(default=""),
-    next: str = Form(default="/dashboard/atlas"),
+    next: str = Form(default="/dashboard/library"),
 ) -> Response:
     if not dashboard_credentials_match(username=username, password=password):
         return _login_page(next_path=next, error="That login didn’t match the private dashboard credentials.")
     request.session["dashboard_authenticated"] = True
     request.session["dashboard_username"] = dashboard_username()
-    destination = next if next.startswith("/dashboard") else "/dashboard/atlas"
+    destination = next if next.startswith("/dashboard") else "/dashboard/library"
     return RedirectResponse(url=destination, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -284,10 +287,10 @@ def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
     return render_dashboard_shell(
         title="Brain Atlas",
         token=token,
-        active_page="atlas",
-        hero_kicker="Visual Brain",
-        hero_title="Brain Atlas",
-        hero_subtitle="A whole-brain view of projects, interests, people, ideas, thoughts, media, stories, and system health, all rendered in New York local time.",
+        active_page="cognitive-map",
+        hero_kicker="Cognitive Map",
+        hero_title="Cognitive Map",
+        hero_subtitle="A graph-first view of the strongest active clusters across the brain. The map is now its own page so the library can stay the default home.",
         content_html=content_html,
         page_data_json=_serialize_json(
             {
@@ -300,15 +303,23 @@ def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
     )
 
 
-def _render_library_page(items: list[dict], *, token: str, q: str, facet: str, source_name: str, category: str) -> HTMLResponse:
+def _render_library_page(
+    items: list[dict],
+    *,
+    token: str,
+    q: str,
+    facet: str,
+    record_kind: str,
+) -> HTMLResponse:
     cards = "".join(
         _list_item(
             item.get("title") or "Item",
             item.get("summary") or "",
             meta=[
-                item.get("facet_type") or "",
-                item.get("source_name") or "",
-                item.get("category") or "",
+                item.get("record_kind") or "",
+                item.get("facet") or "",
+                item.get("provenance_kind") or "",
+                item.get("source_type") or "",
                 item.get("happened_at_local") or "",
             ],
         )
@@ -319,14 +330,13 @@ def _render_library_page(items: list[dict], *, token: str, q: str, facet: str, s
       <form class="atlas-form" method="get" action="/dashboard/library">
         <input type="hidden" name="token" value="{html.escape(token)}" />
         <label>Search<input type="text" name="q" value="{html.escape(q)}" placeholder="Search the vault" /></label>
-        <label>Facet
-          <select name="facet">
-            <option value="">All facets</option>
-            {''.join(f'<option value="{name}" {"selected" if facet == name else ""}>{name.title()}</option>' for name in ('projects','interests','people','ideas','thoughts','media','stories','systems'))}
+        <label>Record Kind
+          <select name="record_kind">
+            <option value="">All records</option>
+            {''.join(f'<option value="{name}" {"selected" if record_kind == name else ""}>{name.title()}</option>' for name in ('thread','episode','observation','entity','synthesis','evidence'))}
           </select>
         </label>
-        <label>Source<input type="text" name="source_name" value="{html.escape(source_name)}" placeholder="discord, chrome_activity, note" /></label>
-        <label>Category<input type="text" name="category" value="{html.escape(category)}" placeholder="project, idea, progress_update" /></label>
+        <label>Facet<input type="text" name="facet" value="{html.escape(facet)}" placeholder="project, concept, decision, replay" /></label>
         <button type="submit">Filter</button>
       </form>
       <div class="atlas-list">{cards}</div>
@@ -336,9 +346,9 @@ def _render_library_page(items: list[dict], *, token: str, q: str, facet: str, s
         title="Library Explorer",
         token=token,
         active_page="library",
-        hero_kicker="Full Vault",
+        hero_kicker="Canonical Library",
         hero_title="Library Explorer",
-        hero_subtitle="Browse the stored universe directly. This is the human-readable ledger view beneath the atlas.",
+        hero_subtitle="Browse the actual stored memory model directly: threads, episodes, observations, entities, syntheses, and thin evidence wrappers.",
         content_html=content_html,
     )
 
@@ -489,13 +499,133 @@ def _render_health_page(snapshot: dict, *, token: str) -> HTMLResponse:
     )
 
 
+def _render_final_data_page(payload: dict, *, token: str) -> HTMLResponse:
+    counts = dict(payload.get("counts") or {})
+    items = list(payload.get("items") or [])
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {_metric('Threads', str(counts.get('threads', 0)))}
+          {_metric('Episodes', str(counts.get('episodes', 0)))}
+          {_metric('Observations', str(counts.get('observations', 0)))}
+          {_metric('Entities', str(counts.get('entities', 0)))}
+          {_metric('Syntheses', str(counts.get('syntheses', 0)))}
+          {_metric('Evidence', str(counts.get('evidence', 0)))}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Canonical Truth</h2>
+        <p>This is the final stored data the brain is treating as its current canonical memory layer.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Item', item.get('summary') or '', meta=[item.get('record_kind') or '', item.get('facet') or '', item.get('provenance_kind') or '', item.get('happened_at_local') or '']) for item in items)}
+        </div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Final Stored Data",
+        token=token,
+        active_page="final-data",
+        hero_kicker="Canonical Truth",
+        hero_title="Final Stored Data",
+        hero_subtitle="A direct look at the records the brain currently treats as canonical memory, not just presentational story output.",
+        content_html=content_html,
+    )
+
+
+def _render_brain_os_page(payload: dict, *, token: str) -> HTMLResponse:
+    capabilities = list(payload.get("capabilities") or [])
+    protocols = dict(payload.get("protocols") or {})
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Connection Contract</h2>
+        <div class="atlas-list">
+          {''.join(_list_item(name.upper(), value.get('auth') or '', meta=[value.get('base_url') or value.get('transport') or value.get('bootstrap') or '']) for name, value in protocols.items())}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Capabilities</h2>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Capability', item.get('summary') or '', meta=[item.get('protocol') or '', item.get('key') or '']) for item in capabilities)}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Agent Loop</h2>
+        <div class="atlas-list">
+          {''.join(_list_item(step.title(), desc, meta=[]) for step, desc in (payload.get('flows') or {}).items())}
+        </div>
+        <div class="atlas-section-title">MCP quickstart</div>
+        <div class="atlas-list">
+          {''.join(_list_item(f'Step {index}', item, meta=[]) for index, item in enumerate(payload.get('mcp_quickstart') or [], 1))}
+        </div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Brain OS",
+        token=token,
+        active_page="brain-os",
+        hero_kicker="Agent Protocol",
+        hero_title="Brain OS",
+        hero_subtitle="How the brain connects, what it can do, and how external agents should bootstrap, query, publish progress, close out, and access secrets safely.",
+        content_html=content_html,
+    )
+
+
+def _render_secret_vault_page(inventory: list[dict], *, token: str) -> HTMLResponse:
+    cards = "".join(
+        _list_item(
+            item.get("label") or "Secret",
+            f"masked={item.get('masked_preview')} | aliases={', '.join(item.get('aliases') or []) or 'none'}",
+            meta=[item.get("secret_type") or "", item.get("owner_scope") or "", item.get("updated_at") or ""],
+        )
+        for item in inventory
+    ) or '<div class="atlas-empty">No secrets are in the owner vault yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Owner Vault</h2>
+        <p>Secrets are encrypted at rest, masked everywhere else, and only revealed after a fresh Discord DM OTP. They never show up in public channels, traces, or normal retrieval output.</p>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Masked Inventory</h2>
+        <div class="atlas-list">{cards}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Reveal Workflow</h2>
+        <div class="atlas-list">
+          {_list_item('1. Request challenge', 'POST /api/secrets/challenge with a purpose string and either a secret_id or alias.', meta=[])}
+          {_list_item('2. Read your Discord DM', 'The six-digit OTP is delivered only to your owner DM, never to the server.', meta=[])}
+          {_list_item('3. Verify and reveal once', 'POST /api/secrets/verify, then POST /api/secrets/{secret_id}/reveal with the short-lived grant token.', meta=[])}
+        </div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Secret Vault",
+        token=token,
+        active_page="secret-vault",
+        hero_kicker="Owner Access Only",
+        hero_title="Secret Vault",
+        hero_subtitle="Masked inventory plus the owner-verification workflow. Secrets stay outside normal memory and require fresh Discord DM OTP step-up access to reveal.",
+        content_html=content_html,
+    )
+
+
 @router.get("/dashboard", dependencies=[Depends(require_dashboard_token)])
 async def dashboard_root(token: str = Query(default="")) -> RedirectResponse:
-    return RedirectResponse(url=dashboard_url("/dashboard/atlas", token), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=dashboard_url("/dashboard/library", token), status_code=status.HTTP_302_FOUND)
 
 
-@router.get("/dashboard/atlas", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
-async def dashboard_atlas(token: str = Query(default="")) -> HTMLResponse:
+@router.get("/dashboard/atlas", dependencies=[Depends(require_dashboard_token)])
+async def dashboard_atlas_redirect(token: str = Query(default="")) -> RedirectResponse:
+    return RedirectResponse(url=dashboard_url("/dashboard/cognitive-map", token), status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/dashboard/cognitive-map", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_cognitive_map(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
         snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
     return _render_atlas_page(snapshot, token=token)
@@ -506,18 +636,23 @@ async def dashboard_library(
     token: str = Query(default=""),
     q: str = Query(default=""),
     facet: str = Query(default=""),
-    source_name: str = Query(default=""),
-    category: str = Query(default=""),
+    record_kind: str = Query(default=""),
 ) -> HTMLResponse:
     async with async_session() as session:
-        items = await build_library_items(
+        items = await build_library_catalog(
             session,
-            q=q or None,
+            q=q.strip() or None,
+            record_kind=record_kind or None,
             facet=facet or None,
-            source_name=source_name or None,
-            category=category or None,
         )
-    return _render_library_page(items, token=token, q=q, facet=facet, source_name=source_name, category=category)
+    return _render_library_page(items, token=token, q=q, facet=facet, record_kind=record_kind)
+
+
+@router.get("/dashboard/final-data", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_final_data(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        payload = await build_final_stored_data(session)
+    return _render_final_data_page(payload, token=token)
 
 
 @router.get("/dashboard/story-river", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -540,6 +675,20 @@ async def dashboard_subconscious(token: str = Query(default="")) -> HTMLResponse
     async with async_session() as session:
         snapshot = (await build_brain_atlas_snapshot(session, include_web=False)).as_dict()
     return _render_subconscious_page(list(snapshot.get("subconscious") or []), token=token)
+
+
+@router.get("/dashboard/brain-os", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_brain_os(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        payload = await build_brain_self_description(session)
+    return _render_brain_os_page(payload, token=token)
+
+
+@router.get("/dashboard/secret-vault", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_secret_vault(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        inventory = await build_secret_inventory(session)
+    return _render_secret_vault_page(inventory, token=token)
 
 
 @router.get("/dashboard/health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -915,22 +1064,26 @@ async def get_dashboard_atlas() -> dict:
 async def get_dashboard_library(
     q: str | None = None,
     facet: str | None = None,
-    source_name: str | None = None,
-    category: str | None = None,
+    record_kind: str | None = None,
 ) -> dict:
     async with async_session() as session:
-        items = await build_library_items(
+        items = await build_library_catalog(
             session,
             q=q,
+            record_kind=record_kind,
             facet=facet,
-            source_name=source_name,
-            category=category,
         )
     return {
         "display_timezone": "America/New_York",
         "count": len(items),
         "items": items,
     }
+
+
+@api_router.get("/final-data", dependencies=[Depends(require_api_token)])
+async def get_dashboard_final_data() -> dict:
+    async with async_session() as session:
+        return await build_final_stored_data(session)
 
 
 @api_router.get("/story-river", dependencies=[Depends(require_api_token)])
@@ -960,6 +1113,22 @@ async def get_dashboard_subconscious() -> dict:
     return {
         "display_timezone": snapshot.get("display_timezone"),
         "insights": snapshot.get("subconscious", []),
+    }
+
+
+@api_router.get("/brain-os", dependencies=[Depends(require_api_token)])
+async def get_dashboard_brain_os() -> dict:
+    async with async_session() as session:
+        return await build_brain_self_description(session)
+
+
+@api_router.get("/secret-vault", dependencies=[Depends(require_api_token)])
+async def get_dashboard_secret_vault() -> dict:
+    async with async_session() as session:
+        inventory = await build_secret_inventory(session)
+    return {
+        "count": len(inventory),
+        "items": inventory,
     }
 
 

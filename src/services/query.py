@@ -26,6 +26,7 @@ from src.lib.provenance import (
 )
 from src.lib.time import coerce_datetime, describe_event_time, format_display_datetime
 from src.services.brain_atlas import build_brain_atlas_snapshot
+from src.services.brain_os import build_brain_self_description
 from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
 from src.services.persona import build_persona_packet, render_persona_context
@@ -188,9 +189,40 @@ EXTERNAL_WEB_HINTS = (
     "news",
     "latest news",
 )
+SELF_PROTOCOL_HINTS = (
+    "connect to your brain",
+    "connect to my brain",
+    "through mcp",
+    "how can an ai agent connect",
+    "what tools do you expose",
+    "bootstrap and close out",
+)
 QUERY_STAGE_ROUTING = "routing"
 QUERY_STAGE_CANDIDATE_RETRIEVAL = "candidate_retrieval"
 QUERY_STAGE_NARRATION = "narration"
+
+
+def _is_brain_protocol_question(question: str) -> bool:
+    lowered = (question or "").lower()
+    return any(hint in lowered for hint in SELF_PROTOCOL_HINTS)
+
+
+def _format_brain_protocol_answer(payload: dict[str, Any]) -> str:
+    protocols = payload.get("protocols") or {}
+    mcp = protocols.get("mcp") or {}
+    cli = protocols.get("cli") or {}
+    return (
+        "Yes. The clean way for another AI agent to connect to me is through MCP first, and HTTP second.\n\n"
+        "Use MCP when possible:\n"
+        f"- transport: {mcp.get('transport') or 'private'}\n"
+        f"- port: {mcp.get('port') or 'private'}\n"
+        "- call `describe_brain_protocol` if you need the full contract\n"
+        "- then call `bootstrap_session`, `query_library` or `query_brain_mode`, and finish with `publish_session_closeout`\n\n"
+        "If you are using the local repo scripts instead of MCP:\n"
+        f"- bootstrap: `{cli.get('bootstrap') or 'brain_session.py bootstrap'}`\n"
+        f"- closeout: `{cli.get('closeout') or 'brain_session.py closeout'}`\n\n"
+        "Secret access is separate: it requires dashboard/API auth plus a fresh Discord DM OTP before any reveal."
+    )
 
 
 async def narrate_from_context(
@@ -1746,6 +1778,55 @@ async def query_brain(
                 used_vector_search=False,
                 used_web=False,
                 payload={**trace_payload, "projects": projects, "selected_evidence": project_sources, "answer": narration["text"]},
+            )
+            return result
+
+        if _is_brain_protocol_question(question):
+            resolved_intent = "brain_protocol"
+            payload = await build_brain_self_description(session)
+            answer = _format_brain_protocol_answer(payload)
+            evidence_quality = {
+                "overall": 0.95,
+                "freshness": 0.95,
+                "directness": 1.0,
+                "project_alignment": 0.6,
+                "exactness": 0.95,
+                "contradiction_risk": 0.02,
+            }
+            result = {
+                "ok": True,
+                "mode": resolved_mode,
+                "intent": resolved_intent,
+                "answer": answer,
+                "sources": [],
+                "brain_sources": [],
+                "web_sources": [],
+                "events": [],
+                "confidence": "high",
+                "model": "deterministic",
+                "cost_usd": 0,
+                "failure_stage": None,
+                "evidence_quality": evidence_quality,
+                "retrieval_trace_id": str(trace_id),
+                "used_exact_match": True,
+                "used_project_snapshot": False,
+                "used_vector_search": False,
+                "used_web": False,
+                "brain_protocol": payload,
+            }
+            await _persist_trace(
+                session,
+                trace_id=trace_id,
+                question=question,
+                resolved_mode=resolved_mode,
+                resolved_intent=resolved_intent,
+                failure_stage=None,
+                evidence_quality=evidence_quality,
+                used_exact_match=True,
+                used_project_snapshot=False,
+                used_vector_search=False,
+                used_web=False,
+                payload={**trace_payload, "brain_protocol": payload, "answer": answer},
             )
             return result
 

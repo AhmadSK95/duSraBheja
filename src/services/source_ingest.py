@@ -13,6 +13,7 @@ from src.lib.crypto import encrypt_text
 from src.services.identity import ensure_project_aliases, infer_project_from_text, resolve_project
 from src.services.indexing import index_artifact
 from src.services.project_state import recompute_project_states
+from src.services.secrets import capture_secrets_from_text
 from src.services.story import publish_story_entry
 
 
@@ -79,6 +80,21 @@ async def ingest_source_entries(
         if not project_note and (safe_body or summary):
             project_note = await infer_project_from_text(session, "\n".join(filter(None, [title, summary, safe_body])))
 
+        secret_records, redacted_text = await capture_secrets_from_text(
+            session,
+            text=raw_body or safe_body,
+            source_kind=source_type,
+            source_ref=external_id,
+            purpose_label=title,
+            alias_hints=[entry.get("project_ref") or "", title],
+            thread_refs=[project_note.title] if project_note else [],
+            entity_refs=[project_note.title] if project_note else [],
+        )
+        if secret_records:
+            if raw_body:
+                raw_body = redacted_text
+            safe_body = redacted_text
+
         if project_note:
             projects_touched.add(project_note.title)
             project_note_ids_touched.add(str(project_note.id))
@@ -139,7 +155,7 @@ async def ingest_source_entries(
                 )
             continue
 
-        sensitive = bool(entry.get("is_sensitive") or metadata.get("sensitive"))
+        sensitive = bool(entry.get("is_sensitive") or metadata.get("sensitive") or secret_records)
         artifact_raw_text = safe_body if sensitive else raw_body
         artifact = await store.create_artifact(
             session,

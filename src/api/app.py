@@ -28,7 +28,7 @@ async def dashboard_login_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/dashboard") and path not in {"/dashboard/login", "/dashboard/logout"}:
         if not dashboard_request_is_authenticated(request):
-            next_path = request.url.path
+            next_path = "/dashboard/library" if request.url.path == "/dashboard" else request.url.path
             if request.url.query:
                 next_path = f"{next_path}?{request.url.query}"
             return RedirectResponse(

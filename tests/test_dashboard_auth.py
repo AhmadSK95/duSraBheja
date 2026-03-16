@@ -35,6 +35,13 @@ def test_dashboard_atlas_redirects_to_login_instead_of_crashing() -> None:
     assert response.headers["location"].startswith("/dashboard/login")
 
 
+def test_dashboard_root_redirects_to_library() -> None:
+    client = TestClient(app)
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/dashboard/login?next=/dashboard/library")
+
+
 def test_dashboard_login_sets_session_cookie(monkeypatch) -> None:
     monkeypatch.setattr(settings, "dashboard_username", "ahmad")
     monkeypatch.setattr(settings, "dashboard_password", "super-secret-password")

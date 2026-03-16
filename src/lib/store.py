@@ -12,17 +12,27 @@ from src.constants import normalize_category, normalize_tags
 from src.models import (
     Artifact,
     Board,
+    CapabilityRecord,
     Classification,
     Chunk,
     ConversationSession,
     DigestPreference,
     Digest,
+    EntityRecord,
+    EpisodeRecord,
+    EvidenceRecord,
     EvalCaseResult,
     EvalRun,
     JournalEntry,
     Link,
     Note,
+    ObservationRecord,
     OAuthCredential,
+    SecretAccessChallenge,
+    SecretAccessGrant,
+    SecretAliasRecord,
+    SecretAuditEntry,
+    SecretRecord,
     ProjectRepo,
     ProjectAlias,
     ProjectStateSnapshot,
@@ -30,10 +40,12 @@ from src.models import (
     ReviewQueue,
     Reminder,
     RetrievalTrace,
+    SynthesisRecord,
     SourceItem,
     StoryConnection,
     SyncRun,
     SyncSource,
+    ThreadRecord,
     VoiceProfile,
 )
 
@@ -2115,3 +2127,597 @@ async def list_eval_case_results(
         .order_by(EvalCaseResult.created_at.asc())
     )
     return list(result.scalars().all())
+
+
+async def upsert_evidence_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> EvidenceRecord:
+    result = await session.execute(
+        select(EvidenceRecord).where(
+            EvidenceRecord.source_kind == source_kind,
+            EvidenceRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = EvidenceRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_evidence_records(
+    session: AsyncSession,
+    *,
+    q: str | None = None,
+    source_type: str | None = None,
+    limit: int = 100,
+) -> list[EvidenceRecord]:
+    query = select(EvidenceRecord)
+    if source_type:
+        query = query.where(EvidenceRecord.source_type == source_type)
+    search_predicate = _contains_any([EvidenceRecord.title, EvidenceRecord.summary, EvidenceRecord.excerpt], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(EvidenceRecord.event_time, EvidenceRecord.created_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_thread_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> ThreadRecord:
+    result = await session.execute(
+        select(ThreadRecord).where(
+            ThreadRecord.source_kind == source_kind,
+            ThreadRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = ThreadRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_thread_records(
+    session: AsyncSession,
+    *,
+    thread_type: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+) -> list[ThreadRecord]:
+    query = select(ThreadRecord)
+    if thread_type:
+        query = query.where(ThreadRecord.thread_type == thread_type)
+    search_predicate = _contains_any([ThreadRecord.title, ThreadRecord.summary, ThreadRecord.subject_ref], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(ThreadRecord.last_event_at, ThreadRecord.updated_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_entity_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> EntityRecord:
+    result = await session.execute(
+        select(EntityRecord).where(
+            EntityRecord.source_kind == source_kind,
+            EntityRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = EntityRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_entity_records(
+    session: AsyncSession,
+    *,
+    entity_type: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+) -> list[EntityRecord]:
+    query = select(EntityRecord)
+    if entity_type:
+        query = query.where(EntityRecord.entity_type == entity_type)
+    search_predicate = _contains_any([EntityRecord.name, EntityRecord.summary], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(EntityRecord.last_seen_at, EntityRecord.updated_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_observation_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> ObservationRecord:
+    result = await session.execute(
+        select(ObservationRecord).where(
+            ObservationRecord.source_kind == source_kind,
+            ObservationRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = ObservationRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_observation_records(
+    session: AsyncSession,
+    *,
+    observation_type: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+) -> list[ObservationRecord]:
+    query = select(ObservationRecord)
+    if observation_type:
+        query = query.where(ObservationRecord.observation_type == observation_type)
+    search_predicate = _contains_any([ObservationRecord.title, ObservationRecord.summary, ObservationRecord.body], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(ObservationRecord.event_time, ObservationRecord.created_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_episode_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> EpisodeRecord:
+    result = await session.execute(
+        select(EpisodeRecord).where(
+            EpisodeRecord.source_kind == source_kind,
+            EpisodeRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = EpisodeRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_episode_records(
+    session: AsyncSession,
+    *,
+    episode_type: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+) -> list[EpisodeRecord]:
+    query = select(EpisodeRecord)
+    if episode_type:
+        query = query.where(EpisodeRecord.episode_type == episode_type)
+    search_predicate = _contains_any([EpisodeRecord.title, EpisodeRecord.summary], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(EpisodeRecord.coverage_end, EpisodeRecord.created_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_synthesis_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    **values,
+) -> SynthesisRecord:
+    result = await session.execute(
+        select(SynthesisRecord).where(
+            SynthesisRecord.source_kind == source_kind,
+            SynthesisRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = SynthesisRecord(
+        source_kind=source_kind,
+        source_ref=source_ref,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_synthesis_records(
+    session: AsyncSession,
+    *,
+    synthesis_type: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+) -> list[SynthesisRecord]:
+    query = select(SynthesisRecord)
+    if synthesis_type:
+        query = query.where(SynthesisRecord.synthesis_type == synthesis_type)
+    search_predicate = _contains_any([SynthesisRecord.title, SynthesisRecord.summary, SynthesisRecord.body], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(func.coalesce(SynthesisRecord.event_time, SynthesisRecord.created_at).desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_capability_record(
+    session: AsyncSession,
+    *,
+    capability_key: str,
+    **values,
+) -> CapabilityRecord:
+    result = await session.execute(
+        select(CapabilityRecord).where(CapabilityRecord.capability_key == capability_key)
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = CapabilityRecord(
+        capability_key=capability_key,
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_capability_records(session: AsyncSession, *, limit: int = 100) -> list[CapabilityRecord]:
+    result = await session.execute(
+        select(CapabilityRecord).order_by(CapabilityRecord.protocol.asc(), CapabilityRecord.capability_key.asc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_secret_record(session: AsyncSession, secret_id: uuid.UUID) -> SecretRecord | None:
+    return await session.get(SecretRecord, secret_id)
+
+
+async def get_secret_record_by_alias(session: AsyncSession, alias: str) -> SecretRecord | None:
+    normalized = _normalize_alias(alias)
+    if not normalized:
+        return None
+    result = await session.execute(
+        select(SecretRecord)
+        .join(SecretAliasRecord, SecretAliasRecord.secret_id == SecretRecord.id)
+        .where(SecretAliasRecord.normalized_alias == normalized)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_secret_record(
+    session: AsyncSession,
+    *,
+    source_kind: str,
+    source_ref: str,
+    aliases: list[str] | None = None,
+    **values,
+) -> SecretRecord:
+    result = await session.execute(
+        select(SecretRecord).where(
+            SecretRecord.source_kind == source_kind,
+            SecretRecord.source_ref == source_ref,
+        )
+    )
+    record = result.scalar_one_or_none()
+    values.setdefault("updated_at", _utcnow())
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+    else:
+        record = SecretRecord(
+            source_kind=source_kind,
+            source_ref=source_ref,
+            created_at=_utcnow(),
+            **values,
+        )
+        session.add(record)
+        await session.commit()
+        await session.refresh(record)
+    if aliases:
+        for alias in aliases:
+            await upsert_secret_alias_record(session, secret_id=record.id, alias=alias)
+    return record
+
+
+async def list_secret_records(
+    session: AsyncSession,
+    *,
+    q: str | None = None,
+    limit: int = 100,
+) -> list[SecretRecord]:
+    query = select(SecretRecord)
+    search_predicate = _contains_any([SecretRecord.label, SecretRecord.masked_preview], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(SecretRecord.updated_at.desc(), SecretRecord.created_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def upsert_secret_alias_record(
+    session: AsyncSession,
+    *,
+    secret_id: uuid.UUID,
+    alias: str,
+) -> SecretAliasRecord:
+    normalized_alias = _normalize_alias(alias)
+    result = await session.execute(
+        select(SecretAliasRecord).where(SecretAliasRecord.normalized_alias == normalized_alias)
+    )
+    record = result.scalar_one_or_none()
+    if record:
+        record.secret_id = secret_id
+        record.alias = alias
+        record.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = SecretAliasRecord(
+        secret_id=secret_id,
+        alias=alias,
+        normalized_alias=normalized_alias,
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_secret_alias_records(
+    session: AsyncSession,
+    *,
+    secret_id: uuid.UUID | None = None,
+    limit: int = 200,
+) -> list[SecretAliasRecord]:
+    query = select(SecretAliasRecord)
+    if secret_id:
+        query = query.where(SecretAliasRecord.secret_id == secret_id)
+    query = query.order_by(SecretAliasRecord.updated_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def create_secret_access_challenge(
+    session: AsyncSession,
+    *,
+    secret_id: uuid.UUID | None,
+    requester: str,
+    purpose: str,
+    challenge_hash: str,
+    expires_at: datetime,
+    max_attempts: int,
+    metadata_: dict | None = None,
+) -> SecretAccessChallenge:
+    record = SecretAccessChallenge(
+        secret_id=secret_id,
+        requester=requester,
+        purpose=purpose,
+        challenge_hash=challenge_hash,
+        expires_at=expires_at,
+        max_attempts=max_attempts,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def get_secret_access_challenge(
+    session: AsyncSession,
+    challenge_id: uuid.UUID,
+) -> SecretAccessChallenge | None:
+    return await session.get(SecretAccessChallenge, challenge_id)
+
+
+async def update_secret_access_challenge(
+    session: AsyncSession,
+    challenge_id: uuid.UUID,
+    **values,
+) -> SecretAccessChallenge | None:
+    values.setdefault("updated_at", _utcnow())
+    await session.execute(
+        update(SecretAccessChallenge)
+        .where(SecretAccessChallenge.id == challenge_id)
+        .values(**values)
+    )
+    await session.commit()
+    return await get_secret_access_challenge(session, challenge_id)
+
+
+async def create_secret_access_grant(
+    session: AsyncSession,
+    *,
+    secret_id: uuid.UUID,
+    challenge_id: uuid.UUID,
+    requester: str,
+    purpose: str,
+    grant_hash: str,
+    expires_at: datetime,
+    metadata_: dict | None = None,
+) -> SecretAccessGrant:
+    record = SecretAccessGrant(
+        secret_id=secret_id,
+        challenge_id=challenge_id,
+        requester=requester,
+        purpose=purpose,
+        grant_hash=grant_hash,
+        expires_at=expires_at,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def get_secret_access_grant(
+    session: AsyncSession,
+    grant_id: uuid.UUID,
+) -> SecretAccessGrant | None:
+    return await session.get(SecretAccessGrant, grant_id)
+
+
+async def find_secret_access_grant_by_hash(
+    session: AsyncSession,
+    *,
+    grant_hash: str,
+) -> SecretAccessGrant | None:
+    result = await session.execute(
+        select(SecretAccessGrant).where(SecretAccessGrant.grant_hash == grant_hash)
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_secret_access_grant(
+    session: AsyncSession,
+    grant_id: uuid.UUID,
+    **values,
+) -> SecretAccessGrant | None:
+    values.setdefault("updated_at", _utcnow())
+    await session.execute(
+        update(SecretAccessGrant)
+        .where(SecretAccessGrant.id == grant_id)
+        .values(**values)
+    )
+    await session.commit()
+    return await get_secret_access_grant(session, grant_id)
+
+
+async def create_secret_audit_entry(
+    session: AsyncSession,
+    *,
+    requester: str,
+    action: str,
+    status: str = "ok",
+    secret_id: uuid.UUID | None = None,
+    challenge_id: uuid.UUID | None = None,
+    grant_id: uuid.UUID | None = None,
+    purpose: str | None = None,
+    metadata_: dict | None = None,
+) -> SecretAuditEntry:
+    record = SecretAuditEntry(
+        secret_id=secret_id,
+        challenge_id=challenge_id,
+        grant_id=grant_id,
+        requester=requester,
+        action=action,
+        purpose=purpose,
+        status=status,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record

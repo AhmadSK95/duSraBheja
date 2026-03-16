@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     dashboard_password: str = ""
     dashboard_session_secret: str = ""
     dashboard_cookie_secure: bool = True
+    discord_owner_user_id: int = 0
+    secret_challenge_ttl_minutes: int = 5
+    secret_challenge_max_attempts: int = 5
+    secret_access_grant_ttl_seconds: int = 120
 
     # Blob storage
     blob_storage_path: str = "/data/blobs"
