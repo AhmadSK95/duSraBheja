@@ -8,7 +8,7 @@ import uuid
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
 from src.api.dashboard_ui import dashboard_url, render_dashboard_shell
@@ -167,7 +167,7 @@ async def dashboard_login_submit(
     username: str = Form(default=""),
     password: str = Form(default=""),
     next: str = Form(default="/dashboard/atlas"),
-) -> HTMLResponse | RedirectResponse:
+) -> Response:
     if not dashboard_credentials_match(username=username, password=password):
         return _login_page(next_path=next, error="That login didn’t match the private dashboard credentials.")
     request.session["dashboard_authenticated"] = True
