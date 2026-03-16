@@ -23,9 +23,16 @@ from src.services.secrets import extract_secret_candidates, redact_secret_candid
 
 PUBLIC_TOPIC_HINTS = (
     "ahmad",
+    "moenu",
+    "moen",
     "moenuddeen",
     "your",
     "you ",
+    "contact",
+    "email",
+    "linkedin",
+    "instagram",
+    "discord",
     "skills",
     "experience",
     "project",
@@ -180,6 +187,44 @@ def _dedupe_fact_dicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _public_seed_path() -> Path:
     return Path(settings.public_profile_seed_path).expanduser()
+
+
+def _configured_public_contact_entries() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    contact_rows = [
+        ("email", "Email", settings.public_contact_email, "mailto"),
+        ("phone", "Phone", settings.public_contact_phone, "tel"),
+        ("linkedin", "LinkedIn", settings.public_contact_linkedin_url, "url"),
+        ("instagram", "Instagram", settings.public_contact_instagram_url, "url"),
+        ("discord", "Discord", settings.public_contact_discord_url, "url"),
+    ]
+    for index, (key, title, raw_value, mode) in enumerate(contact_rows, start=1):
+        value = (raw_value or "").strip()
+        if not value:
+            continue
+        href = value
+        display = value
+        if mode == "mailto" and not value.startswith("mailto:"):
+            href = f"mailto:{value}"
+        elif mode == "tel":
+            href = f"tel:{re.sub(r'[^0-9+]+', '', value)}"
+        if mode == "url" and value.startswith("https://"):
+            display = value.replace("https://", "")
+        entries.append(
+            {
+                "fact_key": f"contact:{key}",
+                "title": title,
+                "body": display,
+                "fact_type": f"contact_{key}",
+                "facet": "contact",
+                "source_kind": "public_settings",
+                "source_ref": key,
+                "tags": ["contact", key],
+                "sort_order": index,
+                "metadata_": {"href": href},
+            }
+        )
+    return entries
 
 
 async def _upsert_public_fact(
@@ -646,6 +691,16 @@ async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, 
 
 
 async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False) -> dict[str, Any]:
+    for contact_fact in _configured_public_contact_entries():
+        payload = dict(contact_fact)
+        await _upsert_public_fact(
+            session,
+            approved=True,
+            refresh_enabled=True,
+            source_refs=[payload["source_ref"]],
+            metadata_=payload.pop("metadata_", {}),
+            **payload,
+        )
     if force:
         await _refresh_live_project_public_facts(session)
     approved_facts = await list_public_facts(session, approved=True, limit=400)
@@ -655,6 +710,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
 
     profile_facts = facts_by_facet.get("about", []) + facts_by_facet.get("skills", []) + facts_by_facet.get("interests", [])
     project_facts = facts_by_facet.get("projects", [])
+    contact_facts = facts_by_facet.get("contact", [])
     source_refs = [fact.fact_key for fact in approved_facts]
 
     hero_summary = next((fact.body for fact in profile_facts if fact.fact_key == "profile:professional-summary"), "")
@@ -665,6 +721,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "name": settings.public_profile_name,
         "short_name": settings.public_profile_short_name,
         "location": settings.public_profile_location,
+        "site_title": settings.public_site_title,
         "hero_summary": hero_summary or identity,
         "identity": identity,
         "skills": skills,
@@ -672,6 +729,15 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "experience": [fact.body for fact in profile_facts if fact.fact_type == "experience"],
         "education": [fact.body for fact in profile_facts if fact.fact_type == "education"],
         "current_focus": [fact.body for fact in profile_facts if fact.fact_type in {"narrative", "decisions"}],
+        "contact": [
+            {
+                "label": fact.title,
+                "value": fact.body,
+                "href": str((fact.metadata_ or {}).get("href") or ""),
+                "fact_key": fact.fact_key,
+            }
+            for fact in contact_facts
+        ],
         "selected_projects": [
             {
                 "slug": fact.project_slug,
@@ -769,6 +835,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             "projects",
             "collaboration",
             "public interests",
+            "contact",
         ],
         disallowed_topics=[
             "generic web search",

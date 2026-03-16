@@ -201,6 +201,31 @@ body.public-body {
   gap: 0.5rem;
 }
 
+.public-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.public-contact-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  text-decoration: none;
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+  font-size: 0.82rem;
+}
+
+.public-contact-pill:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.9);
+}
+
 .public-tag {
   font-size: 0.78rem;
   padding: 0.4rem 0.7rem;

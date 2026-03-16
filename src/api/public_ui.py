@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from string import Template
 
+from src.config import settings
+
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 SHELL_TEMPLATE = Template((TEMPLATE_DIR / "public_shell.html").read_text(encoding="utf-8"))
 
@@ -14,6 +16,7 @@ PUBLIC_NAV = (
     ("home", "Home", "/"),
     ("about", "About", "/about"),
     ("projects", "Projects", "/projects"),
+    ("contact", "Contact", "/contact"),
     ("open-brain", "Open Brain", "/open-brain"),
 )
 
@@ -35,6 +38,8 @@ def render_public_shell(
         nav_html.append(f'<a class="public-nav-link {active_class}" href="{path}">{html.escape(label)}</a>')
     return SHELL_TEMPLATE.substitute(
         page_title=html.escape(page_title),
+        site_title=html.escape(settings.public_site_title),
+        site_host=html.escape((settings.public_base_url or "").replace("https://", "").replace("http://", "").rstrip("/")),
         hero_kicker=html.escape(hero_kicker),
         hero_title=html.escape(hero_title),
         hero_subtitle=html.escape(hero_subtitle),

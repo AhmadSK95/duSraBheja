@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.api.public_ui import render_public_shell
 from src.api.schemas import PublicChatRequest
@@ -33,6 +33,11 @@ async def public_home() -> HTMLResponse:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
     payload = _profile_payload(profile)
+    contact_rows = "".join(
+        f'<a class="public-contact-pill" href="{html.escape(item["href"])}" target="_blank" rel="noreferrer">{html.escape(item["label"])}: {html.escape(item["value"])}</a>'
+        for item in (payload.get("contact") or [])[:3]
+        if item.get("href")
+    )
     project_cards = "".join(
         f"""
         <article class="public-project-card">
@@ -61,6 +66,7 @@ async def public_home() -> HTMLResponse:
         <ul class="public-list">
           {''.join(f'<li>{html.escape(item)}</li>' for item in (payload.get("skills") or [])[:4])}
         </ul>
+        <div class="public-pill-row">{contact_rows}</div>
       </section>
     </div>
     <div class="public-divider"></div>
@@ -124,6 +130,51 @@ async def public_about() -> HTMLResponse:
             content_html=content,
             active_nav="about",
             page_data={"page": "about", "profile": profile},
+        )
+    )
+
+
+@router.get("/contact", response_class=HTMLResponse)
+async def public_contact() -> HTMLResponse:
+    async with async_session() as session:
+        profile = await get_public_profile(session)
+    payload = _profile_payload(profile)
+    contact_cards = "".join(
+        f"""
+        <article class="public-card">
+          <div class="public-kicker">{html.escape(item.get("label") or "Contact")}</div>
+          <h3>{html.escape(item.get("value") or "")}</h3>
+          <a class="public-project-link" href="{html.escape(item.get("href") or "#")}" target="_blank" rel="noreferrer">Reach out</a>
+        </article>
+        """
+        for item in (payload.get("contact") or [])
+        if item.get("href")
+    ) or '<article class="public-card"><div class="public-kicker">Contact</div><h3>Contact details are being curated.</h3></article>'
+    content = f"""
+    <div class="public-grid two">
+      <section class="public-card">
+        <div class="public-kicker">Let’s Talk</div>
+        <h2>Reach out directly.</h2>
+        <p>If you want to collaborate, hire, or just compare notes on systems, products, and AI, these are the cleanest channels.</p>
+      </section>
+      <section class="public-card">
+        <div class="public-kicker">Location</div>
+        <h2>{html.escape(payload.get("location") or settings.public_profile_location)}</h2>
+        <p>{html.escape(profile.get("summary") or "")}</p>
+      </section>
+    </div>
+    <div class="public-divider"></div>
+    <section class="public-grid two">{contact_cards}</section>
+    """
+    return HTMLResponse(
+        render_public_shell(
+            page_title=f"Contact {settings.public_profile_short_name}",
+            hero_kicker="Contact",
+            hero_title="A clean way to reach Ahmad.",
+            hero_subtitle="Public-facing contact lanes only. Private brain, vault, and admin surfaces stay behind login.",
+            content_html=content,
+            active_nav="contact",
+            page_data={"page": "contact", "profile": profile},
         )
     )
 
@@ -263,6 +314,11 @@ async def public_open_brain() -> HTMLResponse:
             page_script=page_script,
         )
     )
+
+
+@router.get("/admin", response_class=HTMLResponse)
+async def public_admin_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/dashboard/login", status_code=303)
 
 
 @router.get("/api/public/profile")

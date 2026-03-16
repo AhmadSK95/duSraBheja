@@ -4,7 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
+from src.api.app import app
+from src.config import settings
 from src.services import public_surface
 
 
@@ -48,6 +51,31 @@ def test_derive_public_facts_from_markdown_finds_profile_and_project_content(tmp
     assert any(fact["fact_key"] == "profile:identity" for fact in profile_facts)
     assert any(fact["facet"] == "skills" for fact in profile_facts)
     assert any(fact["project_slug"] == "dusrabheja" for fact in project_facts)
+
+
+def test_configured_public_contact_entries_follow_settings(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "public_contact_email", "ahmad2609.as@gmail.com")
+    monkeypatch.setattr(settings, "public_contact_linkedin_url", "https://www.linkedin.com/in/moenuddeen-shaik/")
+    monkeypatch.setattr(settings, "public_contact_instagram_url", "https://www.instagram.com/shaik.moen/")
+    monkeypatch.setattr(settings, "public_contact_phone", "")
+    monkeypatch.setattr(settings, "public_contact_discord_url", "")
+
+    entries = public_surface._configured_public_contact_entries()
+
+    assert [item["fact_key"] for item in entries] == [
+        "contact:email",
+        "contact:linkedin",
+        "contact:instagram",
+    ]
+    assert entries[0]["metadata_"]["href"] == "mailto:ahmad2609.as@gmail.com"
+
+
+def test_admin_alias_redirects_to_dashboard_login() -> None:
+    client = TestClient(app)
+    response = client.get("/admin", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard/login"
 
 
 @pytest.mark.asyncio

@@ -713,6 +713,14 @@ async def recompute_project_states(
             metadata_=connection_metadata.get((left, right)) or {},
         )
 
+    try:
+        from src.services.public_surface import refresh_public_snapshots_if_stale
+
+        await refresh_public_snapshots_if_stale(session)
+    except Exception:
+        # Public snapshots are derivative; project-state refresh should still succeed if the public layer fails.
+        pass
+
     return saved_snapshots
 
 

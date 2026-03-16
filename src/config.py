@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     public_profile_name: str = "Moenuddeen Ahmad Shaik"
     public_profile_short_name: str = "Ahmad"
     public_profile_location: str = "Jersey City, NJ"
+    public_contact_email: str = ""
+    public_contact_phone: str = ""
+    public_contact_linkedin_url: str = ""
+    public_contact_instagram_url: str = ""
+    public_contact_discord_url: str = ""
     public_profile_seed_path: str = "~/Desktop/CompanyInterviewPrep"
     public_snapshot_refresh_minutes: int = 240
     public_chat_rate_limit_per_hour: int = 30
