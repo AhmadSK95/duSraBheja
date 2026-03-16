@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -584,8 +584,90 @@ async def list_source_cleanup_candidates(
                 "artifact": artifact,
                 "project_note": note,
             }
-        )
+    )
     return rows
+
+
+async def list_journal_cleanup_candidates(
+    session: AsyncSession,
+    *,
+    entry_types: list[str] | None = None,
+    older_than_days: int | None = None,
+    limit: int = 1000,
+) -> list[dict]:
+    query = (
+        select(JournalEntry, Note)
+        .outerjoin(Note, Note.id == JournalEntry.project_note_id)
+        .order_by(JournalEntry.happened_at.desc().nullslast(), JournalEntry.created_at.desc())
+        .limit(limit)
+    )
+    if entry_types:
+        query = query.where(JournalEntry.entry_type.in_(entry_types))
+    if older_than_days is not None:
+        cutoff = _utcnow() - timedelta(days=max(0, older_than_days))
+        query = query.where(func.coalesce(JournalEntry.happened_at, JournalEntry.created_at) < cutoff)
+    result = await session.execute(query)
+    rows: list[dict] = []
+    for journal_entry, note in result.all():
+        rows.append({"journal_entry": journal_entry, "project_note": note})
+    return rows
+
+
+async def delete_canonical_records_for_sources(
+    session: AsyncSession,
+    *,
+    evidence_sources: dict[str, list[str]] | None = None,
+    observation_sources: dict[str, list[str]] | None = None,
+    episode_sources: dict[str, list[str]] | None = None,
+    synthesis_sources: dict[str, list[str]] | None = None,
+) -> dict[str, int]:
+    def _normalize(source_map: dict[str, list[str]] | None) -> dict[str, list[str]]:
+        cleaned: dict[str, list[str]] = {}
+        for source_kind, refs in (source_map or {}).items():
+            unique_refs = sorted({str(ref) for ref in refs if str(ref).strip()})
+            if unique_refs:
+                cleaned[source_kind] = unique_refs
+        return cleaned
+
+    counts = {
+        "evidence_records_deleted": 0,
+        "observation_records_deleted": 0,
+        "episode_records_deleted": 0,
+        "synthesis_records_deleted": 0,
+    }
+    for source_kind, refs in _normalize(evidence_sources).items():
+        result = await session.execute(
+            delete(EvidenceRecord).where(
+                EvidenceRecord.source_kind == source_kind,
+                EvidenceRecord.source_ref.in_(refs),
+            )
+        )
+        counts["evidence_records_deleted"] += result.rowcount or 0
+    for source_kind, refs in _normalize(observation_sources).items():
+        result = await session.execute(
+            delete(ObservationRecord).where(
+                ObservationRecord.source_kind == source_kind,
+                ObservationRecord.source_ref.in_(refs),
+            )
+        )
+        counts["observation_records_deleted"] += result.rowcount or 0
+    for source_kind, refs in _normalize(episode_sources).items():
+        result = await session.execute(
+            delete(EpisodeRecord).where(
+                EpisodeRecord.source_kind == source_kind,
+                EpisodeRecord.source_ref.in_(refs),
+            )
+        )
+        counts["episode_records_deleted"] += result.rowcount or 0
+    for source_kind, refs in _normalize(synthesis_sources).items():
+        result = await session.execute(
+            delete(SynthesisRecord).where(
+                SynthesisRecord.source_kind == source_kind,
+                SynthesisRecord.source_ref.in_(refs),
+            )
+        )
+        counts["synthesis_records_deleted"] += result.rowcount or 0
+    return counts
 
 
 async def create_link(session: AsyncSession, **kwargs) -> Link:
@@ -1265,6 +1347,23 @@ async def purge_source_items(
     rows = list(result.all())
     artifact_ids = {source_item.artifact_id for source_item, _ in rows if source_item.artifact_id}
     project_note_ids = {source_item.project_note_id for source_item, _ in rows if source_item.project_note_id}
+    source_item_refs = [str(source_item.id) for source_item, _ in rows]
+
+    conversation_session_ids: list[str] = []
+    if source_item_ids:
+        conversation_result = await session.execute(
+            select(ConversationSession.id).where(ConversationSession.source_item_id.in_(source_item_ids))
+        )
+        conversation_session_ids = [str(value) for value in conversation_result.scalars().all()]
+
+    journal_entry_ids: list[str] = []
+    journal_predicates = [JournalEntry.source_item_id.in_(source_item_ids)]
+    if artifact_ids:
+        journal_predicates.append(JournalEntry.artifact_id.in_(artifact_ids))
+    journal_result = await session.execute(
+        select(JournalEntry.id).where(or_(*journal_predicates))
+    )
+    journal_entry_ids = [str(value) for value in journal_result.scalars().all()]
 
     protected_deleted = 0
     for source_item, sync_source in rows:
@@ -1285,6 +1384,16 @@ async def purge_source_items(
         await session.execute(delete(Classification).where(Classification.artifact_id.in_(artifact_ids)))
         await session.execute(delete(Artifact).where(Artifact.id.in_(artifact_ids)))
 
+    canonical_result = await delete_canonical_records_for_sources(
+        session,
+        evidence_sources={
+            "source_item": source_item_refs,
+            "artifact": [str(value) for value in artifact_ids],
+        },
+        observation_sources={"journal_entry": journal_entry_ids},
+        episode_sources={"conversation_session": conversation_session_ids},
+        synthesis_sources={"journal_entry": journal_entry_ids},
+    )
     deleted_source_items = await session.execute(delete(SourceItem).where(SourceItem.id.in_(source_item_ids)))
     await session.commit()
     return {
@@ -1292,6 +1401,107 @@ async def purge_source_items(
         "artifacts_deleted": len(artifact_ids),
         "protected_contents_deleted": protected_deleted,
         "project_note_ids_touched": [str(value) for value in sorted(project_note_ids)],
+        **canonical_result,
+    }
+
+
+async def purge_journal_entries(
+    session: AsyncSession,
+    *,
+    journal_entry_ids: list[uuid.UUID],
+) -> dict:
+    if not journal_entry_ids:
+        return {
+            "journal_entries_deleted": 0,
+            "project_note_ids_touched": [],
+            "observation_records_deleted": 0,
+            "synthesis_records_deleted": 0,
+        }
+
+    result = await session.execute(
+        select(JournalEntry).where(JournalEntry.id.in_(journal_entry_ids))
+    )
+    entries = list(result.scalars().all())
+    project_note_ids = {entry.project_note_id for entry in entries if entry.project_note_id}
+    journal_refs = [str(entry.id) for entry in entries]
+
+    canonical_result = await delete_canonical_records_for_sources(
+        session,
+        observation_sources={"journal_entry": journal_refs},
+        synthesis_sources={"journal_entry": journal_refs},
+    )
+    deleted = await session.execute(delete(JournalEntry).where(JournalEntry.id.in_(journal_entry_ids)))
+    await session.commit()
+    return {
+        "journal_entries_deleted": deleted.rowcount or 0,
+        "project_note_ids_touched": [str(value) for value in sorted(project_note_ids)],
+        **canonical_result,
+    }
+
+
+async def purge_orphaned_canonical_records(session: AsyncSession) -> dict[str, int]:
+    artifact_refs = {str(value) for value in (await session.execute(select(Artifact.id))).scalars().all()}
+    source_item_refs = {str(value) for value in (await session.execute(select(SourceItem.id))).scalars().all()}
+    journal_entry_refs = {str(value) for value in (await session.execute(select(JournalEntry.id))).scalars().all()}
+    conversation_refs = {str(value) for value in (await session.execute(select(ConversationSession.id))).scalars().all()}
+
+    evidence_rows = (
+        await session.execute(
+            select(EvidenceRecord.id, EvidenceRecord.source_kind, EvidenceRecord.source_ref)
+            .where(EvidenceRecord.source_kind.in_(["artifact", "source_item"]))
+        )
+    ).all()
+    observation_rows = (
+        await session.execute(
+            select(ObservationRecord.id, ObservationRecord.source_ref)
+            .where(ObservationRecord.source_kind == "journal_entry")
+        )
+    ).all()
+    synthesis_rows = (
+        await session.execute(
+            select(SynthesisRecord.id, SynthesisRecord.source_ref)
+            .where(SynthesisRecord.source_kind == "journal_entry")
+        )
+    ).all()
+    episode_rows = (
+        await session.execute(
+            select(EpisodeRecord.id, EpisodeRecord.source_ref)
+            .where(EpisodeRecord.source_kind == "conversation_session")
+        )
+    ).all()
+
+    evidence_ids_to_delete: list[uuid.UUID] = []
+    for record_id, source_kind, source_ref in evidence_rows:
+        valid_refs = artifact_refs if source_kind == "artifact" else source_item_refs
+        if source_ref not in valid_refs:
+            evidence_ids_to_delete.append(record_id)
+
+    observation_ids_to_delete = [record_id for record_id, source_ref in observation_rows if source_ref not in journal_entry_refs]
+    synthesis_ids_to_delete = [record_id for record_id, source_ref in synthesis_rows if source_ref not in journal_entry_refs]
+    episode_ids_to_delete = [record_id for record_id, source_ref in episode_rows if source_ref not in conversation_refs]
+
+    evidence_deleted = 0
+    observation_deleted = 0
+    synthesis_deleted = 0
+    episode_deleted = 0
+    if evidence_ids_to_delete:
+        result = await session.execute(delete(EvidenceRecord).where(EvidenceRecord.id.in_(evidence_ids_to_delete)))
+        evidence_deleted = result.rowcount or 0
+    if observation_ids_to_delete:
+        result = await session.execute(delete(ObservationRecord).where(ObservationRecord.id.in_(observation_ids_to_delete)))
+        observation_deleted = result.rowcount or 0
+    if synthesis_ids_to_delete:
+        result = await session.execute(delete(SynthesisRecord).where(SynthesisRecord.id.in_(synthesis_ids_to_delete)))
+        synthesis_deleted = result.rowcount or 0
+    if episode_ids_to_delete:
+        result = await session.execute(delete(EpisodeRecord).where(EpisodeRecord.id.in_(episode_ids_to_delete)))
+        episode_deleted = result.rowcount or 0
+    await session.commit()
+    return {
+        "orphaned_evidence_deleted": evidence_deleted,
+        "orphaned_observations_deleted": observation_deleted,
+        "orphaned_syntheses_deleted": synthesis_deleted,
+        "orphaned_episodes_deleted": episode_deleted,
     }
 
 

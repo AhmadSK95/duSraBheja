@@ -21,6 +21,7 @@ NAV_ITEMS = [
     ("subconscious", "Subconscious", "/dashboard/subconscious"),
     ("brain-os", "Brain OS", "/dashboard/brain-os"),
     ("secret-vault", "Secret Vault", "/dashboard/secret-vault"),
+    ("cleanup", "Cleanup", "/dashboard/cleanup"),
     ("health", "Health", "/dashboard/health"),
 ]
 

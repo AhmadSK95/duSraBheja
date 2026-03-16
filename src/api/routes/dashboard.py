@@ -23,6 +23,7 @@ from src.services.boards import daily_board_window, generate_or_refresh_board, w
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
 from src.services.digest import generate_or_refresh_digest
 from src.services.evaluation import run_query_eval
+from src.services.library_cleanup import build_library_cleanup_preview
 from src.services.library import build_final_stored_data, build_library_catalog
 from src.services.project_state import recompute_project_states
 from src.services.secrets import build_secret_inventory
@@ -499,6 +500,70 @@ def _render_health_page(snapshot: dict, *, token: str) -> HTMLResponse:
     )
 
 
+def _render_cleanup_page(payload: dict, *, token: str) -> HTMLResponse:
+    samples = list(payload.get("samples") or [])
+    count_cards = f"""
+    <div class="atlas-stat-row">
+      {_metric('Candidates', str(payload.get('candidate_count', 0)))}
+      {_metric('Legacy Sources', str(payload.get('source_candidate_count', 0)))}
+      {_metric('Derived Journals', str(payload.get('journal_candidate_count', 0)))}
+      {_metric('Reset Links', ', '.join(payload.get('story_connections_reset') or ['none']))}
+    </div>
+    """
+    counts_html = "".join(
+        _list_item(source_type, f"{count} candidates", meta=["source family"])
+        for source_type, count in sorted((payload.get("by_source_type") or {}).items())
+    ) or '<div class="atlas-empty">No cleanup candidates are waiting.</div>'
+    entry_type_html = "".join(
+        _list_item(entry_type, f"{count} rows", meta=["entry type"])
+        for entry_type, count in sorted((payload.get("by_entry_type") or {}).items(), key=lambda item: (-item[1], item[0]))
+    ) or '<div class="atlas-empty">No low-signal entry types are active.</div>'
+    samples_html = "".join(
+        _list_item(
+            item.get("title") or "Candidate",
+            f"{item.get('kind')}: {item.get('entry_type')}",
+            meta=[item.get("source_type") or "", item.get("project") or ""],
+        )
+        for item in samples
+    ) or '<div class="atlas-empty">No sample candidates to inspect.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        {count_cards}
+      </section>
+      <section class="atlas-card atlas-card--span-4">
+        <h2>By Source</h2>
+        <div class="atlas-list">{counts_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-4">
+        <h2>By Entry Type</h2>
+        <div class="atlas-list">{entry_type_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-4">
+        <h2>Runbook</h2>
+        <div class="atlas-list">
+          {_list_item('1. Promote canonical memory', 'The cleanup starts by refreshing the canonical library so value is preserved before anything is deleted.', meta=[])}
+          {_list_item('2. Prune legacy rows', 'Old source dumps and stale derived journal entries are deleted with their canonical echoes.', meta=[])}
+          {_list_item('3. Reset story links', 'Co-signal story links are cleared so the atlas can rebuild from cleaner evidence.', meta=[])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Sample Candidates</h2>
+        <div class="atlas-list">{samples_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Cleanup Preview",
+        token=token,
+        active_page="cleanup",
+        hero_kicker="Promotion Then Prune",
+        hero_title="Cleanup Preview",
+        hero_subtitle="This shows the exact story-era rows queued for deletion after their value has been promoted into the canonical library.",
+        content_html=content_html,
+    )
+
+
 def _render_final_data_page(payload: dict, *, token: str) -> HTMLResponse:
     counts = dict(payload.get("counts") or {})
     items = list(payload.get("items") or [])
@@ -696,6 +761,13 @@ async def dashboard_health(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
         snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
     return _render_health_page(snapshot, token=token)
+
+
+@router.get("/dashboard/cleanup", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_cleanup(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        payload = await build_library_cleanup_preview(session)
+    return _render_cleanup_page(payload, token=token)
 
 
 @router.get("/dashboard/artifacts", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -1130,6 +1202,12 @@ async def get_dashboard_secret_vault() -> dict:
         "count": len(inventory),
         "items": inventory,
     }
+
+
+@api_router.get("/cleanup-preview", dependencies=[Depends(require_api_token)])
+async def get_dashboard_cleanup_preview() -> dict:
+    async with async_session() as session:
+        return await build_library_cleanup_preview(session)
 
 
 @api_router.get("/health", dependencies=[Depends(require_api_token)])

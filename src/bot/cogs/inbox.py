@@ -15,6 +15,7 @@ from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
 from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact, update_retrieval_trace
+from src.services.secrets import capture_secret_drop, extract_secret_candidates
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -62,6 +63,10 @@ class InboxCog(commands.Cog):
         if message.author.bot:
             return
 
+        if isinstance(message.channel, discord.DMChannel):
+            await self._handle_direct_message(message)
+            return
+
         # Handle review thread replies
         if isinstance(message.channel, discord.Thread):
             await self._handle_thread_reply(message)
@@ -81,6 +86,48 @@ class InboxCog(commands.Cog):
         ):
             await self._handle_feedback_capture(message)
             return
+
+    async def _handle_direct_message(self, message: discord.Message):
+        if not settings.discord_owner_user_id or message.author.id != settings.discord_owner_user_id:
+            await message.reply(
+                "This DM path is reserved for the owner vault workflow only.",
+                mention_author=False,
+            )
+            return
+
+        body = (message.content or "").strip()
+        if not body and not message.attachments:
+            return
+
+        if not _looks_like_secret_drop(body):
+            await message.reply(
+                "Use this DM for secret drops. Prefix with `vault:` or paste the credential directly with a label, and I’ll store it in the vault.",
+                mention_author=False,
+            )
+            return
+
+        async with async_session() as session:
+            records, _ = await capture_secret_drop(
+                session,
+                text=body,
+                source_kind="discord_dm",
+                source_ref=f"discord-dm:{message.author.id}:{message.id}",
+                purpose_label="Owner Discord DM secret drop",
+                alias_hints=["discord-dm", message.author.display_name or message.author.name],
+            )
+
+        if records:
+            await message.add_reaction("\U0001f512")
+            await message.reply(
+                f"Stored {len(records)} secret entr{'y' if len(records) == 1 else 'ies'} in the owner vault. Reveal still requires dashboard login plus a fresh Discord OTP challenge.",
+                mention_author=False,
+            )
+            return
+
+        await message.reply(
+            "I didn’t find a storable secret there. Try `vault: label = value` so I can vault it cleanly.",
+            mention_author=False,
+        )
 
     async def _handle_inbox_message(self, message: discord.Message):
         """Process a new message in #inbox."""
@@ -461,6 +508,15 @@ def _looks_like_reminder_request(text: str) -> bool:
         or lowered.startswith("set a reminder")
         or re.search(r"\bevery\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", lowered)
     )
+
+
+def _looks_like_secret_drop(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered.startswith(("vault:", "secret:", "/vault", "/secret", "store secret")):
+        return True
+    return bool(extract_secret_candidates(text or ""))
 
 
 def _extract_capture_hint(text: str) -> str | None:

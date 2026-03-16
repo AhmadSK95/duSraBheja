@@ -180,6 +180,66 @@ async def capture_secrets_from_text(
     return records, redact_secret_candidates(text, candidates)
 
 
+async def capture_secret_drop(
+    session: AsyncSession,
+    *,
+    text: str,
+    source_kind: str,
+    source_ref: str,
+    purpose_label: str,
+    alias_hints: list[str] | None = None,
+    thread_refs: list[str] | None = None,
+    entity_refs: list[str] | None = None,
+) -> tuple[list, str]:
+    records, redacted = await capture_secrets_from_text(
+        session,
+        text=text,
+        source_kind=source_kind,
+        source_ref=source_ref,
+        purpose_label=purpose_label,
+        alias_hints=alias_hints,
+        thread_refs=thread_refs,
+        entity_refs=entity_refs,
+    )
+    if records or not (text or "").strip():
+        return records, redacted
+
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")[:120]
+    label = first_line or purpose_label or "Owner secret drop"
+    encrypted = encrypt_text(
+        text,
+        associated_data=f"secret:{source_kind}:{source_ref}",
+    )
+    secret = await store.upsert_secret_record(
+        session,
+        source_kind=source_kind,
+        source_ref=source_ref,
+        secret_type="secret_note",
+        label=label,
+        ciphertext=encrypted["ciphertext"],
+        nonce=encrypted["nonce"],
+        checksum=encrypted["checksum"],
+        masked_preview="owner-note…",
+        owner_scope="owner",
+        thread_refs=list(thread_refs or []),
+        entity_refs=list(entity_refs or []),
+        source_refs=[source_ref],
+        rotation_metadata={},
+        metadata_={"purpose_label": purpose_label, "ingest_mode": "owner_dm_drop"},
+        aliases=[label, *(alias_hints or [])],
+    )
+    await store.create_secret_audit_entry(
+        session,
+        requester="system",
+        action="secret_drop_captured",
+        secret_id=secret.id,
+        purpose=purpose_label,
+        status="ok",
+        metadata_={"source_kind": source_kind, "source_ref": source_ref},
+    )
+    return [secret], f"[REDACTED SECRET DROP: {label}]"
+
+
 async def _send_owner_discord_dm(message: str) -> None:
     if not settings.discord_token:
         raise RuntimeError("Discord bot token is not configured for secret challenges.")

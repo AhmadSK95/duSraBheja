@@ -187,3 +187,39 @@ async def test_verify_secret_challenge_rejects_expired_code(monkeypatch) -> None
         )
 
     assert challenge.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_capture_secret_drop_stores_unstructured_owner_note(monkeypatch) -> None:
+    master_key = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("utf-8")
+    monkeypatch.setattr(secret_service.settings, "encryption_master_key", master_key)
+    stored: dict[str, object] = {}
+
+    async def fake_upsert_secret_record(session, *, source_kind, source_ref, aliases=None, **values):
+        stored["source_kind"] = source_kind
+        stored["source_ref"] = source_ref
+        stored["aliases"] = aliases or []
+        stored["values"] = values
+        return SimpleNamespace(id=uuid4(), label=values["label"], secret_type=values["secret_type"])
+
+    async def fake_audit(*args, **kwargs):
+        stored["audit"] = kwargs["action"]
+        return None
+
+    monkeypatch.setattr(secret_service.store, "upsert_secret_record", fake_upsert_secret_record)
+    monkeypatch.setattr(secret_service.store, "create_secret_audit_entry", fake_audit)
+
+    records, redacted = await secret_service.capture_secret_drop(
+        object(),
+        text="DigitalOcean root password for rebuild window",
+        source_kind="discord_dm",
+        source_ref="discord-dm:1:2",
+        purpose_label="Owner Discord DM secret drop",
+        alias_hints=["discord-dm"],
+    )
+
+    assert len(records) == 1
+    assert redacted.startswith("[REDACTED SECRET DROP:")
+    assert stored["source_kind"] == "discord_dm"
+    assert stored["values"]["secret_type"] == "secret_note"
+    assert stored["audit"] == "secret_drop_captured"
