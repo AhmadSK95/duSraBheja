@@ -8,6 +8,7 @@ APP_DIR="${APP_DIR:-/opt/dusrabheja}"
 GIT_REMOTE_URL="${GIT_REMOTE_URL:-https://github.com/AhmadSK95/duSraBheja.git}"
 GIT_REF="${1:-main}"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-.env}"
+PUBLIC_SEED_DIR="${PUBLIC_SEED_DIR:-$HOME/Desktop/CompanyInterviewPrep}"
 
 if [[ ! -f "$LOCAL_ENV_FILE" ]]; then
   echo "Missing env file: $LOCAL_ENV_FILE" >&2
@@ -30,6 +31,11 @@ SSH=(ssh -i "$SERVER_SSH_KEY" "${SERVER_USER}@${SERVER_HOST}")
 "
 
 "${SSH[@]}" "cat > '$APP_DIR/.env'" < "$LOCAL_ENV_FILE"
+
+if [[ -d "$PUBLIC_SEED_DIR" ]]; then
+  "${SSH[@]}" "mkdir -p '$APP_DIR/public-seed'"
+  rsync -a -e "ssh -i $SERVER_SSH_KEY" "$PUBLIC_SEED_DIR"/ "${SERVER_USER}@${SERVER_HOST}:$APP_DIR/public-seed/"
+fi
 
 "${SSH[@]}" "
   set -euo pipefail

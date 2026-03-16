@@ -186,7 +186,13 @@ def _dedupe_fact_dicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _public_seed_path() -> Path:
-    return Path(settings.public_profile_seed_path).expanduser()
+    configured = Path(settings.public_profile_seed_path).expanduser()
+    if configured.exists():
+        return configured
+    mounted = Path("/public-seed")
+    if mounted.exists():
+        return mounted
+    return configured
 
 
 def _configured_public_contact_entries() -> list[dict[str, Any]]:

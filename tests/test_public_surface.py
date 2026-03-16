@@ -70,6 +70,19 @@ def test_configured_public_contact_entries_follow_settings(monkeypatch) -> None:
     assert entries[0]["metadata_"]["href"] == "mailto:ahmad2609.as@gmail.com"
 
 
+def test_public_seed_path_falls_back_to_container_mount(monkeypatch, tmp_path: Path) -> None:
+    missing = tmp_path / "missing-seed"
+    mounted = tmp_path / "public-seed"
+    mounted.mkdir()
+
+    monkeypatch.setattr(settings, "public_profile_seed_path", str(missing))
+    monkeypatch.setattr(public_surface, "Path", lambda value: mounted if value == "/public-seed" else Path(value))
+
+    path = public_surface._public_seed_path()
+
+    assert path == mounted
+
+
 def test_admin_alias_redirects_to_dashboard_login() -> None:
     client = TestClient(app)
     response = client.get("/admin", follow_redirects=False)

@@ -89,6 +89,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - brain-blobs:/data/blobs
+      - ./public-seed:/public-seed:ro
     networks:
       - brain-net
     command: python -m src.api.main
