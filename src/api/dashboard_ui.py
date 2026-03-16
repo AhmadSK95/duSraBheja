@@ -20,6 +20,7 @@ NAV_ITEMS = [
     ("media", "Media", "/dashboard/media"),
     ("subconscious", "Subconscious", "/dashboard/subconscious"),
     ("brain-os", "Brain OS", "/dashboard/brain-os"),
+    ("public-facts", "Public Facts", "/dashboard/public-facts"),
     ("secret-vault", "Secret Vault", "/dashboard/secret-vault"),
     ("cleanup", "Cleanup", "/dashboard/cleanup"),
     ("health", "Health", "/dashboard/health"),

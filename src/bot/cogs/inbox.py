@@ -15,7 +15,14 @@ from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
 from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact, update_retrieval_trace
-from src.services.secrets import capture_secret_drop, extract_secret_candidates
+from src.services.secrets import (
+    build_secret_inventory,
+    capture_secret_drop,
+    describe_secret_history,
+    extract_secret_candidates,
+    reveal_secret_for_owner_dm,
+    store_secret_value,
+)
 
 log = logging.getLogger("brain-bot.inbox")
 
@@ -99,9 +106,20 @@ class InboxCog(commands.Cog):
         if not body and not message.attachments:
             return
 
+        command = _parse_owner_vault_command(body)
+        if command:
+            async with async_session() as session:
+                try:
+                    response = await _execute_owner_vault_command(session, command)
+                except ValueError as exc:
+                    await message.reply(str(exc), mention_author=False)
+                    return
+            await message.reply(response, mention_author=False)
+            return
+
         if not _looks_like_secret_drop(body):
             await message.reply(
-                "Use this DM for secret drops. Prefix with `vault:` or paste the credential directly with a label, and I’ll store it in the vault.",
+                "Use this DM for secrets. You can drop `vault: label = value`, or use commands like `vault list`, `vault show digitalocean`, `vault history openai`, or `vault store digitalocean | deployer | hunter2`.",
                 mention_author=False,
             )
             return
@@ -119,7 +137,7 @@ class InboxCog(commands.Cog):
         if records:
             await message.add_reaction("\U0001f512")
             await message.reply(
-                f"Stored {len(records)} secret entr{'y' if len(records) == 1 else 'ies'} in the owner vault. Reveal still requires dashboard login plus a fresh Discord OTP challenge.",
+                f"Stored {len(records)} secret entr{'y' if len(records) == 1 else 'ies'} in the owner vault. This DM is the trusted owner lane, so you can ask me for the latest value directly here anytime.",
                 mention_author=False,
             )
             return
@@ -517,6 +535,92 @@ def _looks_like_secret_drop(text: str) -> bool:
     if lowered.startswith(("vault:", "secret:", "/vault", "/secret", "store secret")):
         return True
     return bool(extract_secret_candidates(text or ""))
+
+
+def _parse_owner_vault_command(text: str) -> dict | None:
+    lowered = (text or "").strip().lower()
+    if not lowered.startswith("vault "):
+        return None
+    command_body = text.strip()[6:].strip()
+    if not command_body:
+        return None
+    for action in ("list", "show", "latest", "history", "store"):
+        if command_body.lower() == action or command_body.lower().startswith(f"{action} "):
+            remainder = command_body[len(action):].strip()
+            return {"action": action, "args": remainder}
+    return None
+
+
+def _parse_store_secret_args(raw: str) -> dict:
+    stripped = raw.strip()
+    if not stripped:
+        raise ValueError("Use `vault store label | username | value` or `vault store label = value`.")
+    if "=" in stripped:
+        label, value = stripped.split("=", 1)
+        return {"label": label.strip(), "username": None, "value": value.strip()}
+    parts = [part.strip() for part in stripped.split("|")]
+    if len(parts) == 2:
+        label, value = parts
+        return {"label": label, "username": None, "value": value}
+    if len(parts) >= 3:
+        label, username, value = parts[:3]
+        return {"label": label, "username": username or None, "value": value}
+    raise ValueError("Use `vault store label | username | value` or `vault store label = value`.")
+
+
+async def _execute_owner_vault_command(session, command: dict) -> str:
+    action = command["action"]
+    args = command.get("args") or ""
+    if action == "list":
+        inventory = await build_secret_inventory(session)
+        if not inventory:
+            return "The owner vault is empty right now."
+        lines = [
+            f"- {item['label']} | {item.get('masked_preview') or 'n/a'} | user={item.get('username') or 'n/a'} | versions={item.get('version_count') or 1}"
+            for item in inventory[:20]
+        ]
+        return "Owner vault inventory:\n" + "\n".join(lines)
+
+    if action in {"show", "latest"}:
+        if not args:
+            raise ValueError("Tell me which secret to reveal, for example `vault show digitalocean`.")
+        payload = await reveal_secret_for_owner_dm(session, alias=args, version="latest")
+        username_line = f"\nusername: {payload['username']}" if payload.get("username") else ""
+        return (
+            f"{payload['label']}\n"
+            f"type: {payload['category']}{username_line}\n"
+            f"value: {payload['value']}\n"
+            f"stored: {payload['created_at']}"
+        )
+
+    if action == "history":
+        if not args:
+            raise ValueError("Tell me which secret history you want, for example `vault history openai`.")
+        payload = await describe_secret_history(session, alias=args)
+        lines = [
+            f"- v{item['index']} | {item['masked_preview']} | user={item.get('username') or 'n/a'} | {'current' if item['is_current'] else 'old'} | {item['created_at']}"
+            for item in payload["versions"]
+        ]
+        return f"History for {payload['label']}:\n" + "\n".join(lines)
+
+    if action == "store":
+        parsed = _parse_store_secret_args(args)
+        identity, version, created = await store_secret_value(
+            session,
+            label=parsed["label"],
+            value=parsed["value"],
+            username=parsed.get("username"),
+            source_kind="discord_dm",
+            source_ref=f"owner-dm-command:{parsed['label'].lower().strip()}",
+            secret_type="credential",
+            aliases=["owner-dm", parsed["label"]],
+            metadata_={"ingest_mode": "owner_dm_command"},
+        )
+        verb = "Stored" if created else "Updated"
+        username_line = f" | user={version.username}" if getattr(version, "username", None) else ""
+        return f"{verb} {identity.label} in the owner vault{username_line}."
+
+    raise ValueError("Unknown vault command.")
 
 
 def _extract_capture_hint(text: str) -> str | None:

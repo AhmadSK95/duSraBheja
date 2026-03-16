@@ -165,3 +165,8 @@ class SecretVerifyRequest(BaseModel):
 
 class SecretRevealRequest(BaseModel):
     grant_token: str = Field(min_length=12)
+
+
+class PublicChatRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    turnstile_token: str = Field(min_length=1)

@@ -211,6 +211,7 @@ def _format_brain_protocol_answer(payload: dict[str, Any]) -> str:
     protocols = payload.get("protocols") or {}
     mcp = protocols.get("mcp") or {}
     cli = protocols.get("cli") or {}
+    public_http = protocols.get("public_http") or {}
     return (
         "Yes. The clean way for another AI agent to connect to me is through MCP first, and HTTP second.\n\n"
         "Use MCP when possible:\n"
@@ -221,7 +222,8 @@ def _format_brain_protocol_answer(payload: dict[str, Any]) -> str:
         "If you are using the local repo scripts instead of MCP:\n"
         f"- bootstrap: `{cli.get('bootstrap') or 'brain_session.py bootstrap'}`\n"
         f"- closeout: `{cli.get('closeout') or 'brain_session.py closeout'}`\n\n"
-        "Secret access is separate: it requires dashboard/API auth plus a fresh Discord DM OTP before any reveal."
+        f"The public-facing profile/chat surface lives at {public_http.get('base_url') or 'the public brain URL'}.\n\n"
+        "Secret access is separate: owner DM can reveal directly, while dashboard/API access still requires a fresh Discord DM OTP before any reveal."
     )
 
 

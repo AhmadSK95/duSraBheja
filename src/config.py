@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     secret_challenge_ttl_minutes: int = 5
     secret_challenge_max_attempts: int = 5
     secret_access_grant_ttl_seconds: int = 120
+    public_base_url: str = "https://brain.thisisrikisart.com"
+    public_site_title: str = "Ahmad Shaik"
+    public_profile_name: str = "Moenuddeen Ahmad Shaik"
+    public_profile_short_name: str = "Ahmad"
+    public_profile_location: str = "Jersey City, NJ"
+    public_profile_seed_path: str = "~/Desktop/CompanyInterviewPrep"
+    public_snapshot_refresh_minutes: int = 240
+    public_chat_rate_limit_per_hour: int = 30
+    public_chat_session_window_minutes: int = 60
+    cloudflare_turnstile_site_key: str = ""
+    cloudflare_turnstile_secret_key: str = ""
+    cloudflare_turnstile_verify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
     # Blob storage
     blob_storage_path: str = "/data/blobs"
@@ -115,6 +127,12 @@ class Settings(BaseSettings):
 
     # Story retrieval
     story_max_events: int = 25
+
+    # Provider topology
+    providers_config_path: str = "providers.yaml"
+    default_reasoning_provider: str = "anthropic"
+    default_openai_base_url: str = ""
+    default_local_openai_base_url: str = ""
 
     # GitHub
     github_api_token: str = ""

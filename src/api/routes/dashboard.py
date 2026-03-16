@@ -27,6 +27,7 @@ from src.services.library_cleanup import build_library_cleanup_preview
 from src.services.library import build_final_stored_data, build_library_catalog
 from src.services.project_state import recompute_project_states
 from src.services.secrets import build_secret_inventory
+from src.services.public_surface import list_public_facts, refresh_public_snapshots, seed_public_facts_from_interview_prep, update_public_fact
 from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_pool
 
 router = APIRouter(tags=["dashboard"])
@@ -97,6 +98,23 @@ def _list_item(title: str, summary: str, *, meta: list[str] | None = None) -> st
 
 def _serialize_json(payload: object) -> str:
     return json.dumps(payload, default=str).replace("</", "<\\/")
+
+
+async def _public_fact_payloads(session) -> list[dict]:
+    facts = await list_public_facts(session, limit=300)
+    return [
+        {
+            "id": str(fact.id),
+            "title": fact.title,
+            "body": fact.body,
+            "fact_type": fact.fact_type,
+            "facet": fact.facet,
+            "approved": fact.approved,
+            "project_slug": fact.project_slug,
+            "updated_at": _fmt_dt(fact.updated_at),
+        }
+        for fact in facts
+    ]
 
 
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
@@ -641,10 +659,37 @@ def _render_brain_os_page(payload: dict, *, token: str) -> HTMLResponse:
 
 def _render_secret_vault_page(inventory: list[dict], *, token: str) -> HTMLResponse:
     cards = "".join(
-        _list_item(
-            item.get("label") or "Secret",
-            f"masked={item.get('masked_preview')} | aliases={', '.join(item.get('aliases') or []) or 'none'}",
-            meta=[item.get("secret_type") or "", item.get("owner_scope") or "", item.get("updated_at") or ""],
+        (
+            _list_item(
+                item.get("label") or "Secret",
+                " | ".join(
+                    value
+                    for value in [
+                        f"masked={item.get('masked_preview')}",
+                        f"user={item.get('username') or 'n/a'}",
+                        f"versions={item.get('version_count') or 1}",
+                        f"aliases={', '.join(item.get('aliases') or []) or 'none'}",
+                    ]
+                    if value
+                ),
+                meta=[item.get("category") or "", item.get("owner_scope") or "", item.get("updated_at") or ""],
+            )
+            + "".join(
+                _list_item(
+                    f"Version {index}",
+                    " | ".join(
+                        value
+                        for value in [
+                            f"masked={version.get('masked_preview')}",
+                            f"user={version.get('username') or 'n/a'}",
+                            "current" if version.get("is_current") else "historical",
+                        ]
+                        if value
+                    ),
+                    meta=[version.get("created_at") or "", version.get("superseded_at") or ""],
+                )
+                for index, version in enumerate(item.get("versions") or [], start=1)
+            )
         )
         for item in inventory
     ) or '<div class="atlas-empty">No secrets are in the owner vault yet.</div>'
@@ -652,7 +697,7 @@ def _render_secret_vault_page(inventory: list[dict], *, token: str) -> HTMLRespo
     <div class="atlas-grid">
       <section class="atlas-card atlas-card--span-12">
         <h2>Owner Vault</h2>
-        <p>Secrets are encrypted at rest, masked everywhere else, and only revealed after a fresh Discord DM OTP. They never show up in public channels, traces, or normal retrieval output.</p>
+        <p>Secrets are encrypted at rest, versioned over time, and never appear in public channels, traces, boards, digests, or normal retrieval output. Owner DM is the trusted direct-reveal lane; dashboard reveal still uses OTP step-up per reveal.</p>
       </section>
       <section class="atlas-card atlas-card--span-7">
         <h2>Masked Inventory</h2>
@@ -661,9 +706,9 @@ def _render_secret_vault_page(inventory: list[dict], *, token: str) -> HTMLRespo
       <section class="atlas-card atlas-card--span-5">
         <h2>Reveal Workflow</h2>
         <div class="atlas-list">
-          {_list_item('1. Request challenge', 'POST /api/secrets/challenge with a purpose string and either a secret_id or alias.', meta=[])}
-          {_list_item('2. Read your Discord DM', 'The six-digit OTP is delivered only to your owner DM, never to the server.', meta=[])}
-          {_list_item('3. Verify and reveal once', 'POST /api/secrets/verify, then POST /api/secrets/{secret_id}/reveal with the short-lived grant token.', meta=[])}
+          {_list_item('Owner DM lane', 'DM KePOBot with vault commands like `vault list`, `vault show digitalocean`, or `vault history openai`. Owner DM is trusted and reveals directly there.', meta=[])}
+          {_list_item('Dashboard lane', 'Use the masked vault view for browsing and history. OTP is only required if you reveal from the dashboard or API.', meta=[])}
+          {_list_item('Rotation support', 'New passwords create new versions automatically. The latest version becomes current unless you explicitly pin another one.', meta=[])}
         </div>
       </section>
     </div>
@@ -674,7 +719,48 @@ def _render_secret_vault_page(inventory: list[dict], *, token: str) -> HTMLRespo
         active_page="secret-vault",
         hero_kicker="Owner Access Only",
         hero_title="Secret Vault",
-        hero_subtitle="Masked inventory plus the owner-verification workflow. Secrets stay outside normal memory and require fresh Discord DM OTP step-up access to reveal.",
+        hero_subtitle="Masked inventory, version history, and the split reveal model: direct in owner DM, OTP-gated from dashboard and API.",
+        content_html=content_html,
+    )
+
+
+def _render_public_facts_page(facts: list[dict], *, token: str) -> HTMLResponse:
+    rows = "".join(
+        _list_item(
+            item.get("title") or "Public fact",
+            item.get("body") or "",
+            meta=[
+                item.get("fact_type") or "",
+                item.get("facet") or "",
+                "approved" if item.get("approved") else "proposed",
+                item.get("project_slug") or "",
+            ],
+        )
+        for item in facts
+    ) or '<div class="atlas-empty">No approved public facts exist yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Public Allowlist Layer</h2>
+        <p>Public pages and the public chatbot read only from these approved facts and their derived snapshots. Nothing private becomes public automatically.</p>
+        <div class="atlas-list">
+          {_list_item('Seed from interview prep', 'POST /api/dashboard/public-facts/seed pulls from CompanyInterviewPrep markdown and converts it into approved public-safe facts.', meta=[])}
+          {_list_item('Refresh snapshots', 'POST /api/dashboard/public-facts/refresh rebuilds the public profile, projects, and FAQ from approved facts only.', meta=[])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Approved Facts</h2>
+        <div class="atlas-list">{rows}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Public Facts",
+        token=token,
+        active_page="public-facts",
+        hero_kicker="Public Surface",
+        hero_title="Approved Public Facts",
+        hero_subtitle="The allowlist layer that powers the public portfolio and public profile chatbot.",
         content_html=content_html,
     )
 
@@ -754,6 +840,13 @@ async def dashboard_secret_vault(token: str = Query(default="")) -> HTMLResponse
     async with async_session() as session:
         inventory = await build_secret_inventory(session)
     return _render_secret_vault_page(inventory, token=token)
+
+
+@router.get("/dashboard/public-facts", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_public_facts(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        facts = await _public_fact_payloads(session)
+    return _render_public_facts_page(facts, token=token)
 
 
 @router.get("/dashboard/health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -1202,6 +1295,47 @@ async def get_dashboard_secret_vault() -> dict:
         "count": len(inventory),
         "items": inventory,
     }
+
+
+@api_router.get("/public-facts", dependencies=[Depends(require_api_token)])
+async def get_dashboard_public_facts() -> dict:
+    async with async_session() as session:
+        facts = await _public_fact_payloads(session)
+    return {"count": len(facts), "items": facts}
+
+
+@api_router.post("/public-facts/seed", dependencies=[Depends(require_api_token)])
+async def seed_dashboard_public_facts() -> dict:
+    async with async_session() as session:
+        payload = await seed_public_facts_from_interview_prep(session, approve=True)
+    return payload
+
+
+@api_router.post("/public-facts/refresh", dependencies=[Depends(require_api_token)])
+async def refresh_dashboard_public_facts() -> dict:
+    async with async_session() as session:
+        payload = await refresh_public_snapshots(session, force=True)
+    return payload
+
+
+@api_router.post("/public-facts/{fact_id}/approve", dependencies=[Depends(require_api_token)])
+async def approve_dashboard_public_fact(fact_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        fact = await update_public_fact(session, fact_id, approved=True)
+        if not fact:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Public fact not found")
+        payload = await refresh_public_snapshots(session, force=True)
+    return {"status": "approved", "fact_id": str(fact.id), "refresh": payload}
+
+
+@api_router.post("/public-facts/{fact_id}/revoke", dependencies=[Depends(require_api_token)])
+async def revoke_dashboard_public_fact(fact_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        fact = await update_public_fact(session, fact_id, approved=False)
+        if not fact:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Public fact not found")
+        payload = await refresh_public_snapshots(session, force=True)
+    return {"status": "revoked", "fact_id": str(fact.id), "refresh": payload}
 
 
 @api_router.get("/cleanup-preview", dependencies=[Depends(require_api_token)])

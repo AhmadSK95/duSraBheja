@@ -7,6 +7,7 @@ from decimal import Decimal
 import anthropic
 
 from src.config import settings
+from src.services.providers import model_for_role
 
 # Cost per 1M tokens (approximate, as of 2026-03)
 MODEL_COSTS = {
@@ -46,7 +47,7 @@ async def call_claude(
             "trace_id": UUID,
         }
     """
-    model = model or settings.sonnet_model
+    model = model or model_for_role("reasoning")
     trace_id = trace_id or uuid.uuid4()
     start = time.monotonic()
 
@@ -83,7 +84,7 @@ async def call_claude_vision(
     """Call Claude with an image (vision). Used for OCR."""
     import base64
 
-    model = model or settings.classifier_model
+    model = model or model_for_role("classifier")
     trace_id = trace_id or uuid.uuid4()
     start = time.monotonic()
 

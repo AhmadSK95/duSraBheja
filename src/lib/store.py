@@ -28,11 +28,19 @@ from src.models import (
     Note,
     ObservationRecord,
     OAuthCredential,
+    PublicAnswerPolicy,
+    PublicFAQSnapshot,
+    PublicFactRecord,
+    PublicProfileSnapshot,
+    PublicProjectSnapshot,
+    SecretAccessAudit,
     SecretAccessChallenge,
     SecretAccessGrant,
     SecretAliasRecord,
     SecretAuditEntry,
+    SecretIdentity,
     SecretRecord,
+    SecretVersion,
     ProjectRepo,
     ProjectAlias,
     ProjectStateSnapshot,
@@ -2678,6 +2686,176 @@ async def list_capability_records(session: AsyncSession, *, limit: int = 100) ->
         select(CapabilityRecord).order_by(CapabilityRecord.protocol.asc(), CapabilityRecord.capability_key.asc()).limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def get_secret_identity(session: AsyncSession, identity_id: uuid.UUID) -> SecretIdentity | None:
+    return await session.get(SecretIdentity, identity_id)
+
+
+async def get_secret_identity_by_label(session: AsyncSession, label: str) -> SecretIdentity | None:
+    normalized = _normalize_alias(label)
+    if not normalized:
+        return None
+    result = await session.execute(select(SecretIdentity).where(SecretIdentity.normalized_label == normalized))
+    return result.scalar_one_or_none()
+
+
+async def get_secret_identity_by_shadow_secret(session: AsyncSession, secret_id: uuid.UUID) -> SecretIdentity | None:
+    result = await session.execute(select(SecretIdentity).where(SecretIdentity.shadow_secret_id == secret_id))
+    return result.scalar_one_or_none()
+
+
+async def upsert_secret_identity(
+    session: AsyncSession,
+    *,
+    label: str,
+    category: str = "credential",
+    owner_scope: str = "owner",
+    aliases: list[str] | None = None,
+    thread_refs: list[str] | None = None,
+    entity_refs: list[str] | None = None,
+    project_note_id: uuid.UUID | None = None,
+    shadow_secret_id: uuid.UUID | None = None,
+    current_version_id: uuid.UUID | None = None,
+    metadata_: dict | None = None,
+) -> SecretIdentity:
+    normalized_label = _normalize_alias(label)
+    result = await session.execute(select(SecretIdentity).where(SecretIdentity.normalized_label == normalized_label))
+    record = result.scalar_one_or_none()
+    values = {
+        "label": label,
+        "normalized_label": normalized_label,
+        "category": category,
+        "owner_scope": owner_scope,
+        "aliases": list(aliases or []),
+        "thread_refs": list(thread_refs or []),
+        "entity_refs": list(entity_refs or []),
+        "project_note_id": project_note_id,
+        "metadata_": metadata_ or {},
+        "updated_at": _utcnow(),
+    }
+    if shadow_secret_id is not None:
+        values["shadow_secret_id"] = shadow_secret_id
+    if current_version_id is not None:
+        values["current_version_id"] = current_version_id
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = SecretIdentity(created_at=_utcnow(), **values)
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def update_secret_identity(session: AsyncSession, identity_id: uuid.UUID, **values) -> SecretIdentity | None:
+    values.setdefault("updated_at", _utcnow())
+    await session.execute(update(SecretIdentity).where(SecretIdentity.id == identity_id).values(**values))
+    await session.commit()
+    return await get_secret_identity(session, identity_id)
+
+
+async def list_secret_identities(session: AsyncSession, *, q: str | None = None, limit: int = 100) -> list[SecretIdentity]:
+    query = select(SecretIdentity)
+    search_predicate = _contains_any([SecretIdentity.label], [q] if q else [])
+    if search_predicate is not None:
+        query = query.where(search_predicate)
+    query = query.order_by(SecretIdentity.updated_at.desc(), SecretIdentity.created_at.desc()).limit(limit)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_secret_version(session: AsyncSession, version_id: uuid.UUID) -> SecretVersion | None:
+    return await session.get(SecretVersion, version_id)
+
+
+async def create_secret_version(
+    session: AsyncSession,
+    *,
+    identity_id: uuid.UUID,
+    source_kind: str,
+    source_ref: str,
+    secret_type: str,
+    ciphertext: str,
+    nonce: str,
+    checksum: str,
+    masked_preview: str,
+    username: str | None = None,
+    source_refs: list[str] | None = None,
+    notes: str | None = None,
+    metadata_: dict | None = None,
+    is_current: bool = True,
+) -> SecretVersion:
+    record = SecretVersion(
+        identity_id=identity_id,
+        source_kind=source_kind,
+        source_ref=source_ref,
+        secret_type=secret_type,
+        username=username,
+        ciphertext=ciphertext,
+        nonce=nonce,
+        checksum=checksum,
+        masked_preview=masked_preview,
+        is_current=is_current,
+        source_refs=list(source_refs or []),
+        notes=notes,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def list_secret_versions(session: AsyncSession, *, identity_id: uuid.UUID, limit: int = 50) -> list[SecretVersion]:
+    result = await session.execute(
+        select(SecretVersion)
+        .where(SecretVersion.identity_id == identity_id)
+        .order_by(SecretVersion.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def clear_current_secret_versions(session: AsyncSession, *, identity_id: uuid.UUID) -> None:
+    await session.execute(
+        update(SecretVersion)
+        .where(SecretVersion.identity_id == identity_id, SecretVersion.is_current == True)
+        .values(is_current=False, superseded_at=_utcnow(), updated_at=_utcnow())
+    )
+    await session.commit()
+
+
+async def create_secret_access_audit(
+    session: AsyncSession,
+    *,
+    requester: str,
+    action: str,
+    status: str = "ok",
+    identity_id: uuid.UUID | None = None,
+    version_id: uuid.UUID | None = None,
+    purpose: str | None = None,
+    metadata_: dict | None = None,
+) -> SecretAccessAudit:
+    record = SecretAccessAudit(
+        identity_id=identity_id,
+        version_id=version_id,
+        requester=requester,
+        action=action,
+        purpose=purpose,
+        status=status,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
 
 
 async def get_secret_record(session: AsyncSession, secret_id: uuid.UUID) -> SecretRecord | None:

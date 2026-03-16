@@ -37,6 +37,7 @@ dependencies = [
     # HTTP
     "httpx>=0.28",
     "itsdangerous>=2.2",
+    "pyyaml>=6.0",
 
     # File I/O
     "aiofiles>=24.1",
@@ -61,12 +62,16 @@ include = [
     "src",
     "alembic",
     "tests",
+    "docs",
     "ops",
     "scripts",
     "Dockerfile",
     "docker-compose.yml",
     "pyproject.toml",
     "README.md",
+    "LICENSE",
+    ".env.example",
+    "providers.example.yaml",
 ]
 
 [tool.ruff]

@@ -26,42 +26,14 @@ server {
         try_files \$uri =404;
     }
 
-    location = / {
-        return 302 /dashboard;
-    }
-
-    location ^~ /dashboard/ {
-        proxy_pass http://$UPSTREAM_HOST:$UPSTREAM_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Connection \"\";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    location ^~ /static/ {
-        proxy_pass http://$UPSTREAM_HOST:$UPSTREAM_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Connection \"\";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    location = /api/health {
-        proxy_pass http://$UPSTREAM_HOST:$UPSTREAM_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Connection \"\";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
     location / {
-        return 404;
+        proxy_pass http://$UPSTREAM_HOST:$UPSTREAM_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Connection \"\";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
 EOF
@@ -70,4 +42,4 @@ EOF
 "${SSH[@]}" "sudo -n certbot --nginx -d '$BRAIN_DOMAIN' --non-interactive --agree-tos -m 'ahmad2609.as@gmail.com' --redirect"
 "${SSH[@]}" "sudo -n nginx -t && sudo -n systemctl reload nginx"
 
-echo "HTTPS is live for https://$BRAIN_DOMAIN/dashboard"
+echo "HTTPS is live for https://$BRAIN_DOMAIN"

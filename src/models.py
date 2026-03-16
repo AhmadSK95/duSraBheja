@@ -646,6 +646,31 @@ class CapabilityRecord(Base):
     )
 
 
+class SecretIdentity(Base):
+    __tablename__ = "secret_identities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    label = Column(String, nullable=False)
+    normalized_label = Column(String, nullable=False)
+    category = Column(String, nullable=False, default="credential")
+    owner_scope = Column(String, nullable=False, default="owner")
+    current_version_id = Column(UUID(as_uuid=True), ForeignKey("secret_versions.id", ondelete="SET NULL"), nullable=True)
+    shadow_secret_id = Column(UUID(as_uuid=True), ForeignKey("secret_records.id", ondelete="SET NULL"), nullable=True)
+    project_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    aliases = Column(JSONB, default=list)
+    thread_refs = Column(JSONB, default=list)
+    entity_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("normalized_label"),
+        Index("idx_secret_identities_label", "normalized_label"),
+        Index("idx_secret_identities_scope", "owner_scope"),
+    )
+
+
 class SecretRecord(Base):
     __tablename__ = "secret_records"
 
@@ -676,6 +701,35 @@ class SecretRecord(Base):
     )
 
 
+class SecretVersion(Base):
+    __tablename__ = "secret_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    identity_id = Column(UUID(as_uuid=True), ForeignKey("secret_identities.id", ondelete="CASCADE"), nullable=False)
+    source_kind = Column(String, nullable=False)
+    source_ref = Column(String, nullable=False)
+    secret_type = Column(String, nullable=False, default="credential")
+    username = Column(String, nullable=True)
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String, nullable=False)
+    checksum = Column(String, nullable=False)
+    masked_preview = Column(String, nullable=False)
+    is_current = Column(Boolean, nullable=False, default=True)
+    superseded_at = Column(DateTime(timezone=True), nullable=True)
+    source_refs = Column(JSONB, default=list)
+    notes = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_kind", "source_ref"),
+        Index("idx_secret_versions_identity", "identity_id"),
+        Index("idx_secret_versions_current", "is_current"),
+        Index("idx_secret_versions_created", "created_at"),
+    )
+
+
 class SecretAliasRecord(Base):
     __tablename__ = "secret_alias_records"
 
@@ -691,6 +745,26 @@ class SecretAliasRecord(Base):
     __table_args__ = (
         UniqueConstraint("normalized_alias"),
         Index("idx_secret_alias_secret", "secret_id"),
+    )
+
+
+class SecretAccessAudit(Base):
+    __tablename__ = "secret_access_audits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    identity_id = Column(UUID(as_uuid=True), ForeignKey("secret_identities.id", ondelete="SET NULL"), nullable=True)
+    version_id = Column(UUID(as_uuid=True), ForeignKey("secret_versions.id", ondelete="SET NULL"), nullable=True)
+    requester = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    purpose = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="ok")
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_secret_access_audits_identity", "identity_id"),
+        Index("idx_secret_access_audits_version", "version_id"),
+        Index("idx_secret_access_audits_created", "created_at"),
     )
 
 
@@ -759,6 +833,118 @@ class SecretAuditEntry(Base):
         Index("idx_secret_audit_secret", "secret_id"),
         Index("idx_secret_audit_created", "created_at"),
         Index("idx_secret_audit_action", "action"),
+    )
+
+
+class PublicFactRecord(Base):
+    __tablename__ = "public_fact_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fact_key = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    fact_type = Column(String, nullable=False, default="profile_fact")
+    facet = Column(String, nullable=False, default="about")
+    visibility = Column(String, nullable=False, default="public")
+    approved = Column(Boolean, nullable=False, default=False)
+    refresh_enabled = Column(Boolean, nullable=False, default=True)
+    project_slug = Column(String, nullable=True)
+    source_kind = Column(String, nullable=False, default="manual")
+    source_ref = Column(String, nullable=False)
+    source_refs = Column(JSONB, default=list)
+    tags = Column(JSONB, default=list)
+    sort_order = Column(Integer, nullable=False, default=0)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("fact_key"),
+        Index("idx_public_facts_type", "fact_type"),
+        Index("idx_public_facts_facet", "facet"),
+        Index("idx_public_facts_project", "project_slug"),
+        Index("idx_public_facts_approved", "approved"),
+    )
+
+
+class PublicProfileSnapshot(Base):
+    __tablename__ = "public_profile_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_key = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    payload = Column(JSONB, default=dict)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    refreshed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_key"),
+        Index("idx_public_profile_snapshots_refreshed", "refreshed_at"),
+    )
+
+
+class PublicProjectSnapshot(Base):
+    __tablename__ = "public_project_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    payload = Column(JSONB, default=dict)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    refreshed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("slug"),
+        Index("idx_public_project_snapshots_refreshed", "refreshed_at"),
+    )
+
+
+class PublicFAQSnapshot(Base):
+    __tablename__ = "public_faq_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    question_key = Column(String, nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    refreshed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("question_key"),
+        Index("idx_public_faq_snapshots_refreshed", "refreshed_at"),
+    )
+
+
+class PublicAnswerPolicy(Base):
+    __tablename__ = "public_answer_policies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_key = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    allowed_topics = Column(JSONB, default=list)
+    disallowed_topics = Column(JSONB, default=list)
+    instructions = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    payload = Column(JSONB, default=dict)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("policy_key"),
+        Index("idx_public_answer_policies_active", "is_active"),
     )
 
 

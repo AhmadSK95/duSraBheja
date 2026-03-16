@@ -7,13 +7,17 @@ import json
 import openai
 
 from src.config import settings
+from src.lib.provider_clients import openai_client_for_role
 from src.lib.llm_json import parse_json_object, LLMJSONError
+from src.services.providers import model_for_role
 
-client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+
+def _web_client() -> openai.AsyncOpenAI:
+    return openai_client_for_role("web_research")
 
 
 async def search_youtube_learning_queries(*, topics: list[str]) -> list[dict]:
-    if not settings.openai_api_key or not topics:
+    if not topics:
         return []
 
     prompt = (
@@ -25,8 +29,8 @@ async def search_youtube_learning_queries(*, topics: list[str]) -> list[dict]:
         f"Topics: {', '.join(topics[:8])}"
     )
     try:
-        response = await client.responses.create(
-            model=settings.openai_web_search_model,
+        response = await _web_client().responses.create(
+            model=model_for_role("web_research"),
             tools=[{"type": "web_search_preview"}],
             input=prompt,
         )
@@ -37,7 +41,7 @@ async def search_youtube_learning_queries(*, topics: list[str]) -> list[dict]:
 
 
 async def search_brain_teasers_with_web(*, topics: list[str]) -> list[dict]:
-    if not settings.openai_api_key or not topics:
+    if not topics:
         return []
 
     prompt = (
@@ -49,8 +53,8 @@ async def search_brain_teasers_with_web(*, topics: list[str]) -> list[dict]:
         f"Topics: {', '.join(topics[:8])}"
     )
     try:
-        response = await client.responses.create(
-            model=settings.openai_web_search_model,
+        response = await _web_client().responses.create(
+            model=model_for_role("web_research"),
             tools=[{"type": "web_search_preview"}],
             input=prompt,
         )
@@ -61,7 +65,7 @@ async def search_brain_teasers_with_web(*, topics: list[str]) -> list[dict]:
 
 
 async def research_topic_brief(*, topic: str, questions: list[str]) -> dict | None:
-    if not settings.openai_api_key or not topic:
+    if not topic:
         return None
 
     prompt = (
@@ -72,8 +76,8 @@ async def research_topic_brief(*, topic: str, questions: list[str]) -> dict | No
         f"Topic: {topic}. Questions: {' | '.join(questions[:6])}"
     )
     try:
-        response = await client.responses.create(
-            model=settings.openai_web_search_model,
+        response = await _web_client().responses.create(
+            model=model_for_role("web_research"),
             tools=[{"type": "web_search_preview"}],
             input=prompt,
         )
@@ -83,7 +87,7 @@ async def research_topic_brief(*, topic: str, questions: list[str]) -> dict | No
 
 
 async def answer_question_with_web(*, question: str, context_hints: list[str] | None = None) -> dict | None:
-    if not settings.openai_api_key or not question:
+    if not question:
         return None
 
     hint_text = " | ".join(item for item in (context_hints or []) if item)
@@ -94,8 +98,8 @@ async def answer_question_with_web(*, question: str, context_hints: list[str] | 
         f"Question: {question}. Context hints: {hint_text}"
     )
     try:
-        response = await client.responses.create(
-            model=settings.openai_web_search_model,
+        response = await _web_client().responses.create(
+            model=model_for_role("web_research"),
             tools=[{"type": "web_search_preview"}],
             input=prompt,
         )

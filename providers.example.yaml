@@ -1,0 +1,58 @@
+providers:
+  - name: anthropic
+    kind: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    models:
+      classifier: claude-haiku-4-5-20251001
+      reasoning: claude-sonnet-4-6
+      merge: claude-sonnet-4-6
+      public_chat: claude-sonnet-4-6
+
+  - name: openai
+    kind: openai
+    api_key_env: OPENAI_API_KEY
+    models:
+      embed: text-embedding-3-small
+      transcribe: whisper-1
+      web_research: gpt-4.1
+
+  - name: local
+    kind: openai_compatible
+    api_key_env: LOCAL_OPENAI_API_KEY
+    base_url: http://127.0.0.1:11434/v1
+    models:
+      reasoning: llama3.1:70b
+      public_chat: llama3.1:70b
+
+roles:
+  - role: classifier
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+
+  - role: reasoning
+    provider: anthropic
+    model: claude-sonnet-4-6
+    fallback_providers: [local]
+
+  - role: merge
+    provider: anthropic
+    model: claude-sonnet-4-6
+    fallback_providers: [local]
+
+  - role: embed
+    provider: openai
+    model: text-embedding-3-small
+
+  - role: transcribe
+    provider: openai
+    model: whisper-1
+
+  - role: public_chat
+    provider: anthropic
+    model: claude-sonnet-4-6
+    fallback_providers: [local]
+    visibility: public
+
+  - role: web_research
+    provider: openai
+    model: gpt-4.1

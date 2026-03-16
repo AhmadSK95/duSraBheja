@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>$page_title</title>
+    <link rel="stylesheet" href="/static/public/site.css" />
+  </head>
+  <body class="public-body">
+    <div class="public-noise"></div>
+    <header class="public-header">
+      <a class="public-brand" href="/">
+        <span class="public-brand-mark"></span>
+        <span>
+          <strong>Ahmad Shaik</strong>
+          <small>brain.thisisrikisart.com</small>
+        </span>
+      </a>
+      <nav class="public-nav">
+        $nav_html
+      </nav>
+      <a class="public-dashboard-link" href="/dashboard/login">Private Brain</a>
+    </header>
+    <main class="public-main">
+      <section class="public-hero">
+        <div class="public-kicker">$hero_kicker</div>
+        <h1>$hero_title</h1>
+        <p>$hero_subtitle</p>
+      </section>
+      <section class="public-content">
+        $content_html
+      </section>
+    </main>
+    <script id="public-page-data" type="application/json">$page_data_json</script>
+    <script src="/static/public/site.js"></script>
+    <script>$page_script</script>
+  </body>
+</html>

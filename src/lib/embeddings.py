@@ -1,16 +1,15 @@
 """OpenAI embeddings wrapper for text-embedding-3-small."""
 
-import openai
-
 from src.config import settings
-
-client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+from src.lib.provider_clients import openai_client_for_role
+from src.services.providers import model_for_role
 
 
 async def embed_text(text: str) -> list[float]:
     """Embed a single text string. Returns 1536-dim vector."""
+    client = openai_client_for_role("embed")
     response = await client.embeddings.create(
-        model=settings.embedding_model,
+        model=model_for_role("embed"),
         input=text,
         dimensions=settings.embedding_dimensions,
     )
@@ -21,8 +20,9 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
     """Embed multiple texts in one API call. Max ~8000 tokens per batch."""
     if not texts:
         return []
+    client = openai_client_for_role("embed")
     response = await client.embeddings.create(
-        model=settings.embedding_model,
+        model=model_for_role("embed"),
         input=texts,
         dimensions=settings.embedding_dimensions,
     )

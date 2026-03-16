@@ -10,16 +10,17 @@ from pathlib import Path
 
 import openai
 
-from src.config import settings
+from src.lib.provider_clients import openai_client_for_role
+from src.services.providers import model_for_role
 
-client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
 log = logging.getLogger("brain-worker.audio")
 
 
 async def _transcribe_audio_file(file_path: str) -> str:
+    client = openai_client_for_role("transcribe")
     with open(file_path, "rb") as file_handle:
         transcript = await client.audio.transcriptions.create(
-            model=settings.whisper_model,
+            model=model_for_role("transcribe"),
             file=file_handle,
             response_format="text",
         )

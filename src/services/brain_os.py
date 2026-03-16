@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.lib import store
+from src.services.providers import provider_registry_summary
 
 
 def _capability_seed() -> list[dict[str, Any]]:
@@ -75,13 +76,14 @@ def _capability_seed() -> list[dict[str, Any]]:
         {
             "capability_key": "security:secret-vault",
             "title": "Owner-Verified Secret Vault",
-            "summary": "High-sensitivity values are stored encrypted, masked everywhere else, and revealed only after dashboard/API auth plus a fresh Discord DM OTP.",
+            "summary": "High-sensitivity values are stored encrypted, versioned, masked everywhere else, and revealed either directly in the trusted owner DM lane or via dashboard/API auth plus a fresh Discord DM OTP.",
             "protocol": "security",
             "payload": {
                 "challenge_ttl_minutes": settings.secret_challenge_ttl_minutes,
                 "grant_ttl_seconds": settings.secret_access_grant_ttl_seconds,
                 "max_attempts": settings.secret_challenge_max_attempts,
                 "delivery": "discord_dm",
+                "owner_dm_trusted_lane": True,
                 "routes": [
                     "/api/secrets",
                     "/api/secrets/challenge",
@@ -89,6 +91,23 @@ def _capability_seed() -> list[dict[str, Any]]:
                     "/api/secrets/{secret_id}/reveal",
                 ],
             },
+        },
+        {
+            "capability_key": "surface:public-site",
+            "title": "Public Brain Surface",
+            "summary": "Public portfolio, project case-study pages, and a recruiter/collaborator chatbot that only read from approved public facts.",
+            "protocol": "http",
+            "payload": {
+                "base_url": (settings.public_base_url or settings.app_base_url).rstrip("/"),
+                "routes": ["/", "/about", "/projects", "/open-brain", "/api/public/profile", "/api/public/chat"],
+            },
+        },
+        {
+            "capability_key": "config:providers",
+            "title": "Provider Registry",
+            "summary": "Role-based provider bindings for classifier, reasoning, merge, embed, transcribe, public chat, and web research.",
+            "protocol": "config",
+            "payload": provider_registry_summary(),
         },
     ]
 
@@ -132,6 +151,10 @@ async def build_brain_self_description(session: AsyncSession) -> dict[str, Any]:
                 "base_url": (settings.app_base_url or "http://127.0.0.1:8000").rstrip("/"),
                 "auth": "Bearer API token or authenticated dashboard session for dashboard-coupled routes.",
             },
+            "public_http": {
+                "base_url": (settings.public_base_url or settings.app_base_url or "http://127.0.0.1:8000").rstrip("/"),
+                "auth": "Public routes are anonymous but sandboxed to approved public facts only. Public chat also requires Turnstile and rate limiting.",
+            },
             "mcp": {
                 "transport": settings.mcp_transport,
                 "port": settings.mcp_port,
@@ -146,7 +169,7 @@ async def build_brain_self_description(session: AsyncSession) -> dict[str, Any]:
             "bootstrap": "Start by calling bootstrap_session or POST /api/agent/session/bootstrap with the current project hint and cwd.",
             "publish_progress": "During substantive work, publish curated progress updates so project retrieval stays fresh.",
             "closeout": "At the end of the session, publish a structured closeout with summary, changes, decisions, and open questions.",
-            "secret_access": "For secrets, request a challenge, read the OTP from Ahmad's Discord DM, verify it, then reveal once using the short-lived access grant.",
+            "secret_access": "Owner DM is the trusted reveal lane. Dashboard and API reveals require a challenge, a Discord DM OTP, then a short-lived reveal grant.",
         },
         "capabilities": capabilities,
         "mcp_quickstart": [
@@ -160,5 +183,6 @@ async def build_brain_self_description(session: AsyncSession) -> dict[str, Any]:
             "Do not send secrets to general ask-brain or server channels.",
             "Do not publish raw planning chatter as durable memory; promote decisions, blockers, rationale, and concrete changes instead.",
             "Do not treat story output as canonical truth; the canonical library is observations, episodes, threads, entities, evidence, and syntheses.",
+            "Do not let public routes or public chat read directly from private memory; use approved public facts and snapshots only.",
         ],
     }
