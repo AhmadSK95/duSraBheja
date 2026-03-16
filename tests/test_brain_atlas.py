@@ -117,3 +117,22 @@ def test_story_river_filters_noisy_derived_entries() -> None:
     titles = [event.title for event in events]
     assert "Atlas weighting pass" in titles
     assert "Chrome project signal: barbershop" not in titles
+
+
+def test_artifact_thought_facets_exclude_agent_generated_gap_items() -> None:
+    item = {
+        "artifact": SimpleNamespace(
+            id="artifact-1",
+            summary="Evidence gap: dataGenie",
+            content_type="text",
+            raw_text="Synthetic audit artifact",
+            source="manual",
+            metadata_={"capture_context": "agent_session"},
+            created_at=datetime(2026, 3, 16, 4, 0, tzinfo=timezone.utc),
+        ),
+        "category": "note",
+        "capture_intent": "thought",
+        "validation_status": "accepted",
+    }
+
+    assert brain_atlas._artifact_facet(item) is None

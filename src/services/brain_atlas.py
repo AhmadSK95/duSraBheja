@@ -73,6 +73,8 @@ KEYWORD_STOPWORDS = {
     "dashboard",
     "chrome",
 }
+ATLAS_EXCLUDED_NOTE_PREFIXES = ("Knowledge Base:",)
+ATLAS_EXCLUDED_ARTIFACT_PREFIXES = ("Evidence gap:", "Research next step", "Knowledge Base:")
 
 CURRENT_HEADSPACE_WINDOW_DAYS = 45
 CURRENT_ARTIFACT_WINDOW_DAYS = 30
@@ -491,6 +493,10 @@ def _artifact_facet(item: dict) -> BrainFacet | None:
         capture_context=(artifact.metadata_ or {}).get("capture_context"),
     )
     title = artifact.summary or artifact.content_type.title()
+    if signal_kind == "direct_agent":
+        return None
+    if any(str(title or "").startswith(prefix) for prefix in ATLAS_EXCLUDED_ARTIFACT_PREFIXES):
+        return None
     return BrainFacet(
         id=f"facet:artifact:{artifact.id}",
         facet_type=facet_type,
@@ -1262,6 +1268,8 @@ async def build_brain_atlas_snapshot(
         if note.category == "project":
             continue
         if note.category != "people" and not _is_recent(note.updated_at or note.created_at, now=now, days=CURRENT_HEADSPACE_WINDOW_DAYS):
+            continue
+        if any(str(note.title or "").startswith(prefix) for prefix in ATLAS_EXCLUDED_NOTE_PREFIXES):
             continue
         if note.category in {"people", "idea", "note", "resource"}:
             note_facets.append(_note_facet(note))
