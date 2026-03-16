@@ -22,8 +22,10 @@ NAV_ITEMS = [
 ]
 
 
-def dashboard_url(path: str, token: str) -> str:
+def dashboard_url(path: str, token: str = "") -> str:
     safe_token = html.escape(token)
+    if not safe_token:
+        return path
     joiner = "&" if "?" in path else "?"
     return f"{path}{joiner}token={safe_token}"
 
@@ -39,12 +41,19 @@ def render_dashboard_shell(
     content_html: str,
     page_data_json: str = "null",
     page_script: str = "",
+    logout_html: str = "",
 ) -> HTMLResponse:
     nav_html = []
     for slug, label, path in NAV_ITEMS:
         is_active = "is-active" if slug == active_page else ""
         nav_html.append(
             f'<a class="atlas-nav-link {is_active}" href="{dashboard_url(path, token)}">{html.escape(label)}</a>'
+        )
+    if not logout_html:
+        logout_html = (
+            '<form class="atlas-logout" method="post" action="/dashboard/logout">'
+            '<button class="atlas-nav-link atlas-nav-link--logout" type="submit">Log out</button>'
+            "</form>"
         )
     body = SHELL_TEMPLATE.safe_substitute(
         page_title=html.escape(title),
@@ -55,5 +64,6 @@ def render_dashboard_shell(
         content_html=content_html,
         page_data_json=page_data_json,
         page_script=page_script,
+        logout_html=logout_html,
     )
     return HTMLResponse(body)

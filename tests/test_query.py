@@ -304,7 +304,7 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
                         "summary": "Interview prep and job-search pressure have been recurring strongly.",
                         "facet_type": "thoughts",
                         "attention_score": 0.82,
-                        "signal_kind": "direct_sync",
+                        "signal_kind": "direct_human",
                         "happened_at_utc": "2026-03-15T10:00:00+00:00",
                         "open_loops": ["Which interview track deserves the next focused block?"],
                     }
@@ -315,7 +315,7 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
                         "title": "Interview preparation",
                         "facet_type": "thoughts",
                         "summary": "Interview prep and job-search pressure have been recurring strongly.",
-                        "signal_kind": "direct_sync",
+                        "signal_kind": "direct_human",
                         "happened_at_local": "2026-03-15 06:00 AM EDT",
                         "path_score": 0.81,
                         "anchor_count": 2,
@@ -361,7 +361,6 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
 
     assert result["ok"] is True
     assert result["intent"] == "facet_thoughts"
-    assert result["used_project_snapshot"] is True
     assert result["brain_sources"][0]["retrieval_kind"] == "temporal_path"
     assert "Interview prep" in result["answer"]
 
@@ -406,7 +405,7 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
     async def fake_collect_sources(session, question, *, category=None, limit=8):
         return []
 
-    async def fake_collect_exact_sources(session, question, *, project_payload, now, strict_project_match=False, limit=8):
+    async def fake_collect_exact_sources(session, question, *, intent, project_payload, now, strict_project_match=False, limit=8):
         assert strict_project_match is True
         return [
             {
@@ -443,6 +442,59 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
     assert "project_snapshot" in retrieval_kinds
     assert retrieval_kinds.index("project_snapshot") < retrieval_kinds.index("exact_artifact")
     assert result["used_project_snapshot"] is True
+
+
+@pytest.mark.asyncio
+async def test_collect_facet_sources_skips_low_signal_sync_thoughts() -> None:
+    snapshot = {
+        "facets": [
+            {
+                "id": "facet:thought:noise",
+                "title": "Agent todo signal",
+                "summary": "Workspace summary and checklist for old sync noise.",
+                "facet_type": "thoughts",
+                "attention_score": 0.88,
+                "signal_kind": "direct_sync",
+                "happened_at_utc": "2026-03-16T12:00:00+00:00",
+            },
+            {
+                "id": "facet:thought:real",
+                "title": "Interview preparation",
+                "summary": "Interview prep and job-search pressure have been recurring strongly.",
+                "facet_type": "thoughts",
+                "attention_score": 0.82,
+                "signal_kind": "direct_human",
+                "happened_at_utc": "2026-03-16T12:30:00+00:00",
+            },
+        ],
+        "current_headspace": [
+            {
+                "facet_id": "facet:thought:noise",
+                "title": "Agent todo signal",
+                "facet_type": "thoughts",
+                "path_score": 0.9,
+                "anchor_count": 2,
+                "why_now": "Noise.",
+            },
+            {
+                "facet_id": "facet:thought:real",
+                "title": "Interview preparation",
+                "facet_type": "thoughts",
+                "path_score": 0.76,
+                "anchor_count": 2,
+                "why_now": "Recent memory paths keep landing here.",
+            },
+        ],
+    }
+
+    sources = await query_service._collect_facet_sources(
+        object(),
+        intent="facet_thoughts",
+        now=datetime(2026, 3, 16, 13, 0, tzinfo=timezone.utc),
+        snapshot=snapshot,
+    )
+
+    assert [item["title"] for item in sources] == ["Interview preparation"]
 
 
 def test_collect_temporal_project_sources_reads_current_headspace() -> None:

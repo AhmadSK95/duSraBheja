@@ -210,3 +210,45 @@ def test_temporal_traversal_promotes_recent_connected_headspace() -> None:
     assert any(node.facet_id == "facet:idea:1" for node in current_headspace)
     assert memory_paths[0].related_facet_ids[0] == "facet:project:1"
     assert scores["facet:project:1"] > scores["facet:idea:1"]
+
+
+def test_temporal_traversal_excludes_low_signal_sync_thoughts_from_headspace() -> None:
+    noisy = brain_atlas.BrainFacet(
+        id="facet:thought:1",
+        facet_type="thoughts",
+        title="Agent todo signal",
+        summary="Workspace summary and checklist for old sync noise.",
+        attention_score=0.82,
+        recency_score=0.88,
+        signal_kind="direct_sync",
+        created_at_utc="2026-03-16T12:00:00+00:00",
+        happened_at_utc="2026-03-16T12:00:00+00:00",
+        created_at_local="2026-03-16 08:00 AM EDT",
+        happened_at_local="2026-03-16 08:00 AM EDT",
+        display_timezone="America/New_York",
+    )
+    meaningful = brain_atlas.BrainFacet(
+        id="facet:thought:2",
+        facet_type="thoughts",
+        title="Interview pressure",
+        summary="Interview prep and job-search anxiety have been active.",
+        attention_score=0.72,
+        recency_score=0.86,
+        signal_kind="direct_human",
+        created_at_utc="2026-03-16T11:30:00+00:00",
+        happened_at_utc="2026-03-16T11:30:00+00:00",
+        created_at_local="2026-03-16 07:30 AM EDT",
+        happened_at_local="2026-03-16 07:30 AM EDT",
+        display_timezone="America/New_York",
+    )
+
+    current_headspace, _, _ = brain_atlas._build_temporal_traversal(
+        [noisy, meaningful],
+        [],
+        [],
+        now=datetime(2026, 3, 16, 13, 0, tzinfo=timezone.utc),
+    )
+
+    facet_ids = [node.facet_id for node in current_headspace]
+    assert "facet:thought:2" in facet_ids
+    assert "facet:thought:1" not in facet_ids

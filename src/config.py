@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_token: str = ""
     app_base_url: str = "http://127.0.0.1:8000"
+    dashboard_username: str = "ahmad"
+    dashboard_password: str = ""
+    dashboard_session_secret: str = ""
+    dashboard_cookie_secure: bool = True
 
     # Blob storage
     blob_storage_path: str = "/data/blobs"

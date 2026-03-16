@@ -7,7 +7,7 @@ import json
 import uuid
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
@@ -15,7 +15,7 @@ from src.api.dashboard_ui import dashboard_url, render_dashboard_shell
 from src.constants import normalize_category
 from src.database import async_session
 from src.lib import store
-from src.lib.auth import require_api_token, require_dashboard_token
+from src.lib.auth import dashboard_credentials_match, dashboard_username, require_api_token, require_dashboard_token
 from src.lib.time import format_display_datetime
 from src.services.brain_atlas import build_brain_atlas_snapshot, build_library_items
 from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
@@ -27,6 +27,44 @@ from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_
 
 router = APIRouter(tags=["dashboard"])
 api_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _login_page(*, next_path: str, error: str | None = None) -> HTMLResponse:
+    safe_next = html.escape(next_path or "/dashboard/atlas")
+    error_html = f'<div class="atlas-login-error">{html.escape(error)}</div>' if error else ""
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brain Login</title>
+    <link rel="stylesheet" href="/static/dashboard/brain_atlas.css" />
+  </head>
+  <body class="atlas-body atlas-body--login">
+    <main class="atlas-login-shell">
+      <section class="atlas-login-card">
+        <div class="atlas-kicker">Private Brain</div>
+        <h1>Sign in to Brain Atlas</h1>
+        <p>Private access only. The dashboard stays behind a login even if someone guesses the URL.</p>
+        {error_html}
+        <form method="post" action="/dashboard/login" class="atlas-login-form">
+          <input type="hidden" name="next" value="{safe_next}" />
+          <label>
+            <span>Username</span>
+            <input type="text" name="username" autocomplete="username" value="{html.escape(dashboard_username())}" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input type="password" name="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">Open Atlas</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>"""
+    )
 
 
 def _fmt_dt(value) -> str:
@@ -58,7 +96,6 @@ def _serialize_json(payload: object) -> str:
 
 
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
-    safe_token = html.escape(token)
     return HTMLResponse(
         f"""<!doctype html>
 <html>
@@ -78,21 +115,21 @@ def _page(title: str, body: str, *, token: str) -> HTMLResponse:
   </head>
   <body>
     <div class="nav">
-      <a href="/dashboard/atlas?token={safe_token}">Atlas</a>
-      <a href="/dashboard/story-river?token={safe_token}">Story River</a>
-      <a href="/dashboard/library?token={safe_token}">Library</a>
-      <a href="/dashboard/projects?token={safe_token}">Projects</a>
-      <a href="/dashboard/media?token={safe_token}">Media</a>
-      <a href="/dashboard/subconscious?token={safe_token}">Subconscious</a>
-      <a href="/dashboard/health?token={safe_token}">Health</a>
-      <a href="/dashboard/artifacts?token={safe_token}">Artifacts</a>
-      <a href="/dashboard/notes?token={safe_token}">Notes</a>
-      <a href="/dashboard/chrome-signals?token={safe_token}">Chrome Signals</a>
-      <a href="/dashboard/review?token={safe_token}">Review</a>
-      <a href="/dashboard/boards?token={safe_token}">Boards</a>
-      <a href="/dashboard/query-traces?token={safe_token}">Query Traces</a>
-      <a href="/dashboard/evals?token={safe_token}">Evals</a>
-      <a href="/dashboard/sync-health?token={safe_token}">Sync Health</a>
+      <a href="{dashboard_url('/dashboard/atlas', token)}">Atlas</a>
+      <a href="{dashboard_url('/dashboard/story-river', token)}">Story River</a>
+      <a href="{dashboard_url('/dashboard/library', token)}">Library</a>
+      <a href="{dashboard_url('/dashboard/projects', token)}">Projects</a>
+      <a href="{dashboard_url('/dashboard/media', token)}">Media</a>
+      <a href="{dashboard_url('/dashboard/subconscious', token)}">Subconscious</a>
+      <a href="{dashboard_url('/dashboard/health', token)}">Health</a>
+      <a href="{dashboard_url('/dashboard/artifacts', token)}">Artifacts</a>
+      <a href="{dashboard_url('/dashboard/notes', token)}">Notes</a>
+      <a href="{dashboard_url('/dashboard/chrome-signals', token)}">Chrome Signals</a>
+      <a href="{dashboard_url('/dashboard/review', token)}">Review</a>
+      <a href="{dashboard_url('/dashboard/boards', token)}">Boards</a>
+      <a href="{dashboard_url('/dashboard/query-traces', token)}">Query Traces</a>
+      <a href="{dashboard_url('/dashboard/evals', token)}">Evals</a>
+      <a href="{dashboard_url('/dashboard/sync-health', token)}">Sync Health</a>
     </div>
     {body}
   </body>
@@ -107,7 +144,7 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
         issues = ", ".join(issue.get("code", "issue") for issue in item.get("quality_issues", [])) or "none"
         rows.append(
             "<tr>"
-            f"<td><a href=\"/dashboard/artifacts/{artifact.id}?token={html.escape(token)}\">{str(artifact.id)[:8]}</a></td>"
+            f"<td><a href=\"{dashboard_url(f'/dashboard/artifacts/{artifact.id}', token)}\">{str(artifact.id)[:8]}</a></td>"
             f"<td>{html.escape(artifact.source)}</td>"
             f"<td>{html.escape(item.get('category') or 'unclassified')}</td>"
             f"<td>{html.escape(item.get('capture_intent') or 'unknown')}</td>"
@@ -117,6 +154,32 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
             "</tr>"
         )
     return "".join(rows)
+
+
+@router.get("/dashboard/login", response_class=HTMLResponse)
+async def dashboard_login(next: str = Query(default="/dashboard/atlas")) -> HTMLResponse:
+    return _login_page(next_path=next)
+
+
+@router.post("/dashboard/login", response_class=HTMLResponse)
+async def dashboard_login_submit(
+    request: Request,
+    username: str = Form(default=""),
+    password: str = Form(default=""),
+    next: str = Form(default="/dashboard/atlas"),
+) -> HTMLResponse | RedirectResponse:
+    if not dashboard_credentials_match(username=username, password=password):
+        return _login_page(next_path=next, error="That login didn’t match the private dashboard credentials.")
+    request.session["dashboard_authenticated"] = True
+    request.session["dashboard_username"] = dashboard_username()
+    destination = next if next.startswith("/dashboard") else "/dashboard/atlas"
+    return RedirectResponse(url=destination, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/dashboard/logout")
+async def dashboard_logout(request: Request) -> RedirectResponse:
+    request.session.clear()
+    return RedirectResponse(url="/dashboard/login", status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _metric(label: str, value: str) -> str:
@@ -428,7 +491,7 @@ def _render_health_page(snapshot: dict, *, token: str) -> HTMLResponse:
 
 @router.get("/dashboard", dependencies=[Depends(require_dashboard_token)])
 async def dashboard_root(token: str = Query(default="")) -> RedirectResponse:
-    return RedirectResponse(url=f"/dashboard/atlas?token={token}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=dashboard_url("/dashboard/atlas", token), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/dashboard/atlas", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -653,7 +716,7 @@ async def dashboard_boards(token: str = Query(default="")) -> HTMLResponse:
         boards = await store.list_boards(session, limit=30)
     rows = "".join(
         "<tr>"
-        f"<td><a href=\"/dashboard/boards/{board.id}?token={html.escape(token)}\">{html.escape(board.board_type)}</a></td>"
+        f"<td><a href=\"{dashboard_url(f'/dashboard/boards/{board.id}', token)}\">{html.escape(board.board_type)}</a></td>"
         f"<td>{board.generated_for_date}</td>"
         f"<td>{_fmt_dt(board.coverage_start)} -> {_fmt_dt(board.coverage_end)}</td>"
         f"<td>{board.status}</td>"
@@ -716,7 +779,7 @@ async def dashboard_query_traces(token: str = Query(default="")) -> HTMLResponse
         traces = await store.list_retrieval_traces(session, limit=50)
     rows = "".join(
         "<tr>"
-        f"<td><a href=\"/dashboard/query-traces/{trace.id}?token={html.escape(token)}\">{str(trace.id)[:8]}</a></td>"
+        f"<td><a href=\"{dashboard_url(f'/dashboard/query-traces/{trace.id}', token)}\">{str(trace.id)[:8]}</a></td>"
         f"<td>{html.escape((trace.question or '')[:120])}</td>"
         f"<td>{html.escape(trace.resolved_mode)}</td>"
         f"<td>{html.escape(trace.resolved_intent)}</td>"
@@ -761,7 +824,7 @@ async def dashboard_evals(token: str = Query(default="")) -> HTMLResponse:
         runs = await store.list_eval_runs(session, limit=25)
     rows = "".join(
         "<tr>"
-        f"<td><a href=\"/dashboard/evals/{run.id}?token={html.escape(token)}\">{html.escape(run.run_name)}</a></td>"
+        f"<td><a href=\"{dashboard_url(f'/dashboard/evals/{run.id}', token)}\">{html.escape(run.run_name)}</a></td>"
         f"<td>{html.escape(run.status)}</td>"
         f"<td>{html.escape(str(run.summary or {}))}</td>"
         f"<td>{_fmt_dt(run.created_at)}</td>"

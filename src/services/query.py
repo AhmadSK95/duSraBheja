@@ -126,6 +126,26 @@ LOW_SIGNAL_PROJECT_ENTRY_TYPES = {
     "chrome_period_summary",
     "chrome_profile_signal",
 }
+LOW_SIGNAL_SOURCE_TEXT_HINTS = (
+    "todo",
+    "to-do",
+    "checklist",
+    "agent todo",
+    "agent plan",
+    "plan snapshot",
+    "workspace summary",
+    "workspace landscape",
+    "repo signal",
+    "directory inventory",
+    "sync receipt",
+    "collector",
+    "chrome project signal",
+    "chrome period summary",
+    "chrome profile signal",
+    "knowledge base:",
+    "evidence gap:",
+    "research next step",
+)
 LEGACY_WORKSPACE_HINTS = ("/desktop/", "\\desktop\\")
 CURRENT_WORKSPACE_HINTS = ("/code/", "/opt/dusrabheja", "/users/moenuddeenahmadshaik/code/")
 FACET_QUERY_HINTS: dict[str, tuple[str, ...]] = {
@@ -309,6 +329,24 @@ def _contains_legacy_workspace(value: str | None) -> bool:
     return any(hint in lowered for hint in LEGACY_WORKSPACE_HINTS)
 
 
+def _low_signal_text_penalty(value: str | None) -> float:
+    lowered = (value or "").strip().lower()
+    if not lowered:
+        return 0.0
+    penalty = 0.0
+    for hint in LOW_SIGNAL_SOURCE_TEXT_HINTS:
+        if hint in lowered:
+            penalty += 0.1
+    return min(0.42, penalty)
+
+
+def _allows_operational_noise(intent: str, question: str | None = None) -> bool:
+    lowered = (question or "").lower()
+    if any(token in lowered for token in ("todo", "to-do", "plan", "checklist", "sync", "collector", "dashboard health")):
+        return True
+    return intent in {"sources", "timeline_review"}
+
+
 def _detect_query_intent(question: str, *, resolved_mode: str, project_payload: dict | None) -> str:
     if resolved_mode == "active_projects":
         return "active_projects"
@@ -483,6 +521,11 @@ def _source_merge_score(item: dict) -> float:
         score += 0.1
     elif retrieval_kind == "vector":
         score -= 0.04
+    score -= _low_signal_text_penalty(item.get("title")) * 0.45
+    score -= _low_signal_text_penalty(item.get("content")) * 0.55
+    entry_type = str((item.get("metadata") or {}).get("entry_type") or "")
+    if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
+        score -= 0.14
     if item.get("event_time_utc"):
         score += min(0.08, _recency_score(item.get("event_time_utc"), now=datetime.now(timezone.utc)) * 0.08)
     return round(score, 3)
@@ -580,6 +623,25 @@ def _coerce_source_item(candidate: dict, *, retrieval_kind: str, fallback_signal
         matched_phrases=list(candidate.get("matched_phrases") or []),
         metadata=dict(candidate.get("metadata") or {}),
     )
+
+
+def _facet_source_is_salient(
+    facet: dict,
+    *,
+    node: dict | None,
+    intent: str,
+) -> bool:
+    facet_type = str(facet.get("facet_type") or "")
+    signal_kind = str(facet.get("signal_kind") or "")
+    if _low_signal_text_penalty(facet.get("title")) + _low_signal_text_penalty(facet.get("summary")) >= 0.3:
+        return False
+    if facet_type in {"thoughts", "ideas"} and signal_kind == "direct_sync":
+        return False
+    if intent == "facet_thoughts" and signal_kind not in {"direct_human", "direct_agent"}:
+        path_score = float((node or {}).get("path_score") or 0.0)
+        if path_score < 0.68:
+            return False
+    return True
 
 
 async def resolve_project_payload(session: AsyncSession, question: str) -> dict | None:
@@ -684,12 +746,15 @@ async def _collect_facet_sources(
         facet = facets_by_id.get(node.get("facet_id"))
         if not facet or facet.get("facet_type") != facet_type:
             continue
+        if not _facet_source_is_salient(facet, node=node, intent=intent):
+            continue
         matching.append((facet, node))
     if not matching:
         matching = [
             (facet, None)
             for facet in list(snapshot.get("facets") or [])
             if facet.get("facet_type") == facet_type
+            and _facet_source_is_salient(facet, node=None, intent=intent)
         ]
     for facet, node in matching[:limit]:
         path_score = float((node or {}).get("path_score") or 0.0)
@@ -943,12 +1008,15 @@ def _curate_vector_sources(
             adjusted += workspace_adjustment
             if candidate.get("signal_kind") == "derived_system":
                 adjusted -= 0.12
+            adjusted -= _low_signal_text_penalty(combined_text) * 0.35
             if candidate.get("event_time_utc"):
                 adjusted += _recency_score(candidate.get("event_time_utc"), now=now) * 0.06
             if project_payload and project_match <= 0 and candidate.get("signal_kind") == "derived_system":
                 adjusted -= 0.15
             if _contains_legacy_workspace(combined_text) and project_payload and workspace_adjustment < 0:
                 adjusted -= 0.08
+            if not _allows_operational_noise(intent) and _low_signal_text_penalty(combined_text) >= 0.3:
+                adjusted -= 0.18
         candidate["similarity"] = round(max(0.0, min(0.99, adjusted)), 3)
         candidate["metadata"] = {
             **dict(candidate.get("metadata") or {}),
@@ -966,6 +1034,7 @@ async def _collect_exact_sources(
     session: AsyncSession,
     question: str,
     *,
+    intent: str,
     project_payload: dict | None,
     now: datetime,
     strict_project_match: bool = False,
@@ -1028,6 +1097,8 @@ async def _collect_exact_sources(
         note_hits = await store.search_notes_text(session, phrases, limit=limit)
         for hit in note_hits:
             note = hit["note"]
+            if not _allows_operational_noise(intent, question) and _low_signal_text_penalty(note.title) + _low_signal_text_penalty(note.content or "") >= 0.3:
+                continue
             source_id = f"note:{note.id}"
             if source_id in seen:
                 continue
@@ -1063,11 +1134,18 @@ async def _collect_exact_sources(
 
         source_item_hits = await store.search_source_items_text(session, phrases, limit=limit)
         for source_item in source_item_hits:
+            payload = dict(source_item.payload or {})
+            entry_type = str(payload.get("entry_type") or "")
+            content = "\n".join(part for part in (source_item.title, source_item.summary, source_item.external_url) if part)
+            if not _allows_operational_noise(intent, question):
+                if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
+                    continue
+                if _low_signal_text_penalty(content) >= 0.3:
+                    continue
             source_id = f"source:{source_item.id}"
             if source_id in seen:
                 continue
             seen.add(source_id)
-            content = "\n".join(part for part in (source_item.title, source_item.summary, source_item.external_url) if part)
             project_match = _project_match_strength(content, project_payload)
             if strict_project_match and project_payload and project_match <= 0:
                 continue
@@ -1089,7 +1167,7 @@ async def _collect_exact_sources(
                     signal_kind="direct_sync",
                     source_name="source_item",
                     event_time=source_item.happened_at or source_item.created_at,
-                    metadata={"project_match": project_match},
+                    metadata={"project_match": project_match, "entry_type": entry_type},
                 )
             )
 
@@ -1740,6 +1818,7 @@ async def query_brain(
             exact_sources = await _collect_exact_sources(
                 session,
                 question,
+                intent=resolved_intent,
                 project_payload=project_payload,
                 now=current_time,
                 strict_project_match=resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"},

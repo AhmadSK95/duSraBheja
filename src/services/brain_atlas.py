@@ -75,6 +75,24 @@ KEYWORD_STOPWORDS = {
 }
 ATLAS_EXCLUDED_NOTE_PREFIXES = ("Knowledge Base:",)
 ATLAS_EXCLUDED_ARTIFACT_PREFIXES = ("Evidence gap:", "Research next step", "Knowledge Base:")
+HEADSPACE_LOW_SIGNAL_HINTS = (
+    "todo",
+    "to-do",
+    "checklist",
+    "agent todo",
+    "agent plan",
+    "plan snapshot",
+    "workspace summary",
+    "workspace landscape",
+    "repo signal",
+    "directory inventory",
+    "collector",
+    "sync receipt",
+    "chrome project signal",
+    "chrome period summary",
+    "chrome profile signal",
+    "source item",
+)
 
 CURRENT_HEADSPACE_WINDOW_DAYS = 45
 CURRENT_ARTIFACT_WINDOW_DAYS = 30
@@ -327,6 +345,21 @@ def _current_headspace_bonus(*, summary: str | None, title: str | None, happened
     return bonus
 
 
+def _low_signal_text_penalty(value: str | None) -> float:
+    lowered = (value or "").strip().lower()
+    if not lowered:
+        return 0.0
+    penalty = 0.0
+    for hint in HEADSPACE_LOW_SIGNAL_HINTS:
+        if hint in lowered:
+            penalty += 0.1
+    if "knowledge base:" in lowered:
+        penalty += 0.16
+    if "evidence gap:" in lowered or "research next step" in lowered:
+        penalty += 0.18
+    return min(0.42, penalty)
+
+
 def _utc_iso(value: datetime | str | None) -> str | None:
     parsed = ensure_utc(value)
     return parsed.isoformat() if parsed else None
@@ -402,9 +435,37 @@ def _facet_temporal_seed(facet: BrainFacet, *, now: datetime) -> float:
         base *= 0.45
     elif facet.facet_type == "stories":
         base *= 0.9
+    elif facet.facet_type in {"thoughts", "ideas"} and facet.signal_kind == "direct_sync":
+        base *= 0.5
+    elif facet.facet_type in {"interests", "media"} and facet.signal_kind == "direct_sync":
+        base *= 0.88
     if _contains_current_workspace(str(facet.metadata.get("workspace_path") or "")):
         base += 0.08
+    base -= _low_signal_text_penalty(facet.title) * 0.55
+    base -= _low_signal_text_penalty(facet.summary) * 0.7
     return round(base, 3)
+
+
+def _is_low_signal_headspace_facet(facet: BrainFacet) -> bool:
+    title_penalty = _low_signal_text_penalty(facet.title)
+    summary_penalty = _low_signal_text_penalty(facet.summary)
+    if title_penalty + summary_penalty >= 0.3:
+        return True
+    if facet.facet_type in {"thoughts", "ideas"} and facet.signal_kind == "direct_sync":
+        return True
+    return False
+
+
+def _headspace_min_score(facet: BrainFacet, *, anchor_count: int) -> float:
+    if facet.facet_type == "projects":
+        return 0.44 if anchor_count else 0.5
+    if facet.facet_type == "stories":
+        return 0.46 if anchor_count else 0.54
+    if facet.facet_type in {"ideas", "thoughts"}:
+        return 0.5 if facet.signal_kind in {"direct_human", "direct_agent"} else 0.7
+    if facet.facet_type in {"interests", "media"}:
+        return 0.52 if anchor_count else 0.6
+    return 0.58
 
 
 def _infer_story_related_facet_ids(
@@ -541,7 +602,14 @@ def _build_temporal_traversal(
         if facet.facet_type not in CURRENT_HEADSPACE_FACET_TYPES:
             continue
         path_score = round(score_by_facet.get(facet.id, 0.0), 3)
-        if path_score < 0.42 and facet.signal_kind not in {"direct_human", "direct_agent"}:
+        anchor_count = int(anchor_counts.get(facet.id, 0))
+        if _is_low_signal_headspace_facet(facet):
+            continue
+        if path_score < _headspace_min_score(facet, anchor_count=anchor_count):
+            continue
+        if facet.facet_type in {"thoughts", "ideas"} and facet.recency_score < 0.28 and anchor_count == 0:
+            continue
+        if facet.facet_type == "projects" and facet.signal_kind == "derived_system" and anchor_count == 0 and facet.recency_score < 0.5:
             continue
         ranked_nodes.append(
             CurrentHeadspaceNode(
@@ -552,11 +620,11 @@ def _build_temporal_traversal(
                 signal_kind=facet.signal_kind,
                 happened_at_local=facet.happened_at_local,
                 path_score=path_score,
-                anchor_count=int(anchor_counts.get(facet.id, 0)),
+                anchor_count=anchor_count,
                 why_now=_headspace_reason(
                     facet=facet,
                     path_score=path_score,
-                    anchor_count=int(anchor_counts.get(facet.id, 0)),
+                    anchor_count=anchor_count,
                 ),
             )
         )
@@ -577,6 +645,15 @@ def _project_facet(project, snapshot, *, story: dict | None = None, now: datetim
         and _is_recent(getattr(entry, "happened_at", None), now=current_time, days=CURRENT_STORY_WINDOW_DAYS)
     ]
     latest_curated = curated_entries[0] if curated_entries else None
+    recent_direct_entries = [
+        entry
+        for entry in curated_entries
+        if signal_kind_for_event(
+            entry_type=getattr(entry, "entry_type", None),
+            actor_type=getattr(entry, "actor_type", None),
+        )
+        in {"direct_human", "direct_agent"}
+    ]
     repos = list((story or {}).get("repos") or [])
     workspace_path = _preferred_workspace_path(repos)
     latest_summary = _truncate(
@@ -648,6 +725,8 @@ def _project_facet(project, snapshot, *, story: dict | None = None, now: datetim
                 if latest_curated
                 else ("direct_agent" if snapshot.manual_state == "pinned" else "derived_system"),
             ),
+            + (0.08 if recent_direct_entries else -0.1),
+            + (0.04 if workspace_path else -0.05),
         ),
         3,
     )
@@ -686,6 +765,7 @@ def _project_facet(project, snapshot, *, story: dict | None = None, now: datetim
             "why_not_active": snapshot.why_not_active,
             "workspace_path": workspace_path,
             "latest_curated_entry_type": getattr(latest_curated, "entry_type", None),
+            "recent_direct_count": len(recent_direct_entries[:6]),
         },
     )
 
@@ -719,6 +799,18 @@ def _note_facet(note, *, capture_intent: str | None = None, title_override: str 
         ],
         metadata={"category": note.category, "priority": note.priority, "status": note.status},
     )
+
+
+def _should_surface_note_facet(note) -> bool:
+    title = str(note.title or "")
+    content = str(note.content or "")
+    if any(title.startswith(prefix) for prefix in ATLAS_EXCLUDED_NOTE_PREFIXES):
+        return False
+    if _low_signal_text_penalty(title) + _low_signal_text_penalty(content) >= 0.3:
+        return False
+    if note.category in {"note", "resource"} and not note.discord_message_id and _recency_score(note.updated_at or note.created_at) < 0.34:
+        return False
+    return True
 
 
 def _artifact_facet(item: dict) -> BrainFacet | None:
@@ -1510,7 +1602,7 @@ async def build_brain_atlas_snapshot(
             continue
         if note.category != "people" and not _is_recent(note.updated_at or note.created_at, now=now, days=CURRENT_HEADSPACE_WINDOW_DAYS):
             continue
-        if any(str(note.title or "").startswith(prefix) for prefix in ATLAS_EXCLUDED_NOTE_PREFIXES):
+        if not _should_surface_note_facet(note):
             continue
         if note.category in {"people", "idea", "note", "resource"}:
             note_facets.append(_note_facet(note))

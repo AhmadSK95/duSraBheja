@@ -26,6 +26,12 @@ body.atlas-body {
   font-family: "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
 }
 
+body.atlas-body--login {
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
 .atlas-app-shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -77,6 +83,10 @@ body.atlas-body {
   gap: 10px;
 }
 
+.atlas-logout {
+  margin-top: 18px;
+}
+
 .atlas-nav-link {
   display: block;
   padding: 12px 14px;
@@ -86,6 +96,13 @@ body.atlas-body {
   background: rgba(255, 255, 255, 0.025);
   transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
   border: 1px solid transparent;
+}
+
+button.atlas-nav-link {
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
 
 .atlas-nav-link:hover,
@@ -289,6 +306,66 @@ body.atlas-body {
 .atlas-form button {
   cursor: pointer;
   background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(236, 72, 153, 0.18));
+}
+
+.atlas-login-shell {
+  width: min(100%, 520px);
+}
+
+.atlas-login-card {
+  padding: 30px;
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(249, 115, 22, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(20, 29, 51, 0.9), rgba(12, 19, 37, 0.82));
+  border: 1px solid rgba(251, 191, 36, 0.12);
+  box-shadow: var(--atlas-shadow);
+}
+
+.atlas-login-card h1 {
+  margin: 0 0 10px;
+}
+
+.atlas-login-card p {
+  margin: 0 0 18px;
+  color: var(--atlas-muted);
+  line-height: 1.6;
+}
+
+.atlas-login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.atlas-login-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--atlas-muted);
+  font-size: 0.9rem;
+}
+
+.atlas-login-form input,
+.atlas-login-form button {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--atlas-text);
+  background: rgba(8, 13, 26, 0.74);
+}
+
+.atlas-login-form button {
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(236, 72, 153, 0.18));
+}
+
+.atlas-login-error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  color: #fecaca;
 }
 
 .atlas-atlas-shell {
