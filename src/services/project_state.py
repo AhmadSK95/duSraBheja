@@ -362,6 +362,10 @@ def _derive_recent_state_hints(metrics: ProjectMetrics) -> dict:
     direct_events = [entry for entry in prioritized_events if getattr(entry, "entry_type", "") in DIRECT_STATE_ENTRY_TYPES]
     newest_direct = direct_events[0] if direct_events else None
     freshest_signal = newest_direct or (prioritized_events[0] if prioritized_events else None)
+    fresh_direct_signal = bool(
+        newest_direct
+        and _recency_weight(_event_signal_at(newest_direct), now=_utcnow()) >= 0.75
+    )
 
     implemented = None
     if freshest_signal:
@@ -378,21 +382,24 @@ def _derive_recent_state_hints(metrics: ProjectMetrics) -> dict:
         ),
         None,
     )
+    if fresh_direct_signal and newest_direct:
+        blockers = _dedupe_nonempty(
+            [getattr(newest_direct, "constraint", None) or getattr(newest_direct, "open_question", None)]
+        )
+    else:
+        blockers = _dedupe_nonempty(
+            [getattr(entry, "constraint", None) or getattr(entry, "open_question", None) for entry in prioritized_events[:4]]
+        )
     return {
         "prioritized_events": prioritized_events,
         "direct_events": direct_events,
-        "fresh_direct_signal": bool(
-            newest_direct
-            and _recency_weight(_event_signal_at(newest_direct), now=_utcnow()) >= 0.75
-        ),
+        "fresh_direct_signal": fresh_direct_signal,
         "implemented": implemented,
         "remaining": remaining,
         "what_changed": " | ".join(
             _dedupe_nonempty([getattr(entry, "title", None) for entry in prioritized_events[:2]])
         ),
-        "blockers": _dedupe_nonempty(
-            [getattr(entry, "constraint", None) or getattr(entry, "open_question", None) for entry in prioritized_events[:4]]
-        ),
+        "blockers": blockers,
     }
 
 
@@ -647,9 +654,11 @@ async def recompute_project_states(
                 assessment["remaining"] = state_hints["remaining"]
             if state_hints["what_changed"]:
                 assessment["what_changed"] = state_hints["what_changed"]
-        assessment["blockers"] = _dedupe_nonempty(
-            [*(state_hints["blockers"] or []), *(assessment.get("blockers") or metrics.blockers)]
-        )
+            assessment["blockers"] = list(state_hints["blockers"] or [])
+        else:
+            assessment["blockers"] = _dedupe_nonempty(
+                [*(state_hints["blockers"] or []), *(assessment.get("blockers") or metrics.blockers)]
+            )
 
         confidence = float(assessment.get("confidence") or 0.0)
         snapshot = await store.upsert_project_state_snapshot(

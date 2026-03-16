@@ -129,8 +129,9 @@ def test_knowledge_refresh_does_not_count_as_high_signal_project_activity() -> N
     assert result["active_score"] <= 0.29
 
 
-def test_recent_state_hints_prefer_fresh_closeout_over_older_session() -> None:
+def test_recent_state_hints_prefer_fresh_closeout_over_older_session(monkeypatch) -> None:
     now = datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(project_state, "_utcnow", lambda: now)
     older = SimpleNamespace(
         entry_type="conversation_session",
         actor_type="agent",
@@ -178,6 +179,7 @@ def test_recent_state_hints_prefer_fresh_closeout_over_older_session() -> None:
     assert hints["implemented"] == "Tightened active project ranking and bootstrap behavior."
     assert hints["remaining"] == "Verify today digest output"
     assert hints["what_changed"].startswith("Codex closeout: duSraBheja")
+    assert hints["blockers"] == ["Verify today digest output"]
 
 
 def test_recent_state_hints_extract_summary_from_markdown_blob() -> None:
