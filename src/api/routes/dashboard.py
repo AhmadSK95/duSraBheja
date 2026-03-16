@@ -132,15 +132,31 @@ def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
     facets = list(snapshot.get("facets") or [])
     story_river = list(snapshot.get("story_river") or [])
     subconscious = list(snapshot.get("subconscious") or [])
+    current_headspace = list(snapshot.get("current_headspace") or [])
+    memory_paths = list(snapshot.get("memory_paths") or [])
     library_preview = list(snapshot.get("library_preview") or [])
     health = dict(snapshot.get("health") or {})
     top_facets = facets[:6]
+    highlight_items_html = "".join(
+        _list_item(
+            item.get("title") or "Facet",
+            item.get("summary") or "",
+            meta=[
+                item.get("facet_type") or "",
+                item.get("happened_at_local") or "",
+                f"path {float((item.get('metadata') or {}).get('path_score') or 0.0):.2f}",
+            ],
+        )
+        for item in top_facets
+    )
     content_html = f"""
     <div class="atlas-grid">
       <section class="atlas-card atlas-card--span-12">
         <div class="atlas-stat-row">
           {_metric('Facets', str(health.get('facet_count', len(facets))))}
           {_metric('Projects', str(health.get('project_count', 0)))}
+          {_metric('Current Headspace', str(health.get('current_headspace_count', len(current_headspace))))}
+          {_metric('Memory Paths', str(health.get('memory_path_count', len(memory_paths))))}
           {_metric('Review Queue', str(health.get('pending_review_count', 0)))}
           {_metric('Trace Failures', str(health.get('recent_trace_failures', 0)))}
         </div>
@@ -156,18 +172,32 @@ def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
           </aside>
         </div>
       </section>
-      <section class="atlas-card atlas-card--span-5">
-        <h2>Highlights</h2>
-        <p>The strongest active clusters in your brain right now, derived from projects, ideas, media, stories, and system health.</p>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Current Headspace</h2>
+        <p>The nodes that are genuinely closest to the surface right now because recent memory paths keep running through them.</p>
         <div class="atlas-list">
-          {''.join(_list_item(item.get('title') or 'Facet', item.get('summary') or '', meta=[item.get('facet_type') or '', item.get('happened_at_local') or '']) for item in top_facets)}
+          {''.join(_list_item(item.get('title') or 'Facet', item.get('summary') or '', meta=[item.get('facet_type') or '', f"path {float(item.get('path_score') or 0.0):.2f}", item.get('happened_at_local') or '']) for item in current_headspace[:6])}
         </div>
       </section>
-      <section class="atlas-card atlas-card--span-7">
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Memory Paths</h2>
+        <p>Time-aware traversals from recent anchors into the rest of the brain. This is the layer that should make recency emerge naturally instead of being painted on later.</p>
+        <div class="atlas-list">
+          {''.join(_list_item(item.get('title') or 'Path', item.get('summary') or '', meta=[item.get('provenance') or '', f"path {float(item.get('path_score') or 0.0):.2f}", item.get('anchor_time_local') or '']) for item in memory_paths[:5])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
         <h2>Quiet Subconscious</h2>
         <p>Replay, map, dream, and foresight outputs stay quiet here and feed the digest, boards, and agent bootstraps when they matter.</p>
         <div class="atlas-list">
           {''.join(_list_item(item.get('title') or 'Insight', item.get('summary') or '', meta=[item.get('lane') or '', item.get('certainty') or '']) for item in subconscious[:4])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Atlas Highlights</h2>
+        <p>The strongest active clusters across the whole brain after headspace traversal, curation, and direct evidence weighting.</p>
+        <div class="atlas-list">
+          {highlight_items_html}
         </div>
       </section>
       <section class="atlas-card atlas-card--span-6">
@@ -200,6 +230,8 @@ def _render_atlas_page(snapshot: dict, *, token: str) -> HTMLResponse:
             {
                 "facets": facets,
                 "links": list(snapshot.get("links") or []),
+                "current_headspace": current_headspace,
+                "memory_paths": memory_paths,
             }
         ),
     )

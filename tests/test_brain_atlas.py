@@ -136,3 +136,77 @@ def test_artifact_thought_facets_exclude_agent_generated_gap_items() -> None:
     }
 
     assert brain_atlas._artifact_facet(item) is None
+
+
+def test_temporal_traversal_promotes_recent_connected_headspace() -> None:
+    project = brain_atlas.BrainFacet(
+        id="facet:project:1",
+        facet_type="projects",
+        title="duSraBheja",
+        summary="Current working brain project.",
+        attention_score=0.66,
+        recency_score=0.82,
+        signal_kind="direct_agent",
+        created_at_utc="2026-03-16T12:00:00+00:00",
+        happened_at_utc="2026-03-16T12:00:00+00:00",
+        created_at_local="2026-03-16 08:00 AM EDT",
+        happened_at_local="2026-03-16 08:00 AM EDT",
+        display_timezone="America/New_York",
+        metadata={"project_id": "project-1"},
+        evidence=[
+            {
+                "title": "Latest progress",
+                "summary": "Temporal traversal and persona work landed.",
+                "signal_kind": "direct_agent",
+                "event_time_utc": "2026-03-16T12:00:00+00:00",
+                "happened_at_local": "2026-03-16 08:00 AM EDT",
+            }
+        ],
+    )
+    idea = brain_atlas.BrainFacet(
+        id="facet:idea:1",
+        facet_type="ideas",
+        title="Persona packet",
+        summary="Structured tone and taste layer.",
+        attention_score=0.54,
+        recency_score=0.7,
+        signal_kind="direct_agent",
+        created_at_utc="2026-03-16T11:00:00+00:00",
+        happened_at_utc="2026-03-16T11:00:00+00:00",
+        created_at_local="2026-03-16 07:00 AM EDT",
+        happened_at_local="2026-03-16 07:00 AM EDT",
+        display_timezone="America/New_York",
+    )
+    event = brain_atlas.StoryRiverEvent(
+        id="story-river:event:1",
+        title="Temporal memory pass",
+        summary="duSraBheja and persona packet were the main focus.",
+        event_type="progress_update",
+        signal_kind="direct_agent",
+        happened_at_utc="2026-03-16T12:30:00+00:00",
+        happened_at_local="2026-03-16 08:30 AM EDT",
+        event_day_label="Sun, Mar 16",
+        metadata={"project_note_id": "project-1", "related_refs": ["Persona packet"]},
+    )
+    links = [
+        brain_atlas.FacetLink(
+            source_id="facet:project:1",
+            target_id="facet:idea:1",
+            relation="contextual_overlap",
+            weight=0.72,
+            evidence_count=1,
+            reason="Project and persona work are linked.",
+        )
+    ]
+
+    current_headspace, memory_paths, scores = brain_atlas._build_temporal_traversal(
+        [project, idea],
+        [event],
+        links,
+        now=datetime(2026, 3, 16, 13, 0, tzinfo=timezone.utc),
+    )
+
+    assert current_headspace[0].facet_id == "facet:project:1"
+    assert any(node.facet_id == "facet:idea:1" for node in current_headspace)
+    assert memory_paths[0].related_facet_ids[0] == "facet:project:1"
+    assert scores["facet:project:1"] > scores["facet:idea:1"]

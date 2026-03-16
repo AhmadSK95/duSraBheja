@@ -29,6 +29,8 @@
 
     const facets = Array.isArray(data.facets) ? data.facets : [];
     const links = Array.isArray(data.links) ? data.links : [];
+    const currentHeadspace = Array.isArray(data.current_headspace) ? data.current_headspace : [];
+    const currentHeadspaceById = new Map(currentHeadspace.map((item) => [item.facet_id, item]));
     const width = container.clientWidth || 900;
     const height = container.clientHeight || 640;
     const centerX = width / 2;
@@ -52,9 +54,14 @@
 
     const positioned = [];
     groupOrder.forEach((groupName, groupIndex) => {
-      const groupItems = grouped.get(groupName) || [];
+      const groupItems = (grouped.get(groupName) || []).sort((left, right) => {
+        const leftPath = Number((currentHeadspaceById.get(left.id) || {}).path_score || 0);
+        const rightPath = Number((currentHeadspaceById.get(right.id) || {}).path_score || 0);
+        return rightPath - leftPath;
+      });
       const ring = rings[groupIndex % rings.length];
       groupItems.forEach((facet, itemIndex) => {
+        const headspaceNode = currentHeadspaceById.get(facet.id) || null;
         const point = polarPosition(
           itemIndex + groupIndex * 0.7,
           Math.max(groupItems.length, 4),
@@ -63,7 +70,7 @@
           centerX,
           centerY,
         );
-        const size = 74 + Math.round((facet.attention_score || 0) * 48);
+        const size = 72 + Math.round((facet.attention_score || 0) * 38) + Math.round(Number((headspaceNode || {}).path_score || 0) * 22);
         positioned.push({ facet, point, size });
         nodesById.set(facet.id, { x: point.x, y: point.y });
       });
@@ -90,6 +97,7 @@
       const related = facets.filter((item) => (facet.related_ids || []).includes(item.id));
       const evidence = Array.isArray(facet.evidence) ? facet.evidence : [];
       const openLoops = Array.isArray(facet.open_loops) ? facet.open_loops : [];
+      const headspaceNode = currentHeadspaceById.get(facet.id) || null;
       detail.innerHTML = `
         <div class="atlas-panel-card">
           <div class="atlas-detail-title">
@@ -103,8 +111,17 @@
           <div class="atlas-meta">
             <span>Attention ${Number(facet.attention_score || 0).toFixed(2)}</span>
             <span>Recency ${Number(facet.recency_score || 0).toFixed(2)}</span>
+            ${
+              headspaceNode
+                ? `<span>Path ${Number(headspaceNode.path_score || 0).toFixed(2)}</span><span>Anchors ${Number(headspaceNode.anchor_count || 0)}</span>`
+                : ""
+            }
             <span>${facet.happened_at_local || "unknown time"}</span>
           </div>
+        </div>
+        <div class="atlas-panel-card">
+          <div class="atlas-section-title">Why now</div>
+          <p>${headspaceNode ? headspaceNode.why_now : "This node is visible in the atlas, but it is not currently one of the strongest time-aware headspace nodes."}</p>
         </div>
         <div class="atlas-panel-card">
           <div class="atlas-section-title">Open loops</div>
@@ -154,9 +171,13 @@
 
     let activeButton = null;
     positioned.forEach(({ facet, point, size }) => {
+      const headspaceNode = currentHeadspaceById.get(facet.id) || null;
       const button = document.createElement("button");
       button.type = "button";
       button.className = "atlas-node";
+      if (headspaceNode) {
+        button.classList.add("is-current");
+      }
       button.style.left = `${point.x}px`;
       button.style.top = `${point.y}px`;
       button.style.width = `${size}px`;

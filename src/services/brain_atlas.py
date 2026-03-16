@@ -82,6 +82,23 @@ CURRENT_STORY_WINDOW_DAYS = 30
 LEGACY_WORKSPACE_HINTS = ("/desktop/", "\\desktop\\")
 CURRENT_WORKSPACE_HINTS = ("/code/", "/opt/dusrabheja", "/users/moenuddeenahmadshaik/code/")
 CURATED_STORY_ENTRY_TYPES = {"progress_update", "session_closeout", "decision", "conversation_session"}
+CURRENT_HEADSPACE_FACET_TYPES = {"projects", "ideas", "thoughts", "interests", "media", "stories"}
+TEMPORAL_EVENT_WEIGHTS = {
+    "progress_update": 1.0,
+    "session_closeout": 0.96,
+    "decision": 0.9,
+    "daily_board": 0.84,
+    "weekly_board": 0.8,
+    "conversation_session": 0.72,
+}
+TEMPORAL_SIGNAL_WEIGHTS = {
+    "direct_human": 1.0,
+    "direct_agent": 0.94,
+    "direct_sync": 0.7,
+    "derived_system": 0.28,
+}
+TEMPORAL_DECAY = 0.58
+TEMPORAL_NEIGHBOR_LIMIT = 4
 NOISY_STORY_ENTRY_TYPES = {
     "chrome_project_signal",
     "chrome_period_summary",
@@ -167,6 +184,38 @@ class SubconsciousInsight:
 
 
 @dataclass(slots=True)
+class CurrentHeadspaceNode:
+    facet_id: str
+    title: str
+    facet_type: str
+    summary: str
+    signal_kind: str
+    happened_at_local: str | None
+    path_score: float
+    anchor_count: int
+    why_now: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class MemoryPath:
+    id: str
+    title: str
+    summary: str
+    anchor_title: str
+    anchor_signal_kind: str
+    anchor_time_local: str | None
+    path_score: float
+    related_facet_ids: list[str] = field(default_factory=list)
+    provenance: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class FacetSnapshot:
     generated_at_local: str
     display_timezone: str
@@ -174,6 +223,8 @@ class FacetSnapshot:
     links: list[FacetLink]
     story_river: list[StoryRiverEvent]
     subconscious: list[SubconsciousInsight]
+    current_headspace: list[CurrentHeadspaceNode]
+    memory_paths: list[MemoryPath]
     health: dict[str, Any]
     library_preview: list[dict[str, Any]]
 
@@ -188,6 +239,8 @@ class FacetSnapshot:
             "links": [link.as_dict() for link in self.links],
             "story_river": [event.as_dict() for event in self.story_river],
             "subconscious": [insight.as_dict() for insight in self.subconscious],
+            "current_headspace": [node.as_dict() for node in self.current_headspace],
+            "memory_paths": [path.as_dict() for path in self.memory_paths],
             "health": self.health,
             "library_preview": list(self.library_preview),
         }
@@ -326,6 +379,192 @@ def _make_evidence(
         **describe_event_time(happened_at),
         "metadata": metadata or {},
     }
+
+
+def _temporal_signal_weight(signal_kind: str | None) -> float:
+    return TEMPORAL_SIGNAL_WEIGHTS.get(str(signal_kind or ""), 0.42)
+
+
+def _story_event_temporal_weight(event_type: str | None) -> float:
+    return TEMPORAL_EVENT_WEIGHTS.get(str(event_type or ""), 0.54)
+
+
+def _facet_temporal_seed(facet: BrainFacet, *, now: datetime) -> float:
+    base = _temporal_signal_weight(facet.signal_kind) * max(0.14, _recency_score(facet.happened_at_utc, now=now)) * 0.62
+    evidence_items = list(facet.evidence or [])
+    for item in evidence_items[:3]:
+        base += (
+            _temporal_signal_weight(str(item.get("signal_kind") or ""))
+            * max(0.12, _recency_score(item.get("event_time_utc"), now=now))
+            * 0.14
+        )
+    if facet.facet_type == "systems":
+        base *= 0.45
+    elif facet.facet_type == "stories":
+        base *= 0.9
+    if _contains_current_workspace(str(facet.metadata.get("workspace_path") or "")):
+        base += 0.08
+    return round(base, 3)
+
+
+def _infer_story_related_facet_ids(
+    event: StoryRiverEvent,
+    *,
+    facets: list[BrainFacet],
+) -> list[str]:
+    facet_by_project_id = {
+        str(facet.metadata.get("project_id")): facet.id
+        for facet in facets
+        if facet.facet_type == "projects" and facet.metadata.get("project_id")
+    }
+    title_index = {_normalize_key(facet.title): facet.id for facet in facets}
+    combined_text = " ".join(
+        filter(
+            None,
+            [
+                event.title,
+                event.summary,
+                str(event.metadata.get("coverage_label") or ""),
+            ],
+        )
+    )
+    normalized_text = _normalize_key(combined_text)
+    related: list[str] = []
+
+    project_note_id = str(event.metadata.get("project_note_id") or "").strip()
+    if project_note_id and project_note_id in facet_by_project_id:
+        related.append(facet_by_project_id[project_note_id])
+
+    for ref in list(event.metadata.get("related_refs") or []):
+        facet_id = title_index.get(_normalize_key(str(ref)))
+        if facet_id and facet_id not in related:
+            related.append(facet_id)
+
+    for facet in facets:
+        if facet.facet_type not in CURRENT_HEADSPACE_FACET_TYPES:
+            continue
+        key = _normalize_key(facet.title)
+        if key and key in normalized_text and facet.id not in related:
+            related.append(facet.id)
+        if len(related) >= 5:
+            break
+    return related[:5]
+
+
+def _headspace_reason(*, facet: BrainFacet, path_score: float, anchor_count: int) -> str:
+    if anchor_count >= 3:
+        return "Multiple recent memory paths keep landing here."
+    if anchor_count >= 1:
+        return "A recent story anchor is still flowing into this node."
+    if facet.signal_kind == "direct_human":
+        return "Recent direct human signal keeps this close to the surface."
+    if facet.signal_kind == "direct_agent":
+        return "Recent agent work is keeping this mentally active."
+    if path_score >= 0.8:
+        return "It is still connected to several current signals, even if indirectly."
+    return "It remains part of the active mental map right now."
+
+
+def _build_temporal_traversal(
+    facets: list[BrainFacet],
+    story_river: list[StoryRiverEvent],
+    links: list[FacetLink],
+    *,
+    now: datetime,
+) -> tuple[list[CurrentHeadspaceNode], list[MemoryPath], dict[str, float]]:
+    score_by_facet: dict[str, float] = defaultdict(float)
+    anchor_counts: Counter[str] = Counter()
+    facet_lookup = {facet.id: facet for facet in facets}
+    adjacency: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    memory_paths: list[MemoryPath] = []
+
+    for link in links:
+        adjacency[link.source_id].append((link.target_id, float(link.weight or 0.0)))
+        adjacency[link.target_id].append((link.source_id, float(link.weight or 0.0)))
+
+    for facet in facets:
+        score_by_facet[facet.id] += _facet_temporal_seed(facet, now=now)
+
+    for event in story_river[:14]:
+        related_ids = _infer_story_related_facet_ids(event, facets=facets)
+        if not related_ids:
+            continue
+        anchor_score = (
+            _story_event_temporal_weight(event.event_type)
+            * _temporal_signal_weight(event.signal_kind)
+            * max(0.18, _recency_score(event.happened_at_utc, now=now))
+        )
+        traversed: list[str] = []
+        seen_neighbors: set[str] = set()
+        for facet_id in related_ids:
+            score_by_facet[facet_id] += anchor_score
+            anchor_counts[facet_id] += 1
+            if facet_id not in traversed:
+                traversed.append(facet_id)
+            for neighbor_id, weight in sorted(adjacency.get(facet_id, []), key=lambda item: item[1], reverse=True)[:TEMPORAL_NEIGHBOR_LIMIT]:
+                if neighbor_id in seen_neighbors:
+                    continue
+                decay = anchor_score * max(0.24, min(0.82, weight)) * TEMPORAL_DECAY
+                if decay < 0.08:
+                    continue
+                score_by_facet[neighbor_id] += decay
+                seen_neighbors.add(neighbor_id)
+                if neighbor_id not in traversed:
+                    traversed.append(neighbor_id)
+        related_titles = [facet_lookup[item_id].title for item_id in traversed if item_id in facet_lookup][:3]
+        memory_paths.append(
+            MemoryPath(
+                id=event.id,
+                title=f"{event.title} -> {', '.join(related_titles) if related_titles else 'current headspace'}",
+                summary=_truncate(
+                    f"{event.title} is still reverberating through {', '.join(related_titles) if related_titles else 'the current mental map'}."
+                ),
+                anchor_title=event.title,
+                anchor_signal_kind=event.signal_kind,
+                anchor_time_local=event.happened_at_local,
+                path_score=round(anchor_score, 3),
+                related_facet_ids=traversed[:6],
+                provenance=event.event_type,
+            )
+        )
+
+    ranked_nodes: list[CurrentHeadspaceNode] = []
+    for facet in sorted(
+        facets,
+        key=lambda item: (
+            score_by_facet.get(item.id, 0.0),
+            item.attention_score,
+            item.recency_score,
+        ),
+        reverse=True,
+    ):
+        if facet.facet_type not in CURRENT_HEADSPACE_FACET_TYPES:
+            continue
+        path_score = round(score_by_facet.get(facet.id, 0.0), 3)
+        if path_score < 0.42 and facet.signal_kind not in {"direct_human", "direct_agent"}:
+            continue
+        ranked_nodes.append(
+            CurrentHeadspaceNode(
+                facet_id=facet.id,
+                title=facet.title,
+                facet_type=facet.facet_type,
+                summary=facet.summary,
+                signal_kind=facet.signal_kind,
+                happened_at_local=facet.happened_at_local,
+                path_score=path_score,
+                anchor_count=int(anchor_counts.get(facet.id, 0)),
+                why_now=_headspace_reason(
+                    facet=facet,
+                    path_score=path_score,
+                    anchor_count=int(anchor_counts.get(facet.id, 0)),
+                ),
+            )
+        )
+        if len(ranked_nodes) >= 12:
+            break
+
+    memory_paths.sort(key=lambda item: (item.path_score, item.anchor_time_local or ""), reverse=True)
+    return ranked_nodes, memory_paths[:10], {key: round(value, 3) for key, value in score_by_facet.items()}
 
 
 def _project_facet(project, snapshot, *, story: dict | None = None, now: datetime | None = None) -> BrainFacet:
@@ -883,6 +1122,7 @@ def _story_river_events(boards: list, recent_activity: list, *, now: datetime) -
                 metadata={
                     "coverage_label": payload.get("coverage_label"),
                     "board_id": str(board.id),
+                    "related_refs": [item.get("project") for item in list(payload.get("project_signals") or []) if item.get("project")][:5],
                     "score": round(0.82 + _recency_score(board.coverage_end, now=now) * 0.12, 3),
                 },
             )
@@ -908,6 +1148,7 @@ def _story_river_events(boards: list, recent_activity: list, *, now: datetime) -
                     "entry_type": entry.entry_type,
                     "actor_name": entry.actor_name,
                     "project_note_id": str(entry.project_note_id) if entry.project_note_id else None,
+                    "related_refs": [getattr(entry, "subject_ref", None)] if getattr(entry, "subject_ref", None) else [],
                     "score": _story_river_entry_score(entry, now=now),
                 },
             )
@@ -1319,17 +1560,29 @@ async def build_brain_atlas_snapshot(
         or facet.attention_score >= 0.52
         or facet.signal_kind in {"direct_human", "direct_agent"}
     ]
+
+    story_river = _story_river_events(boards, recent_activity, now=now)
+    links = _build_links(facets, story_connections)
+    current_headspace, memory_paths, path_scores = _build_temporal_traversal(
+        facets,
+        story_river,
+        links,
+        now=now,
+    )
+    for facet in facets:
+        facet.metadata["path_score"] = round(path_scores.get(facet.id, 0.0), 3)
+        facet.metadata["in_current_headspace"] = any(node.facet_id == facet.id for node in current_headspace)
     facets.sort(
         key=lambda facet: (
-            facet.attention_score + facet.recency_score * 0.35 + (0.08 if facet.signal_kind in {"direct_human", "direct_agent"} else 0.0),
+            path_scores.get(facet.id, 0.0) * 0.72
+            + facet.attention_score
+            + facet.recency_score * 0.28
+            + (0.1 if facet.signal_kind in {"direct_human", "direct_agent"} else 0.0),
             facet.recency_score,
         ),
         reverse=True,
     )
     facets = facets[:54]
-
-    links = _build_links(facets, story_connections)
-    story_river = _story_river_events(boards, recent_activity, now=now)
     subconscious = await _subconscious_insights(
         session,
         project_facets=project_facets,
@@ -1346,6 +1599,8 @@ async def build_brain_atlas_snapshot(
         "generated_at_local": format_display_datetime(_utcnow()),
         "project_count": len(project_facets),
         "facet_count": len(facets),
+        "current_headspace_count": len(current_headspace),
+        "memory_path_count": len(memory_paths),
         "pending_review_count": len(reviews),
         "recent_trace_failures": len([trace for trace in traces if trace.failure_stage]),
         "latest_syncs": [
@@ -1370,6 +1625,8 @@ async def build_brain_atlas_snapshot(
         links=links,
         story_river=story_river,
         subconscious=subconscious,
+        current_headspace=current_headspace,
+        memory_paths=memory_paths,
         health=health,
         library_preview=library_preview,
     )

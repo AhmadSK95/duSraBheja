@@ -338,6 +338,20 @@ body.atlas-body {
   filter: saturate(1.08);
 }
 
+.atlas-node.is-current {
+  box-shadow:
+    0 0 0 3px rgba(251, 191, 36, 0.14),
+    0 18px 40px rgba(249, 115, 22, 0.34);
+}
+
+.atlas-node.is-current::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
 .atlas-node-label {
   display: block;
   padding: 0 10px;

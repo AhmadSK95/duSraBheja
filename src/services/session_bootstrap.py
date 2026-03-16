@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.lib import store
 from src.services.identity import resolve_project
 from src.services.openai_web import research_topic_brief
+from src.services.persona import build_persona_packet
 from src.services.project_state import recompute_project_states
 from src.services.query import collect_sources
 from src.services.source_ingest import ingest_source_entries
@@ -98,6 +99,7 @@ async def build_session_bootstrap(
     subject = project_payload["project"]["title"] if project_payload else (project_hint or cwd or task_hint or "current work")
     brain_sources = await collect_sources(session, subject, category="project" if project_payload else None, limit=6)
     voice_profile = await store.get_voice_profile(session, "ahmad-default")
+    persona_packet = await build_persona_packet(session)
 
     web_brief = None
     if include_web and subject:
@@ -158,6 +160,7 @@ async def build_session_bootstrap(
             if voice_profile
             else None
         ),
+        "persona_packet": persona_packet,
     }
 
 

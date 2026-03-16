@@ -28,6 +28,7 @@ from src.lib.time import coerce_datetime, describe_event_time, format_display_da
 from src.services.brain_atlas import build_brain_atlas_snapshot
 from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
+from src.services.persona import build_persona_packet, render_persona_context
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
 
@@ -476,6 +477,8 @@ def _source_merge_score(item: dict) -> float:
         score += 0.08
     elif retrieval_kind == "project_snapshot":
         score += 0.05
+    elif retrieval_kind == "temporal_path":
+        score += 0.1
     elif retrieval_kind == "vector":
         score -= 0.04
     if item.get("event_time_utc"):
@@ -642,9 +645,10 @@ async def _collect_facet_sources(
     *,
     intent: str,
     now: datetime,
+    snapshot: dict | None = None,
     limit: int = 8,
 ) -> list[dict]:
-    snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+    snapshot = snapshot or (await build_brain_atlas_snapshot(session)).as_dict()
     sources: list[dict] = []
     if intent == "facet_story":
         for event in list(snapshot.get("story_river") or [])[:limit]:
@@ -671,27 +675,110 @@ async def _collect_facet_sources(
     }.get(intent)
     if not facet_type:
         return []
-    matching = [facet for facet in list(snapshot.get("facets") or []) if facet.get("facet_type") == facet_type]
-    for facet in matching[:limit]:
+    facets_by_id = {facet.get("id"): facet for facet in list(snapshot.get("facets") or [])}
+    headspace = list(snapshot.get("current_headspace") or [])
+    matching = []
+    for node in headspace:
+        facet = facets_by_id.get(node.get("facet_id"))
+        if not facet or facet.get("facet_type") != facet_type:
+            continue
+        matching.append((facet, node))
+    if not matching:
+        matching = [
+            (facet, None)
+            for facet in list(snapshot.get("facets") or [])
+            if facet.get("facet_type") == facet_type
+        ]
+    for facet, node in matching[:limit]:
+        path_score = float((node or {}).get("path_score") or 0.0)
+        content = facet.get("summary") or ""
+        if node and node.get("why_now"):
+            content = f"{content}\nWhy now: {node['why_now']}"
         sources.append(
             _facet_source(
                 source_id=facet.get("id") or facet.get("title") or facet_type,
                 title=facet.get("title") or facet_type.title(),
-                summary=facet.get("summary") or "",
+                summary=content,
                 facet_type=facet_type,
                 signal_kind=facet.get("signal_kind") or "direct_sync",
                 happened_at=facet.get("happened_at_utc"),
                 similarity=min(
                     0.93,
                     0.62
-                    + float(facet.get("attention_score") or 0.0) * 0.16
+                    + float(facet.get("attention_score") or 0.0) * 0.12
+                    + path_score * 0.12
                     + _recency_score(facet.get("happened_at_utc"), now=now) * 0.16,
                 ),
-                retrieval_kind="facet_snapshot",
-                metadata={"open_loops": facet.get("open_loops") or []},
+                retrieval_kind="temporal_path" if node else "facet_snapshot",
+                metadata={
+                    "open_loops": facet.get("open_loops") or [],
+                    "path_score": path_score,
+                    "why_now": (node or {}).get("why_now"),
+                },
             )
         )
     return sources[:limit]
+
+
+def _collect_temporal_project_sources(
+    snapshot: dict | None,
+    *,
+    project_payload: dict | None,
+    now: datetime,
+    limit: int = 4,
+) -> list[dict]:
+    if not snapshot or not project_payload:
+        return []
+    facets_by_id = {facet.get("id"): facet for facet in list(snapshot.get("facets") or [])}
+    matching: list[dict] = []
+    for node in list(snapshot.get("current_headspace") or []):
+        facet = facets_by_id.get(node.get("facet_id"))
+        if not facet or facet.get("facet_type") != "projects":
+            continue
+        combined = " ".join(
+            [
+                str(facet.get("title") or ""),
+                str(facet.get("summary") or ""),
+                str((facet.get("metadata") or {}).get("workspace_path") or ""),
+            ]
+        )
+        if _project_match_strength(combined, project_payload) <= 0.0:
+            continue
+        matching.append(
+            _build_source_item(
+                source_id=f"temporal:{facet.get('id')}",
+                title=f"{facet.get('title')} current headspace",
+                category="project",
+                content="\n".join(
+                    filter(
+                        None,
+                        [
+                            str(facet.get("summary") or ""),
+                            f"Why now: {node.get('why_now')}" if node.get("why_now") else "",
+                            f"Path score: {float(node.get('path_score') or 0.0):.2f}",
+                            f"Anchor count: {int(node.get('anchor_count') or 0)}",
+                        ],
+                    )
+                ),
+                similarity=min(
+                    0.96,
+                    0.7
+                    + float(node.get("path_score") or 0.0) * 0.18
+                    + _recency_score(facet.get("happened_at_utc"), now=now) * 0.08,
+                ),
+                retrieval_kind="temporal_path",
+                signal_kind=str(facet.get("signal_kind") or "direct_sync"),
+                source_name="brain_atlas_temporal",
+                event_time=coerce_datetime(facet.get("happened_at_utc")),
+                metadata={
+                    "path_score": float(node.get("path_score") or 0.0),
+                    "anchor_count": int(node.get("anchor_count") or 0),
+                    "why_now": node.get("why_now"),
+                },
+            )
+        )
+    matching.sort(key=lambda item: item.get("similarity", 0.0), reverse=True)
+    return matching[:limit]
 
 
 def format_story_context(
@@ -1192,20 +1279,20 @@ def _build_exact_answer(question: str, sources: list[dict]) -> str | None:
         values_by_kind[key] = list(dict.fromkeys(values))
 
     if fact_kind == "ip" and values_by_kind["ip"]:
-        answer = f"Direct answer: your droplet IP is `{values_by_kind['ip'][0]}`."
+        answer = f"Your droplet IP is `{values_by_kind['ip'][0]}`."
         if any(token in question.lower() for token in ("account", "user", "username")) and values_by_kind["username"]:
-            answer += f" The user account in the same evidence is `{values_by_kind['username'][0]}`."
+            answer += f" The same evidence lists the user account as `{values_by_kind['username'][0]}`."
         if len(values_by_kind["ip"]) > 1:
-            answer += " I also found additional IP-like values, so review the cited evidence before treating it as final."
+            answer += " I also found additional IP-like values, so double-check the grounded evidence before treating that as final."
         return answer
     if fact_kind == "email" and values_by_kind["email"]:
-        return f"Direct answer: the strongest matching email is `{values_by_kind['email'][0]}`."
+        return f"The strongest matching email in the evidence is `{values_by_kind['email'][0]}`."
     if fact_kind == "url" and values_by_kind["url"]:
-        return f"Direct answer: the strongest matching URL is {values_by_kind['url'][0]}."
+        return f"The strongest matching URL in the evidence is {values_by_kind['url'][0]}."
     if fact_kind == "username" and values_by_kind["username"]:
-        return f"Direct answer: the strongest matching username is `{values_by_kind['username'][0]}`."
+        return f"The strongest matching username in the evidence is `{values_by_kind['username'][0]}`."
     if fact_kind == "numeric_identifier" and values_by_kind["numeric_identifier"]:
-        return f"Direct answer: the strongest matching identifier is `{values_by_kind['numeric_identifier'][0]}`."
+        return f"The strongest matching identifier in the evidence is `{values_by_kind['numeric_identifier'][0]}`."
     return None
 
 
@@ -1521,19 +1608,13 @@ async def query_brain(
                 )
                 return result
 
-            voice_profile = await store.get_voice_profile(session, "ahmad-default")
+            persona_packet = await build_persona_packet(session)
             current_stage = QUERY_STAGE_NARRATION
             narration = await narrate_from_context(
                 session,
                 question=question,
-                context_text=(
-                    format_active_projects_context(projects)
-                    + (
-                        f"\n\nVoice Profile:\nSummary: {voice_profile.summary}\nTraits: {voice_profile.traits}"
-                        if voice_profile
-                        else ""
-                    )
-                ),
+                context_text=format_active_projects_context(projects),
+                persona_context=render_persona_context(persona_packet),
                 use_opus=use_opus,
                 trace_id=trace_id,
             )
@@ -1599,6 +1680,12 @@ async def query_brain(
             project_payload = await build_project_story_payload(session, uuid.UUID(project_payload["project"]["id"]))
 
         current_stage = QUERY_STAGE_CANDIDATE_RETRIEVAL
+        atlas_snapshot = None
+        if resolved_intent.startswith("facet_") or project_payload:
+            try:
+                atlas_snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
+            except Exception:
+                atlas_snapshot = None
         subject_ref = project_payload["project"]["title"] if project_payload else await resolve_subject_ref(session, question)
         project_note_id = uuid.UUID(project_payload["project"]["id"]) if project_payload else None
 
@@ -1642,6 +1729,7 @@ async def query_brain(
                 session,
                 intent=resolved_intent,
                 now=current_time,
+                snapshot=atlas_snapshot,
                 limit=8,
             )
         if resolved_intent.startswith("facet_") and facet_sources:
@@ -1659,7 +1747,16 @@ async def query_brain(
         if facet_sources:
             project_sources = [_coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources]
         else:
-            project_sources = [
+            temporal_project_sources = [
+                _coerce_source_item(item, retrieval_kind="temporal_path")
+                for item in _collect_temporal_project_sources(
+                    atlas_snapshot,
+                    project_payload=project_payload,
+                    now=current_time,
+                    limit=4,
+                )
+            ]
+            project_sources = temporal_project_sources + [
                 _coerce_source_item(item, retrieval_kind="project_snapshot")
                 for item in _collect_project_sources(project_payload, now=current_time, limit=8)
             ]
@@ -1691,7 +1788,7 @@ async def query_brain(
         )
         used_exact_match = any(item["retrieval_kind"].startswith("exact_") for item in selected_sources)
         used_project_snapshot = any(
-            item["retrieval_kind"] in {"project_snapshot", "facet_snapshot", "facet_story_river"}
+            item["retrieval_kind"] in {"project_snapshot", "facet_snapshot", "facet_story_river", "temporal_path"}
             for item in selected_sources
         )
         used_vector_search = any(item["retrieval_kind"] == "vector" for item in selected_sources)
@@ -1794,9 +1891,10 @@ async def query_brain(
             since_boundary=since_boundary,
             evidence_quality=evidence_quality,
         )
-        voice_profile = await store.get_voice_profile(session, "ahmad-default")
-        if voice_profile:
-            context_text += f"\n\nVoice Profile:\nSummary: {voice_profile.summary}\nTraits: {voice_profile.traits}"
+        persona_packet = await build_persona_packet(session, snapshot=atlas_snapshot)
+        persona_context = render_persona_context(persona_packet)
+        if persona_context:
+            context_text += f"\n\nPersona Packet:\n{persona_context}"
 
         current_stage = QUERY_STAGE_NARRATION
         model = "deterministic"
@@ -1808,6 +1906,7 @@ async def query_brain(
                     session,
                     question=question,
                     context_text=context_text,
+                    persona_context=persona_context,
                     use_opus=use_opus,
                     trace_id=trace_id,
                 )
@@ -1816,6 +1915,7 @@ async def query_brain(
                     session,
                     question=question,
                     context_text=context_text,
+                    persona_context=persona_context,
                     use_opus=use_opus,
                     trace_id=trace_id,
                 )
@@ -1824,6 +1924,7 @@ async def query_brain(
                     session,
                     question=question,
                     context_text=context_text,
+                    persona_context=persona_context,
                     use_opus=use_opus,
                     trace_id=trace_id,
                 )

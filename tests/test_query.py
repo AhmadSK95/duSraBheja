@@ -195,7 +195,7 @@ async def test_query_brain_returns_separate_brain_and_web_sources(monkeypatch) -
     async def fake_get_voice_profile(session, profile_name="ahmad-default"):
         return None
 
-    async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
+    async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
         assert "Recent project evidence" in context_text
         return {"text": "Brain says the project is active.", "model": "test-model", "cost_usd": 0}
 
@@ -274,7 +274,7 @@ async def test_query_brain_active_projects_uses_snapshot_overview(monkeypatch) -
     async def fake_get_voice_profile(session, profile_name="ahmad-default"):
         return None
 
-    async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
+    async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
         assert "Active Project Board:" in context_text
         assert "duSraBheja" in context_text
         assert "evidence_counts=repos:1, sessions:3, planners:1, reminders:0" in context_text
@@ -309,6 +309,20 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
                         "open_loops": ["Which interview track deserves the next focused block?"],
                     }
                 ],
+                "current_headspace": [
+                    {
+                        "facet_id": "facet:thought:1",
+                        "title": "Interview preparation",
+                        "facet_type": "thoughts",
+                        "summary": "Interview prep and job-search pressure have been recurring strongly.",
+                        "signal_kind": "direct_sync",
+                        "happened_at_local": "2026-03-15 06:00 AM EDT",
+                        "path_score": 0.81,
+                        "anchor_count": 2,
+                        "why_now": "Recent memory paths keep landing here.",
+                    }
+                ],
+                "memory_paths": [],
                 "story_river": [],
             }
 
@@ -330,8 +344,9 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
     async def fake_get_voice_profile(session, profile_name="ahmad-default"):
         return None
 
-    async def fake_narrate_status_answer(session, *, question, context_text, use_opus, trace_id):
+    async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
         assert "Interview prep and job-search pressure" in context_text
+        assert "Current headspace" in persona_context
         return {"text": "Interview prep has been the clearest recurring thought lately.", "model": "test-model", "cost_usd": 0}
 
     monkeypatch.setattr(query_service, "build_brain_atlas_snapshot", fake_build_brain_atlas_snapshot)
@@ -340,14 +355,14 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
     monkeypatch.setattr(query_service, "collect_sources", fake_collect_sources)
     monkeypatch.setattr(query_service.store, "list_story_events", fake_list_story_events)
     monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
-    monkeypatch.setattr(query_service, "narrate_status_answer", fake_narrate_status_answer)
+    monkeypatch.setattr(query_service, "narrate_from_context", fake_narrate_from_context)
 
     result = await query_service.query_brain(object(), question="What has been on my mind lately?")
 
     assert result["ok"] is True
     assert result["intent"] == "facet_thoughts"
     assert result["used_project_snapshot"] is True
-    assert result["brain_sources"][0]["retrieval_kind"] == "facet_snapshot"
+    assert result["brain_sources"][0]["retrieval_kind"] == "temporal_path"
     assert "Interview prep" in result["answer"]
 
 
@@ -408,7 +423,7 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
     async def fake_get_voice_profile(session, profile_name="ahmad-default"):
         return None
 
-    async def fake_narrate_from_context(session, *, question, context_text, use_opus, trace_id):
+    async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
         assert "Where it stands: Board-first overhaul is live." in context_text
         assert context_text.index("duSraBheja snapshot") < context_text.index("Evidence gap: duSraBheja")
         return {"text": "duSraBheja is live and the next step is verifying answers.", "model": "test-model", "cost_usd": 0}
@@ -428,3 +443,44 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
     assert "project_snapshot" in retrieval_kinds
     assert retrieval_kinds.index("project_snapshot") < retrieval_kinds.index("exact_artifact")
     assert result["used_project_snapshot"] is True
+
+
+def test_collect_temporal_project_sources_reads_current_headspace() -> None:
+    snapshot = {
+        "facets": [
+            {
+                "id": "facet:project:1",
+                "title": "duSraBheja",
+                "summary": "Temporal traversal work is live.",
+                "facet_type": "projects",
+                "signal_kind": "direct_agent",
+                "happened_at_utc": "2026-03-16T12:00:00+00:00",
+                "metadata": {"workspace_path": "/Users/moenuddeenahmadshaik/code/duSraBheja"},
+            }
+        ],
+        "current_headspace": [
+            {
+                "facet_id": "facet:project:1",
+                "title": "duSraBheja",
+                "facet_type": "projects",
+                "path_score": 0.88,
+                "anchor_count": 2,
+                "why_now": "Recent memory paths keep landing here.",
+            }
+        ],
+    }
+    payload = {
+        "project": {"title": "duSraBheja"},
+        "aliases": [],
+        "repos": [{"name": "duSraBheja", "local_path": "/Users/moenuddeenahmadshaik/code/duSraBheja"}],
+    }
+
+    sources = query_service._collect_temporal_project_sources(
+        snapshot,
+        project_payload=payload,
+        now=datetime(2026, 3, 16, 13, 0, tzinfo=timezone.utc),
+    )
+
+    assert sources
+    assert sources[0]["retrieval_kind"] == "temporal_path"
+    assert "Why now" in sources[0]["content"]

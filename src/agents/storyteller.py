@@ -44,6 +44,7 @@ Output rules:
 - Start with a direct answer in 1-3 sentences.
 - Then add a short grounded evidence section.
 - If you are inferring anything, label it clearly as an inference.
+- Use the supplied Persona Packet as a hard style/taste constraint when it is present.
 - Keep Ahmad's tone: direct, thoughtful, low-fluff, builder-operator energy.
 - Prefer clear current status over generic retrospection.
 - Cite sources as [1], [2], etc. only when they are actually grounded in the evidence.
@@ -55,6 +56,7 @@ EXACT_FACT_SYSTEM_PROMPT = """You answer exact personal or project fact question
 
 Output rules:
 - Start with the exact answer immediately.
+- Use the supplied Persona Packet when present so the answer sounds like Ahmad, not a bot.
 - If the evidence contains multiple conflicting values, say that clearly.
 - Keep the answer short and human-readable.
 - Add a brief evidence note after the answer when useful.
@@ -67,6 +69,7 @@ TIMELINE_ANSWER_SYSTEM_PROMPT = """You build a grounded timeline or review answe
 Output rules:
 - Start with the clearest short answer to the user's question.
 - Then walk through the timeline or change sequence in chronological order.
+- Use the supplied Persona Packet when present so the answer feels like Ahmad talking through the evidence.
 - Separate grounded evidence from inference when needed.
 - Keep names, dates, and causal links precise.
 - If the story is incomplete, say where the gaps are.
@@ -77,6 +80,7 @@ BOARD_NARRATIVE_SYSTEM_PROMPT = """You turn a closed time window of grounded evi
 
 Output rules:
 - Write like Ahmad's operating brain: direct, grounded, human, and concise.
+- Use the supplied Persona Packet when present so the board sounds like Ahmad's own operating notes.
 - Say plainly when there was no direct project work in the window.
 - Do not inflate derived system artifacts into direct work.
 - Highlight what mattered, what slipped, and what carries forward.
@@ -202,10 +206,14 @@ async def narrate_from_context(
     *,
     question: str,
     context_text: str,
+    persona_context: str | None = None,
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     prompt = f"""Question: {question}
+
+Persona Packet:
+{persona_context or "Use the default Ahmad voice contract."}
 
 Context:
 {context_text}
@@ -230,10 +238,14 @@ async def narrate_status_answer(
     *,
     question: str,
     context_text: str,
+    persona_context: str | None = None,
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     prompt = f"""Question: {question}
+
+Persona Packet:
+{persona_context or "Use the default Ahmad voice contract."}
 
 Context:
 {context_text}
@@ -258,10 +270,14 @@ async def narrate_exact_fact_answer(
     *,
     question: str,
     context_text: str,
+    persona_context: str | None = None,
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     prompt = f"""Question: {question}
+
+Persona Packet:
+{persona_context or "Use the default Ahmad voice contract."}
 
 Context:
 {context_text}
@@ -286,10 +302,14 @@ async def narrate_timeline_answer(
     *,
     question: str,
     context_text: str,
+    persona_context: str | None = None,
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     prompt = f"""Question: {question}
+
+Persona Packet:
+{persona_context or "Use the default Ahmad voice contract."}
 
 Context:
 {context_text}
@@ -314,9 +334,13 @@ async def narrate_board_story(
     *,
     board_type: str,
     context_text: str,
+    persona_context: str | None = None,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
     prompt = f"""Board type: {board_type}
+
+Persona Packet:
+{persona_context or "Use the default Ahmad voice contract."}
 
 Context:
 {context_text}

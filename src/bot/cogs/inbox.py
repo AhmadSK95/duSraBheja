@@ -214,9 +214,12 @@ class InboxCog(commands.Cog):
                 )
                 return
 
-            embed = build_answer_embed(question, result)
             try:
-                await message.reply(embed=embed, mention_author=False)
+                text_reply = build_answer_text(question, result)
+                if len(text_reply) <= 1900:
+                    await message.reply(text_reply, mention_author=False)
+                else:
+                    await message.reply(embed=build_answer_embed(question, result), mention_author=False)
             except Exception:
                 log.exception("Embed send failed for ask-brain message %s; falling back to text", message.id)
                 trace_id = result.get("retrieval_trace_id")
@@ -555,31 +558,18 @@ def build_classification_embed(classification: dict, summary: str, artifact_id: 
 
 
 def build_answer_embed(question: str, result: dict) -> discord.Embed:
-    model_label = result.get("model") or "unknown"
-    if "-" in model_label:
-        parts = [part for part in model_label.split("-") if part]
-        model_label = parts[1].title() if len(parts) > 1 else parts[0].title()
-    else:
-        model_label = model_label.title()
-
     embed = discord.Embed(
-        title="Brain Answer",
+        title="Here’s the read",
         description=str(result["answer"])[:4000],
         color=discord.Color.teal(),
     )
-    embed.add_field(name="Question", value=question[:1024], inline=False)
-    if result.get("mode"):
-        embed.add_field(name="Mode", value=str(result["mode"]).replace("_", " ").title(), inline=True)
-    if result.get("intent"):
-        embed.add_field(name="Intent", value=str(result["intent"]).replace("_", " ").title(), inline=True)
-
     brain_sources = result.get("brain_sources") or []
     if brain_sources:
         source_lines = [
-            f"[{i}] {src['category']}: {src['title']} ({float(src.get('similarity', 0)):.0%})"
+            f"[{i}] {src['title']}"
             for i, src in enumerate(brain_sources[:5], 1)
         ]
-        embed.add_field(name="From Your Brain", value="\n".join(source_lines)[:1024], inline=False)
+        embed.add_field(name="Grounding", value="\n".join(source_lines)[:1024], inline=False)
 
     web_sources = result.get("web_sources") or []
     if web_sources:
@@ -587,34 +577,26 @@ def build_answer_embed(question: str, result: dict) -> discord.Embed:
             f"[{i}] {src.get('title') or src.get('source_hint') or 'Web result'}"
             for i, src in enumerate(web_sources[:4], 1)
         ]
-        embed.add_field(name="From The Web", value="\n".join(web_lines)[:1024], inline=False)
-
-    embed.add_field(name="Confidence", value=result["confidence"].title(), inline=True)
-    embed.add_field(name="Model", value=model_label, inline=True)
+        embed.add_field(name="Outside Context", value="\n".join(web_lines)[:1024], inline=False)
+    embed.set_footer(
+        text=(
+            f"Grounded in {len(brain_sources)} brain signals"
+            + (f" • {len(web_sources)} outside references" if web_sources else "")
+        )
+    )
     return embed
 
 
 def build_answer_text(question: str, result: dict) -> str:
-    lines = [
-        "Brain Answer",
-        "",
-        str(result.get("answer") or "").strip(),
-        "",
-        f"Question: {question}",
-        f"Mode: {str(result.get('mode') or 'answer').replace('_', ' ')}",
-    ]
-    if result.get("intent"):
-        lines.append(f"Intent: {str(result['intent']).replace('_', ' ')}")
+    lines = [str(result.get("answer") or "").strip()]
     if result.get("brain_sources"):
         lines.append("")
-        lines.append("From your brain:")
+        lines.append("Grounding:")
         for index, src in enumerate((result.get("brain_sources") or [])[:5], 1):
-            lines.append(
-                f"[{index}] {src.get('category')}: {src.get('title')} ({float(src.get('similarity', 0)):.0%})"
-            )
+            lines.append(f"[{index}] {src.get('title')}")
     if result.get("web_sources"):
         lines.append("")
-        lines.append("From the web:")
+        lines.append("Outside context:")
         for index, src in enumerate((result.get("web_sources") or [])[:4], 1):
             lines.append(f"[{index}] {src.get('title') or src.get('source_hint') or 'Web result'}")
     rendered = "\n".join(lines).strip()

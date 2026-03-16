@@ -58,6 +58,7 @@ def _format_bootstrap_markdown(payload: dict) -> str:
     project = payload.get("project") or {}
     reboot = payload.get("reboot_brief") or {}
     voice_profile = payload.get("voice_profile") or {}
+    persona_packet = payload.get("persona_packet") or {}
     lines = [
         f"# Brain Reboot: {project.get('title') or payload.get('session_id')}",
         "",
@@ -109,6 +110,20 @@ def _format_bootstrap_markdown(payload: dict) -> str:
                 f"Priorities: {', '.join(traits.get('priorities') or []) or 'unknown'}",
             ]
         )
+    if persona_packet:
+        lines.extend(
+            [
+                "",
+                "## Persona Packet",
+                str(persona_packet.get("summary") or "No persona packet yet."),
+            ]
+        )
+        headspace = list(persona_packet.get("current_headspace") or [])
+        if headspace:
+            lines.append(f"Current Headspace: {', '.join(headspace[:5])}")
+        active_projects = list(persona_packet.get("active_projects") or [])
+        if active_projects:
+            lines.append(f"Active Projects: {', '.join(active_projects[:4])}")
     if payload.get("brain_sources"):
         lines.extend(
             [
