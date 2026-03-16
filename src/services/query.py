@@ -178,6 +178,7 @@ async def narrate_from_context(
     *,
     question: str,
     context_text: str,
+    persona_context: str | None = None,
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict:
@@ -185,6 +186,7 @@ async def narrate_from_context(
         session,
         question=question,
         context_text=context_text,
+        persona_context=persona_context,
         use_opus=use_opus,
         trace_id=trace_id,
     )
