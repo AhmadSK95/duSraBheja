@@ -377,34 +377,42 @@ async def test_query_brain_uses_brain_atlas_for_facet_questions(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_query_brain_project_status_prefers_project_sources_over_lexical_noise(monkeypatch) -> None:
+    payload = {
+        "project": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "title": "duSraBheja",
+            "status": "active",
+            "content": "Board-first overhaul is live.",
+        },
+        "snapshot": {
+            "implemented": "Board-first overhaul is live.",
+            "what_changed": "Recent closeout tightened retrieval.",
+            "remaining": "Verify live answers.",
+            "last_signal_at": "2026-03-15T10:00:00+00:00",
+            "blockers": [],
+            "holes": [],
+        },
+        "recent_activity": [
+            {
+                "id": "evt-1",
+                "title": "Closeout published",
+                "summary": "Codex published a closeout about retrieval fixes.",
+                "entry_type": "session_closeout",
+                "actor_type": "agent",
+                "happened_at": "2026-03-15T09:30:00+00:00",
+            }
+        ],
+        "sources": [],
+    }
+
     async def fake_resolve_project_payload(session, question):
-        return {
-            "project": {
-                "id": "11111111-1111-1111-1111-111111111111",
-                "title": "duSraBheja",
-                "status": "active",
-                "content": "Board-first overhaul is live.",
-            },
-            "snapshot": {
-                "implemented": "Board-first overhaul is live.",
-                "what_changed": "Recent closeout tightened retrieval.",
-                "remaining": "Verify live answers.",
-                "last_signal_at": "2026-03-15T10:00:00+00:00",
-                "blockers": [],
-                "holes": [],
-            },
-            "recent_activity": [
-                {
-                    "id": "evt-1",
-                    "title": "Closeout published",
-                    "summary": "Codex published a closeout about retrieval fixes.",
-                    "entry_type": "session_closeout",
-                    "actor_type": "agent",
-                    "happened_at": "2026-03-15T09:30:00+00:00",
-                }
-            ],
-            "sources": [],
-        }
+        return payload
+
+    async def fake_recompute_project_states(session, *, project_note_ids=None):
+        return []
+
+    async def fake_build_project_story_payload(session, project_note_id):
+        return payload
 
     async def fake_resolve_subject_ref(session, question):
         return "duSraBheja"
@@ -438,6 +446,8 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
         return {"text": "duSraBheja is live and the next step is verifying answers.", "model": "test-model", "cost_usd": 0}
 
     monkeypatch.setattr(query_service, "resolve_project_payload", fake_resolve_project_payload)
+    monkeypatch.setattr(query_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(query_service, "build_project_story_payload", fake_build_project_story_payload)
     monkeypatch.setattr(query_service, "resolve_subject_ref", fake_resolve_subject_ref)
     monkeypatch.setattr(query_service.store, "list_story_events", fake_list_story_events)
     monkeypatch.setattr(query_service, "collect_sources", fake_collect_sources)
@@ -452,6 +462,93 @@ async def test_query_brain_project_status_prefers_project_sources_over_lexical_n
     assert "project_snapshot" in retrieval_kinds
     assert retrieval_kinds.index("project_snapshot") < retrieval_kinds.index("exact_artifact")
     assert result["used_project_snapshot"] is True
+
+
+@pytest.mark.asyncio
+async def test_query_brain_refreshes_project_snapshot_for_project_questions(monkeypatch) -> None:
+    stale_payload = {
+        "project": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "title": "duSraBheja",
+            "status": "active",
+            "content": "Older summary.",
+        },
+        "snapshot": {
+            "implemented": "Old state that should be refreshed.",
+            "what_changed": "Old what changed.",
+            "remaining": "Old remaining work.",
+            "last_signal_at": "2026-03-15T08:00:00+00:00",
+            "blockers": [],
+            "holes": [],
+        },
+        "recent_activity": [],
+        "sources": [],
+    }
+    fresh_payload = {
+        "project": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "title": "duSraBheja",
+            "status": "active",
+            "content": "Canonical summary.",
+        },
+        "snapshot": {
+            "implemented": "Public surface is live.",
+            "what_changed": "Vault v2 and public profile shipped.",
+            "remaining": "Tighten stale private retrieval weighting.",
+            "last_signal_at": "2026-03-16T14:00:00+00:00",
+            "blockers": [],
+            "holes": [],
+        },
+        "recent_activity": [],
+        "sources": [],
+    }
+    calls = {"recompute": 0, "payload": 0}
+
+    async def fake_resolve_project_payload(session, question):
+        return stale_payload
+
+    async def fake_recompute_project_states(session, *, project_note_ids=None):
+        calls["recompute"] += 1
+        return []
+
+    async def fake_build_project_story_payload(session, project_note_id):
+        calls["payload"] += 1
+        return fresh_payload
+
+    async def fake_resolve_subject_ref(session, question):
+        return "duSraBheja"
+
+    async def fake_list_story_events(session, **kwargs):
+        return []
+
+    async def fake_collect_sources(session, question, *, category=None, limit=8):
+        return []
+
+    async def fake_collect_exact_sources(session, question, *, intent, project_payload, now, strict_project_match=False, limit=8):
+        return []
+
+    async def fake_get_voice_profile(session, profile_name="ahmad-default"):
+        return None
+
+    async def fake_narrate_from_context(session, *, question, context_text, persona_context, use_opus, trace_id):
+        assert "Where it stands: Public surface is live." in context_text
+        assert "Old state that should be refreshed." not in context_text
+        return {"text": "The public surface is live and the next pass is retrieval cleanup.", "model": "test-model", "cost_usd": 0}
+
+    monkeypatch.setattr(query_service, "resolve_project_payload", fake_resolve_project_payload)
+    monkeypatch.setattr(query_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(query_service, "build_project_story_payload", fake_build_project_story_payload)
+    monkeypatch.setattr(query_service, "resolve_subject_ref", fake_resolve_subject_ref)
+    monkeypatch.setattr(query_service.store, "list_story_events", fake_list_story_events)
+    monkeypatch.setattr(query_service, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(query_service, "_collect_exact_sources", fake_collect_exact_sources)
+    monkeypatch.setattr(query_service.store, "get_voice_profile", fake_get_voice_profile)
+    monkeypatch.setattr(query_service, "narrate_from_context", fake_narrate_from_context)
+
+    result = await query_service.query_brain(object(), question="What is the latest on the duSraBheja project??", include_web=False)
+
+    assert calls == {"recompute": 1, "payload": 1}
+    assert result["answer"] == "The public surface is live and the next pass is retrieval cleanup."
 
 
 @pytest.mark.asyncio

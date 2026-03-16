@@ -1838,9 +1838,11 @@ async def query_brain(
 
         since_boundary = parse_since_boundary(question, current_time) if resolved_mode == "changed_since" else None
 
-        if project_payload and not project_payload.get("snapshot"):
-            await recompute_project_states(session, project_note_ids=[uuid.UUID(project_payload["project"]["id"])])
-            project_payload = await build_project_story_payload(session, uuid.UUID(project_payload["project"]["id"]))
+        if project_payload:
+            project_uuid = uuid.UUID(project_payload["project"]["id"])
+            if resolved_intent in PROJECT_FOCUSED_INTENTS or not project_payload.get("snapshot"):
+                await recompute_project_states(session, project_note_ids=[project_uuid])
+                project_payload = await build_project_story_payload(session, project_uuid)
 
         current_stage = QUERY_STAGE_CANDIDATE_RETRIEVAL
         atlas_snapshot = None
