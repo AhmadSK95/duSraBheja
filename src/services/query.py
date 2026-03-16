@@ -39,6 +39,7 @@ QUERY_STOPWORDS = {
     "for",
     "from",
     "give",
+    "has",
     "how",
     "i",
     "in",
@@ -109,6 +110,21 @@ EXACT_FACT_HINTS = (
     "port",
 )
 PROJECT_FOCUSED_INTENTS = {"project_latest", "project_status", "project_review", "timeline_review", "latest_status"}
+LOW_SIGNAL_PROJECT_ENTRY_TYPES = {
+    "context_dump",
+    "context_signal_dump",
+    "directory_inventory",
+    "repo_snapshot",
+    "repo_signal_summary",
+    "workspace_signal_summary",
+    "workspace_landscape_summary",
+    "agent_reference_signal",
+    "agent_plan_signal",
+    "agent_todo_signal",
+    "chrome_project_signal",
+    "chrome_period_summary",
+    "chrome_profile_signal",
+}
 LEGACY_WORKSPACE_HINTS = ("/desktop/", "\\desktop\\")
 CURRENT_WORKSPACE_HINTS = ("/code/", "/opt/dusrabheja", "/users/moenuddeenahmadshaik/code/")
 FACET_QUERY_HINTS: dict[str, tuple[str, ...]] = {
@@ -709,12 +725,13 @@ def format_story_context(
     if project_payload:
         project = project_payload["project"]
         snapshot = project_payload.get("snapshot") or {}
+        canonical_summary = project.get("content") or "No canonical summary."
         sections.extend(
             [
                 "",
                 f"Project: {project['title']}",
                 f"Status: {snapshot.get('status') or project['status']}",
-                f"Where it stands: {snapshot.get('implemented') or project['content'] or 'No canonical summary.'}",
+                f"Where it stands: {snapshot.get('implemented') or snapshot.get('what_changed') or canonical_summary}",
                 f"What changed: {snapshot.get('what_changed') or 'unknown'}",
                 f"What is left: {snapshot.get('remaining') or 'unknown'}",
                 f"Blockers: {', '.join(snapshot.get('blockers') or []) or 'none'}",
@@ -722,6 +739,8 @@ def format_story_context(
                 f"Why active: {snapshot.get('why_active') or 'unknown'}",
             ]
         )
+        if not snapshot.get("implemented"):
+            sections.append(f"Canonical summary: {canonical_summary}")
 
     if events:
         sections.extend(["", "Story Events:"])
@@ -1047,8 +1066,24 @@ def _collect_project_sources(project_payload: dict | None, *, now: datetime, lim
     if snapshot_source:
         sources.append(snapshot_source)
 
-    for entry in (project_payload.get("recent_activity") or [])[:8]:
+    for entry in (project_payload.get("recent_activity") or [])[:12]:
+        entry_type = str(entry.get("entry_type") or "")
+        if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
+            continue
         signal_kind = signal_kind_for_event(entry_type=entry.get("entry_type"), actor_type=entry.get("actor_type"))
+        combined_text = " ".join(
+            filter(
+                None,
+                [
+                    entry.get("title"),
+                    entry.get("summary"),
+                    entry.get("open_question"),
+                    entry.get("outcome"),
+                ],
+            )
+        )
+        if _contains_legacy_workspace(combined_text) and _workspace_signal_adjustment(combined_text, project_payload) < 0:
+            continue
         sources.append(
             _build_source_item(
                 source_id=f"event:{entry['id']}",
@@ -1609,15 +1644,18 @@ async def query_brain(
                 now=current_time,
                 limit=8,
             )
-        exact_sources = await _collect_exact_sources(
-            session,
-            question,
-            project_payload=project_payload,
-            now=current_time,
-            strict_project_match=resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"},
-            limit=8,
-        )
-        exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]
+        if resolved_intent.startswith("facet_") and facet_sources:
+            exact_sources = []
+        else:
+            exact_sources = await _collect_exact_sources(
+                session,
+                question,
+                project_payload=project_payload,
+                now=current_time,
+                strict_project_match=resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"},
+                limit=8,
+            )
+            exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]
         if facet_sources:
             project_sources = [_coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources]
         else:
@@ -1625,16 +1663,19 @@ async def query_brain(
                 _coerce_source_item(item, retrieval_kind="project_snapshot")
                 for item in _collect_project_sources(project_payload, now=current_time, limit=8)
             ]
-        vector_sources = [
-            _coerce_source_item(item, retrieval_kind="vector")
-            for item in await collect_sources(session, question, category=category, limit=8)
-        ]
-        vector_sources = _curate_vector_sources(
-            vector_sources,
-            project_payload=project_payload,
-            intent=resolved_intent,
-            now=current_time,
-        )
+        if resolved_intent.startswith("facet_") and facet_sources:
+            vector_sources = []
+        else:
+            vector_sources = [
+                _coerce_source_item(item, retrieval_kind="vector")
+                for item in await collect_sources(session, question, category=category, limit=8)
+            ]
+            vector_sources = _curate_vector_sources(
+                vector_sources,
+                project_payload=project_payload,
+                intent=resolved_intent,
+                now=current_time,
+            )
         selected_sources = _merge_sources(
             intent=resolved_intent,
             exact_sources=exact_sources,
