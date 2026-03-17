@@ -242,7 +242,15 @@ async def build_session_bootstrap(
         "web_sources": list((web_brief or {}).get("findings") or [])[:5] if web_brief else [],
         "profile_models": {
             key: profile_models.get(key)
-            for key in ("profile:overview", "profile:timeline", "profile:expertise", "profile:projects", "profile:coverage")
+            for key in (
+                "profile:overview",
+                "profile:identity",
+                "profile:timeline",
+                "profile:institutions",
+                "profile:expertise",
+                "profile:projects",
+                "profile:coverage",
+            )
             if key in profile_models
         },
         "voice_profile": (

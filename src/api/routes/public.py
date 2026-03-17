@@ -309,6 +309,7 @@ async def public_contact() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
     payload = _profile_payload(profile)
+    contact_items = list(payload.get("contact") or payload.get("contact_modes") or [])
     hero_media = _photo_block((payload.get("photos") or {}).get("contact"), class_name="public-hero-visual", label="Contact Portrait")
     content = f"""
     <section class="public-editorial-band">
@@ -333,7 +334,7 @@ async def public_contact() -> HTMLResponse:
         <div class="public-kicker">Channels</div>
         <h2>Public-facing contact only.</h2>
       </div>
-      <div class="public-contact-grid">{_contact_rows(list(payload.get("contact") or []))}</div>
+      <div class="public-contact-grid">{_contact_rows(contact_items)}</div>
     </section>
     """
     return HTMLResponse(

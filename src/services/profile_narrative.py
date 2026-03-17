@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.lib import store
+from src.lib.time import format_display_datetime
 from src.models import Artifact, Note, SourceItem, SyncSource
 from src.services.profile_inventory import build_profile_inventory_payload
 
@@ -81,6 +82,27 @@ def _extract_markdown_sections(text: str) -> list[tuple[int, str, str]]:
     if buffer:
         sections.append((current_level, current_title, "\n".join(buffer).strip()))
     return [section for section in sections if section[2].strip()]
+
+
+def _extract_labeled_block(text: str, label: str, *, stop_labels: list[str] | None = None) -> str:
+    lines = (text or "").splitlines()
+    normalized_label = label.lower()
+    normalized_stops = {item.lower() for item in (stop_labels or [])}
+    collected: list[str] = []
+    capture = False
+    for raw in lines:
+        stripped = raw.strip()
+        bold_match = re.match(r"^\*\*(.+?)\*\*\s*:?\s*$", stripped)
+        heading = _compact(bold_match.group(1)) if bold_match else ""
+        if heading.lower().startswith(normalized_label):
+            capture = True
+            continue
+        if capture and heading:
+            if any(heading.lower().startswith(stop) for stop in normalized_stops):
+                break
+        if capture:
+            collected.append(raw)
+    return "\n".join(collected).strip()
 
 
 def _section_map(text: str) -> dict[str, str]:
@@ -336,12 +358,12 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         title = _compact(match.group("title"))
         body = match.group("body")
         slug = _slugify(title.split(" - ", 1)[0])
-        resume_match = re.search(r"\*\*Resume.*?\*\*:\s*(?P<body>.*?)(?=\n\*\*LinkedIn|\Z)", body, re.DOTALL)
-        linkedin_match = re.search(r"\*\*LinkedIn.*?\*\*:\s*(?P<body>.*?)(?=\n\*\*What this project demonstrates|\Z)", body, re.DOTALL)
-        demonstrates_match = re.search(r"\*\*What this project demonstrates:\*\*\s*(?P<body>.*)$", body, re.DOTALL)
-        resume_bullets = _bullet_lines(resume_match.group("body") if resume_match else "")
-        demonstrates = _bullet_lines(demonstrates_match.group("body") if demonstrates_match else "")
-        full_body = _compact(linkedin_match.group("body") if linkedin_match else body)
+        resume_body = _extract_labeled_block(body, "Resume", stop_labels=["LinkedIn", "What this project demonstrates"])
+        linkedin_body = _extract_labeled_block(body, "LinkedIn", stop_labels=["What this project demonstrates"])
+        demonstrates_body = _extract_labeled_block(body, "What this project demonstrates")
+        resume_bullets = _bullet_lines(resume_body)
+        demonstrates = _bullet_lines(demonstrates_body)
+        full_body = _compact(linkedin_body or resume_body or body)
         stack = []
         stack_match = re.search(r"Stack:\s*(?P<value>.+?)(?:\.|$)", body)
         if stack_match:
@@ -648,6 +670,196 @@ def _timeline_highlights(timeline: list[dict[str, str]]) -> list[str]:
     return [f"{item['year']}: {item['event']}" for item in timeline[:8]]
 
 
+def _project_match_score(project: dict[str, Any], overlay: dict[str, Any]) -> int:
+    project_slug = _slugify(project.get("slug") or project.get("title"))
+    overlay_slug = _slugify(overlay.get("slug") or overlay.get("title"))
+    project_title = _compact(project.get("title"))
+    overlay_title = _compact(overlay.get("title"))
+    if project_slug and overlay_slug and project_slug == overlay_slug:
+        return 10
+    if project_title and overlay_title and project_title.lower() == overlay_title.lower():
+        return 10
+    score = 0
+    if project_slug and overlay_slug and (project_slug in overlay_slug or overlay_slug in project_slug):
+        score += 5
+    project_tokens = {token for token in re.findall(r"[a-z0-9]{4,}", f"{project_title} {project_slug}".lower())}
+    overlay_tokens = {token for token in re.findall(r"[a-z0-9]{4,}", f"{overlay_title} {overlay_slug}".lower())}
+    score += len(project_tokens & overlay_tokens)
+    return score
+
+
+def _overlay_signal_text(overlay: dict[str, Any]) -> str:
+    parts = [
+        overlay.get("what_changed"),
+        overlay.get("remaining"),
+        overlay.get("latest_closeout"),
+        *(overlay.get("recent_updates") or [])[:2],
+    ]
+    return _excerpt(" ".join(part for part in parts if part), limit=220)
+
+
+async def _load_live_project_overlay(session: AsyncSession) -> list[dict[str, Any]]:
+    project_notes = await store.list_project_notes(session, limit=12)
+    overlay_items: list[dict[str, Any]] = []
+    for note in project_notes:
+        snapshot = await store.get_project_state_snapshot(session, note.id)
+        recent_activity = await store.list_recent_activity(session, project_note_id=note.id, limit=8)
+        if not snapshot and not recent_activity:
+            continue
+        latest_closeout = next((item for item in recent_activity if getattr(item, "entry_type", "") == "session_closeout"), None)
+        recent_updates: list[str] = []
+        recent_titles: list[str] = []
+        for entry in recent_activity:
+            summary = _compact(
+                getattr(entry, "summary", None)
+                or getattr(entry, "title", None)
+                or getattr(entry, "outcome", None)
+                or getattr(entry, "open_question", None)
+                or ""
+            )
+            if summary and summary not in recent_updates:
+                recent_updates.append(summary)
+            title = _compact(getattr(entry, "title", None) or "")
+            if title and title not in recent_titles:
+                recent_titles.append(title)
+        overlay_items.append(
+            {
+                "project_note_id": str(note.id),
+                "slug": _slugify(note.title),
+                "title": note.title,
+                "status": snapshot.status if snapshot else note.status,
+                "active_score": round(float(snapshot.active_score), 3) if snapshot and snapshot.active_score is not None else None,
+                "implemented": _excerpt(snapshot.implemented, limit=220) if snapshot else "",
+                "remaining": _excerpt(snapshot.remaining, limit=220) if snapshot else "",
+                "what_changed": _excerpt(snapshot.what_changed, limit=220) if snapshot else "",
+                "holes": list((snapshot.holes or [])[:4]) if snapshot else [],
+                "blockers": list((snapshot.blockers or [])[:4]) if snapshot else [],
+                "last_signal_at": format_display_datetime(snapshot.last_signal_at) if snapshot else "",
+                "latest_closeout": _excerpt(
+                    getattr(latest_closeout, "summary", None)
+                    or getattr(latest_closeout, "title", None)
+                    or getattr(latest_closeout, "outcome", None)
+                    or "",
+                    limit=220,
+                )
+                if latest_closeout
+                else "",
+                "latest_closeout_at": format_display_datetime(getattr(latest_closeout, "happened_at", None)) if latest_closeout else "",
+                "recent_updates": recent_updates[:4],
+                "recent_titles": recent_titles[:4],
+            }
+        )
+    overlay_items.sort(
+        key=lambda item: (
+            float(item.get("active_score") or 0.0),
+            str(item.get("last_signal_at") or ""),
+            str(item.get("title") or ""),
+        ),
+        reverse=True,
+    )
+    return overlay_items
+
+
+def _merge_live_project_overlay(read_models: dict[str, dict[str, Any]], live_overlay: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    if not live_overlay:
+        return read_models
+
+    overview = dict(read_models.get("profile:overview") or {})
+    projects = dict(read_models.get("profile:projects") or {})
+    coverage = dict(read_models.get("profile:coverage") or {})
+    sources = dict(read_models.get("profile:sources") or {})
+    library = dict(read_models.get("profile:library") or {})
+
+    current_arc = dict(overview.get("current_arc") or {})
+    project_items = [dict(item) for item in list(projects.get("items") or [])]
+    matched_overlay_slugs: set[str] = set()
+    live_focus: list[str] = []
+    live_project_cards: list[dict[str, Any]] = []
+
+    for project in project_items:
+        best_overlay: dict[str, Any] | None = None
+        best_score = 0
+        for overlay in live_overlay:
+            score = _project_match_score(project, overlay)
+            if score > best_score:
+                best_score = score
+                best_overlay = overlay
+        if not best_overlay or best_score < 4:
+            continue
+
+        matched_overlay_slugs.add(str(best_overlay.get("slug") or ""))
+        signal_text = _overlay_signal_text(best_overlay)
+        project.update(
+            {
+                "live_project_ref": best_overlay.get("project_note_id"),
+                "live_status": best_overlay.get("status"),
+                "live_active_score": best_overlay.get("active_score"),
+                "live_implemented": best_overlay.get("implemented"),
+                "live_remaining": best_overlay.get("remaining"),
+                "live_what_changed": best_overlay.get("what_changed"),
+                "live_holes": list(best_overlay.get("holes") or []),
+                "live_blockers": list(best_overlay.get("blockers") or []),
+                "latest_closeout": best_overlay.get("latest_closeout"),
+                "latest_closeout_at": best_overlay.get("latest_closeout_at"),
+                "recent_updates": list(best_overlay.get("recent_updates") or []),
+                "recent_titles": list(best_overlay.get("recent_titles") or []),
+            }
+        )
+        if signal_text:
+            live_focus.append(f"{project.get('title')}: {signal_text}")
+        live_project_cards.append(
+            {
+                "title": project.get("title"),
+                "slug": project.get("slug"),
+                "status": best_overlay.get("status"),
+                "active_score": best_overlay.get("active_score"),
+                "what_changed": best_overlay.get("what_changed"),
+                "remaining": best_overlay.get("remaining"),
+                "latest_closeout": best_overlay.get("latest_closeout"),
+                "last_signal_at": best_overlay.get("last_signal_at"),
+            }
+        )
+
+    unmatched_live_projects = [
+        {
+            "title": item.get("title"),
+            "slug": item.get("slug"),
+            "status": item.get("status"),
+            "active_score": item.get("active_score"),
+            "summary": _overlay_signal_text(item),
+            "last_signal_at": item.get("last_signal_at"),
+        }
+        for item in live_overlay
+        if str(item.get("slug") or "") not in matched_overlay_slugs
+    ]
+
+    if live_focus:
+        current_arc["focus"] = _dedupe_strings(list(current_arc.get("focus") or []) + live_focus)[:6]
+    current_arc["live_projects"] = live_project_cards[:4]
+
+    overview["current_arc"] = current_arc
+    overview["flagship_projects"] = project_items[:4]
+    projects["items"] = project_items
+    sources["live_project_overlay"] = {
+        "count": len(live_overlay),
+        "matched_case_studies": len(matched_overlay_slugs),
+        "unmapped_projects": unmatched_live_projects[:6],
+    }
+    coverage["live_projects_without_case_study"] = unmatched_live_projects[:6]
+    library["live_overlay"] = {
+        "summary": "Profile read models now blend long-span biography with live project-state evidence from the private brain.",
+        "matched_projects": len(matched_overlay_slugs),
+        "unmapped_projects": len(unmatched_live_projects),
+    }
+
+    read_models["profile:overview"] = overview
+    read_models["profile:projects"] = projects
+    read_models["profile:coverage"] = coverage
+    read_models["profile:sources"] = sources
+    read_models["profile:library"] = library
+    return read_models
+
+
 def build_profile_narrative() -> dict[str, Any]:
     seed_dir = resolve_public_seed_path()
     personal_bible_path = seed_dir / "Ahmad_Personal_Bible.md"
@@ -842,6 +1054,7 @@ async def build_profile_read_models(session: AsyncSession) -> dict[str, dict[str
     coverage_gaps = await _coverage_gaps(session, narrative)
     notes_count = len(await store.list_notes(session, limit=500))
     projects = narrative.get("projects") or []
+    live_project_overlay = await _load_live_project_overlay(session)
 
     overview = {
         "headline": narrative.get("hero_summary") or settings.public_site_title,
@@ -860,6 +1073,25 @@ async def build_profile_read_models(session: AsyncSession) -> dict[str, dict[str
     timeline = {
         "eras": narrative.get("eras"),
         "events": narrative.get("timeline"),
+    }
+    identity = {
+        "headline": narrative.get("hero_summary") or settings.public_site_title,
+        "identity_stack": narrative.get("identity_stack"),
+        "current_arc": narrative.get("current_arc"),
+        "personal_texture": narrative.get("personal_texture"),
+        "contact_modes": narrative.get("contact_modes"),
+    }
+    institutions = {
+        "items": [
+            {
+                "title": item.get("title"),
+                "years": item.get("years"),
+                "summary": item.get("summary"),
+                "institutions": list(item.get("institutions") or []),
+                "roles": list(item.get("roles") or []),
+            }
+            for item in list(narrative.get("eras") or [])
+        ]
     }
     expertise = {
         "books": narrative.get("capabilities"),
@@ -898,15 +1130,18 @@ async def build_profile_read_models(session: AsyncSession) -> dict[str, dict[str
         "read_surfaces": ["Overview", "Timeline", "Expertise", "Projects", "Sources", "Coverage", "Library"],
         "summary": "The current system has strong raw storage primitives. The missing layer is curated meaning: eras, expertise books, institutions, and proof-backed chapters.",
     }
-    return {
+    read_models = {
         "profile:overview": overview,
+        "profile:identity": identity,
         "profile:timeline": timeline,
+        "profile:institutions": institutions,
         "profile:expertise": expertise,
         "profile:projects": project_cases,
         "profile:sources": sources,
         "profile:coverage": coverage,
         "profile:library": library,
     }
+    return _merge_live_project_overlay(read_models, live_project_overlay)
 
 
 async def materialize_profile_read_models(session: AsyncSession, *, force: bool = False) -> dict[str, dict[str, Any]]:
@@ -923,7 +1158,9 @@ async def materialize_profile_read_models(session: AsyncSession, *, force: bool 
         payloads = await build_profile_read_models(session)
         titles = {
             "profile:overview": "Profile Overview",
+            "profile:identity": "Identity Stack",
             "profile:timeline": "Life Timeline",
+            "profile:institutions": "Institution Chapters",
             "profile:expertise": "Expertise Books",
             "profile:projects": "Project Cases",
             "profile:sources": "Source Inventory",
@@ -932,7 +1169,9 @@ async def materialize_profile_read_models(session: AsyncSession, *, force: bool 
         }
         summaries = {
             "profile:overview": "High-level narrative and current arc.",
+            "profile:identity": "Identity, contact, and public-facing self description.",
             "profile:timeline": "Life-story timeline across eras and milestones.",
+            "profile:institutions": "Institution and work-history chapters mapped from the timeline.",
             "profile:expertise": "Capability books derived from narrative source material.",
             "profile:projects": "Curated proof-rich project case studies.",
             "profile:sources": "Narrative source pack and live source counts.",

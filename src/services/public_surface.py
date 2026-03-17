@@ -228,6 +228,23 @@ def _configured_public_contact_entries() -> list[dict[str, Any]]:
     return entries
 
 
+def _public_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
+    snapshot = dict(payload or {})
+    photos = dict(snapshot.get("photos") or {})
+    current_arc = dict(snapshot.get("current_arc") or {})
+    if not (snapshot.get("hero_summary") or snapshot.get("identity")):
+        return True
+    if not dict(photos.get("hero") or {}).get("url"):
+        return True
+    if not current_arc.get("summary"):
+        return True
+    if not list(snapshot.get("proof_points") or []):
+        return True
+    if not list(snapshot.get("contact") or snapshot.get("contact_modes") or []):
+        return True
+    return False
+
+
 async def _upsert_public_fact(
     session: AsyncSession,
     *,
@@ -686,6 +703,8 @@ async def _refresh_live_project_public_facts(session: AsyncSession) -> int:
 async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, Any]:
     result = await session.execute(select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main"))
     snapshot = result.scalar_one_or_none()
+    if snapshot and _public_snapshot_incomplete(snapshot.payload or {}):
+        return await refresh_public_snapshots(session, force=True)
     if snapshot and snapshot.refreshed_at and snapshot.refreshed_at >= _utcnow() - timedelta(minutes=settings.public_snapshot_refresh_minutes):
         return {"status": "fresh", "refreshed_at": snapshot.refreshed_at.isoformat()}
     return await refresh_public_snapshots(session, force=False)
