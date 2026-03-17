@@ -32,6 +32,10 @@ def _safe(value: object | None) -> str:
     return html.escape(str(value or ""))
 
 
+def _public_short_name(payload: dict) -> str:
+    return str(payload.get("short_name") or payload.get("preferred_name") or settings.public_profile_short_name)
+
+
 def _photo_block(photo: dict | None, *, class_name: str = "public-photo-card", label: str | None = None) -> str:
     if not photo or not photo.get("url"):
         return ""
@@ -188,6 +192,7 @@ async def public_home() -> HTMLResponse:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
     payload = _profile_payload(profile)
+    short_name = _public_short_name(payload)
     hero_media = _photo_block((payload.get("photos") or {}).get("hero"), class_name="public-hero-visual", label="Hero Portrait")
     content = f"""
     <section class="public-editorial-band">
@@ -229,9 +234,9 @@ async def public_home() -> HTMLResponse:
     """
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{settings.public_profile_short_name} — Living Profile",
+            page_title=f"{short_name} — Living Profile",
             hero_kicker="Living Profile",
-            hero_title=f"{settings.public_profile_short_name} builds systems with memory, taste, and proof.",
+            hero_title=f"{short_name} builds systems with memory, taste, and proof.",
             hero_subtitle=(payload.get("hero_summary") or profile.get("summary") or "").strip(),
             hero_media_html=hero_media,
             content_html=content,
@@ -247,6 +252,7 @@ async def public_about() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
     payload = _profile_payload(profile)
+    short_name = _public_short_name(payload)
     hero_media = _photo_block((payload.get("photos") or {}).get("personality"), class_name="public-hero-visual", label="About Portrait")
     content = f"""
     <section class="public-editorial-band">
@@ -291,7 +297,7 @@ async def public_about() -> HTMLResponse:
     """
     return HTMLResponse(
         render_public_shell(
-            page_title=f"About {settings.public_profile_short_name}",
+            page_title=f"About {short_name}",
             hero_kicker="About",
             hero_title="From IIT Kharagpur to New York to independent builder.",
             hero_subtitle="The site is arranged like a biography because the source material spans institutions, migration, work, and personal life rather than isolated portfolio bullets.",
@@ -309,6 +315,7 @@ async def public_contact() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
     payload = _profile_payload(profile)
+    short_name = _public_short_name(payload)
     contact_items = list(payload.get("contact") or payload.get("contact_modes") or [])
     hero_media = _photo_block((payload.get("photos") or {}).get("contact"), class_name="public-hero-visual", label="Contact Portrait")
     content = f"""
@@ -339,7 +346,7 @@ async def public_contact() -> HTMLResponse:
     """
     return HTMLResponse(
         render_public_shell(
-            page_title=f"Contact {settings.public_profile_short_name}",
+            page_title=f"Contact {short_name}",
             hero_kicker="Contact",
             hero_title="Reach Ahmad without digging through the private brain.",
             hero_subtitle="Selective public channels for collaboration, hiring, and direct follow-up.",
@@ -358,6 +365,7 @@ async def public_projects() -> HTMLResponse:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
     payload = _profile_payload(profile)
+    short_name = _public_short_name(payload)
     hero_media = _photo_block((payload.get("photos") or {}).get("work"), class_name="public-hero-visual", label="Work Portrait")
     content = f"""
     <section class="public-section">
@@ -379,7 +387,7 @@ async def public_projects() -> HTMLResponse:
     """
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{settings.public_profile_short_name} Projects",
+            page_title=f"{short_name} Projects",
             hero_kicker="Projects",
             hero_title="A body of work built around ownership, systems depth, and product conviction.",
             hero_subtitle="Each project is framed as proof: what problem it came from, how it was built, and what it demonstrates.",
@@ -471,6 +479,7 @@ async def public_open_brain() -> HTMLResponse:
         faq = await list_public_faq(session)
         policy = await get_public_answer_policy(session)
     payload = _profile_payload(profile)
+    short_name = _public_short_name(payload)
     hero_media = _photo_block((payload.get("photos") or {}).get("personality"), class_name="public-hero-visual", label="Open Brain Portrait")
     faq_html = "".join(
         f"""
@@ -541,7 +550,7 @@ async def public_open_brain() -> HTMLResponse:
         content = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' + content
     return HTMLResponse(
         render_public_shell(
-            page_title=f"Open Brain — {settings.public_profile_short_name}",
+            page_title=f"Open Brain — {short_name}",
             hero_kicker="Open Brain",
             hero_title="Ask the public-facing brain.",
             hero_subtitle="A curated profile bot for collaborators, recruiters, and curious humans. It only answers from approved public narrative and approved public facts.",

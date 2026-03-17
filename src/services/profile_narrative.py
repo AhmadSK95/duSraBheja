@@ -352,7 +352,10 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         text,
         re.DOTALL,
     )
-    professional_summary = _excerpt(summary_match.group("body") if summary_match else "", limit=1000)
+    professional_summary = _excerpt(
+        re.sub(r"^\s*---\s*$", "", summary_match.group("body") if summary_match else "", flags=re.MULTILINE),
+        limit=1000,
+    )
     projects: list[ProjectCase] = []
     for match in sections:
         title = _compact(match.group("title"))
@@ -587,7 +590,7 @@ def _proof_points(personal_bible_text: str) -> list[dict[str, str]]:
         proofs.append(
             {
                 "title": title,
-                "summary": _excerpt(body, limit=220),
+                "summary": _excerpt(" ".join(bullets), limit=220),
                 "points": bullets[:5],
             }
         )
