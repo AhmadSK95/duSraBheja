@@ -6,6 +6,7 @@ import uuid
 from src.agents.librarian import process_artifact
 from src.constants import MERGEABLE_CATEGORIES, normalize_category
 from src.database import async_session
+from src.lib.time import human_datetime_text
 from src.lib.store import (
     create_journal_entry,
     create_link,
@@ -141,7 +142,7 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "reminder": (
                         {
                             "title": reminder.title,
-                            "next_fire_at": str(reminder.next_fire_at) if reminder and reminder.next_fire_at else None,
+                            "next_fire_at": human_datetime_text(reminder.next_fire_at if reminder else None, fallback="unscheduled"),
                         }
                         if reminder
                         else None
@@ -300,6 +301,7 @@ async def _upsert_reminder_note(session, artifact, artifact_note, classification
     )
     metadata = dict(note.metadata_ or {})
     metadata["reminder_id"] = str(reminder.id)
-    metadata["next_fire_at"] = str(reminder.next_fire_at) if reminder.next_fire_at else None
+    metadata["next_fire_at"] = human_datetime_text(reminder.next_fire_at, fallback="unscheduled")
+    metadata["next_fire_at_utc"] = reminder.next_fire_at.isoformat() if reminder.next_fire_at else None
     await update_note(session, note.id, metadata_=metadata, remind_at=reminder.next_fire_at)
     return note.id, note.title, note.content, reminder

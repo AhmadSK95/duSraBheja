@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
 from src.lib import store
+from src.lib.time import human_datetime_payload
 from src.services.identity import resolve_project
 from src.services.project_state import recompute_project_states
 from src.services.query import build_active_projects_overview, query_brain
@@ -15,6 +16,7 @@ from src.services.session_bootstrap import (
     record_session_closeout,
 )
 from src.services.story import (
+    build_project_latest_closeout_payload,
     build_project_story_payload,
     publish_story_entry,
 )
@@ -94,6 +96,20 @@ def register(mcp: FastMCP):
             if not project:
                 return {"error": f"Project '{project_name}' not found"}
             return await build_project_story_payload(session, project.id)
+
+    @mcp.tool()
+    async def get_latest_project_closeout(project_name: str) -> dict:
+        """Return the latest session closeout for a project and whether newer activity exists."""
+        async with async_session() as session:
+            project = await resolve_project(
+                session,
+                project_hint=project_name,
+                source_refs=[project_name],
+                create_if_missing=False,
+            )
+            if not project:
+                return {"error": f"Project '{project_name}' not found"}
+            return await build_project_latest_closeout_payload(session, project.id)
 
     @mcp.tool()
     async def list_recent_activity(limit: int = 20) -> list[dict]:
@@ -324,5 +340,5 @@ def register(mcp: FastMCP):
             "status": "stored",
             "reminder_id": str(reminder.id),
             "title": reminder.title,
-            "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+            **human_datetime_payload(reminder.next_fire_at, prefix="next_fire_at", fallback="unscheduled"),
         }

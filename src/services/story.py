@@ -9,10 +9,50 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.constants import normalize_category, normalize_tags
 from src.lib import store
+from src.lib.time import coerce_datetime, format_display_datetime, human_datetime_payload
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _story_entry_time(entry) -> datetime:
+    return coerce_datetime(getattr(entry, "happened_at", None)) or coerce_datetime(getattr(entry, "created_at", None)) or _utcnow()
+
+
+def _serialize_story_entry(entry) -> dict:
+    payload = {
+        "id": str(entry.id),
+        "entry_type": entry.entry_type,
+        "actor_type": entry.actor_type,
+        "actor_name": entry.actor_name,
+        "subject_type": entry.subject_type,
+        "subject_ref": entry.subject_ref,
+        "title": entry.title,
+        "summary": entry.summary,
+        "decision": entry.decision,
+        "rationale": entry.rationale,
+        "constraint": entry.constraint,
+        "outcome": entry.outcome,
+        "impact": entry.impact,
+        "open_question": entry.open_question,
+        "evidence_refs": entry.evidence_refs or [],
+        "tags": list(entry.tags or []),
+        "source_links": entry.source_links or [],
+    }
+    payload.update(human_datetime_payload(getattr(entry, "happened_at", None), prefix="happened_at"))
+    return payload
+
+
+def _serialize_reminder(item) -> dict:
+    payload = {
+        "id": str(item.id),
+        "title": item.title,
+        "recurrence_kind": item.recurrence_kind,
+        "status": item.status,
+    }
+    payload.update(human_datetime_payload(getattr(item, "next_fire_at", None), prefix="next_fire_at", fallback="unscheduled"))
+    return payload
 
 
 async def publish_story_entry(
@@ -134,6 +174,18 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
     aliases = await store.list_project_aliases(session, project_note_id=project_note_id, limit=25)
 
     project = story["project"]
+    serialized_activity = [_serialize_story_entry(entry) for entry in sorted(story["journal_entries"], key=_story_entry_time, reverse=True)]
+    latest_activity = serialized_activity[0] if serialized_activity else None
+    latest_closeout = next((item for item in serialized_activity if item.get("entry_type") == "session_closeout"), None)
+    latest_closeout_time = coerce_datetime((latest_closeout or {}).get("happened_at_utc"))
+    newer_activity_since_closeout = [
+        item
+        for item in serialized_activity
+        if latest_closeout_time
+        and (coerce_datetime(item.get("happened_at_utc")) or _utcnow()) > latest_closeout_time
+        and item.get("entry_type") != "session_closeout"
+    ]
+
     return {
         "project": {
             "id": str(project.id),
@@ -142,7 +194,7 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
             "content": project.content,
             "status": project.status,
             "tags": list(project.tags or []),
-            "updated_at": str(project.updated_at),
+            **human_datetime_payload(project.updated_at, prefix="updated_at"),
         },
         "snapshot": (
             {
@@ -159,6 +211,7 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
                 "why_active": snapshot.why_active,
                 "why_not_active": snapshot.why_not_active,
                 "last_signal_at": str(snapshot.last_signal_at) if snapshot.last_signal_at else None,
+                "last_signal_at_display": format_display_datetime(snapshot.last_signal_at),
                 "feature_scores": snapshot.feature_scores or {},
             }
             if snapshot
@@ -189,27 +242,8 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
             for alias in aliases
         ],
         "recent_activity": [
-            {
-                "id": str(entry.id),
-                "entry_type": entry.entry_type,
-                "actor_type": entry.actor_type,
-                "actor_name": entry.actor_name,
-                "subject_type": entry.subject_type,
-                "subject_ref": entry.subject_ref,
-                "title": entry.title,
-                "summary": entry.summary,
-                "decision": entry.decision,
-                "rationale": entry.rationale,
-                "constraint": entry.constraint,
-                "outcome": entry.outcome,
-                "impact": entry.impact,
-                "open_question": entry.open_question,
-                "evidence_refs": entry.evidence_refs or [],
-                "tags": list(entry.tags or []),
-                "source_links": entry.source_links or [],
-                "happened_at": str(entry.happened_at),
-            }
-            for entry in story["journal_entries"]
+            item
+            for item in serialized_activity
         ],
         "sources": [
             {
@@ -218,7 +252,7 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
                 "title": item.title,
                 "summary": item.summary,
                 "external_url": item.external_url,
-                "happened_at": str(item.happened_at) if item.happened_at else None,
+                **human_datetime_payload(item.happened_at, prefix="happened_at"),
             }
             for item in story["source_items"]
         ],
@@ -249,21 +283,19 @@ async def build_project_story_payload(session: AsyncSession, project_note_id: uu
                 "cwd": item.cwd,
                 "title_hint": item.title_hint,
                 "turn_count": item.turn_count,
-                "started_at": str(item.started_at) if item.started_at else None,
-                "ended_at": str(item.ended_at) if item.ended_at else None,
+                **human_datetime_payload(item.started_at, prefix="started_at"),
+                **human_datetime_payload(item.ended_at, prefix="ended_at"),
             }
             for item in sessions
         ],
         "reminders": [
-            {
-                "id": str(item.id),
-                "title": item.title,
-                "next_fire_at": str(item.next_fire_at) if item.next_fire_at else None,
-                "recurrence_kind": item.recurrence_kind,
-                "status": item.status,
-            }
+            _serialize_reminder(item)
             for item in reminders
         ],
+        "latest_activity": latest_activity,
+        "latest_closeout": latest_closeout,
+        "newer_activity_since_closeout": newer_activity_since_closeout[:10],
+        "closeout_is_latest_activity": bool(latest_closeout and latest_activity and latest_closeout["id"] == latest_activity["id"]),
     }
 
 
@@ -289,4 +321,18 @@ async def build_project_brief_payload(session: AsyncSession, project_note_id: uu
         "implemented": (payload.get("snapshot") or {}).get("implemented"),
         "remaining": (payload.get("snapshot") or {}).get("remaining"),
         "holes": (payload.get("snapshot") or {}).get("holes") or [],
+        "latest_closeout": payload.get("latest_closeout"),
+    }
+
+
+async def build_project_latest_closeout_payload(session: AsyncSession, project_note_id: uuid.UUID) -> dict | None:
+    payload = await build_project_story_payload(session, project_note_id)
+    if not payload:
+        return None
+    return {
+        "project": payload.get("project"),
+        "latest_activity": payload.get("latest_activity"),
+        "latest_closeout": payload.get("latest_closeout"),
+        "newer_activity_since_closeout": payload.get("newer_activity_since_closeout") or [],
+        "closeout_is_latest_activity": payload.get("closeout_is_latest_activity"),
     }

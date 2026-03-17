@@ -6,7 +6,7 @@
     <title>$page_title</title>
     <link rel="stylesheet" href="/static/public/site.css" />
   </head>
-  <body class="public-body">
+  <body class="public-body $body_class">
     <div class="public-noise"></div>
     <header class="public-header">
       <a class="public-brand" href="/">
@@ -23,9 +23,14 @@
     </header>
     <main class="public-main">
       <section class="public-hero">
-        <div class="public-kicker">$hero_kicker</div>
-        <h1>$hero_title</h1>
-        <p>$hero_subtitle</p>
+        <div class="public-hero-grid">
+          <div class="public-hero-copy">
+            <div class="public-kicker">$hero_kicker</div>
+            <h1>$hero_title</h1>
+            <p>$hero_subtitle</p>
+          </div>
+          $hero_media_html
+        </div>
       </section>
       <section class="public-content">
         $content_html

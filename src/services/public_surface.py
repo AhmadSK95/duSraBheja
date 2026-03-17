@@ -17,6 +17,7 @@ from src.config import settings
 from src.lib.claude import call_claude
 from src.lib.time import format_display_datetime
 from src.models import Note, ProjectStateSnapshot, PublicAnswerPolicy, PublicFAQSnapshot, PublicFactRecord, PublicProfileSnapshot, PublicProjectSnapshot
+from src.services.profile_narrative import build_profile_narrative, resolve_public_seed_path
 from src.services.library import sync_canonical_library
 from src.services.providers import model_for_role, provider_registry_summary
 from src.services.secrets import extract_secret_candidates, redact_secret_candidates
@@ -186,13 +187,7 @@ def _dedupe_fact_dicts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _public_seed_path() -> Path:
-    configured = Path(settings.public_profile_seed_path).expanduser()
-    if configured.exists():
-        return configured
-    mounted = Path("/public-seed")
-    if mounted.exists():
-        return mounted
-    return configured
+    return resolve_public_seed_path()
 
 
 def _configured_public_contact_entries() -> list[dict[str, Any]]:
@@ -629,7 +624,7 @@ async def seed_public_facts_from_interview_prep(
                 **fact_payload,
             )
             created += 1
-    await refresh_public_snapshots(session, force=True)
+    await refresh_public_snapshots(session, force=False)
     return {"seeded": created, "path": str(seed_dir), "status": "ok"}
 
 
@@ -693,10 +688,11 @@ async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, 
     snapshot = result.scalar_one_or_none()
     if snapshot and snapshot.refreshed_at and snapshot.refreshed_at >= _utcnow() - timedelta(minutes=settings.public_snapshot_refresh_minutes):
         return {"status": "fresh", "refreshed_at": snapshot.refreshed_at.isoformat()}
-    return await refresh_public_snapshots(session, force=True)
+    return await refresh_public_snapshots(session, force=False)
 
 
 async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False) -> dict[str, Any]:
+    narrative = build_profile_narrative()
     for contact_fact in _configured_public_contact_entries():
         payload = dict(contact_fact)
         await _upsert_public_fact(
@@ -707,8 +703,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             metadata_=payload.pop("metadata_", {}),
             **payload,
         )
-    if force:
-        await _refresh_live_project_public_facts(session)
+    await _refresh_live_project_public_facts(session)
     approved_facts = await list_public_facts(session, approved=True, limit=400)
     facts_by_facet: dict[str, list[PublicFactRecord]] = defaultdict(list)
     for fact in approved_facts:
@@ -718,15 +713,44 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     project_facts = facts_by_facet.get("projects", [])
     contact_facts = facts_by_facet.get("contact", [])
     source_refs = [fact.fact_key for fact in approved_facts]
+    source_refs.extend(str(path) for path in (narrative.get("source_pack") or {}).get("files", []))
 
-    hero_summary = next((fact.body for fact in profile_facts if fact.fact_key == "profile:professional-summary"), "")
-    identity = next((fact.body for fact in profile_facts if fact.fact_key == "profile:identity"), "")
+    hero_summary = narrative.get("hero_summary") or next((fact.body for fact in profile_facts if fact.fact_key == "profile:professional-summary"), "")
+    identity = (narrative.get("identity_stack") or [""])[0] or next((fact.body for fact in profile_facts if fact.fact_key == "profile:identity"), "")
     skills = [fact.body for fact in profile_facts if fact.facet == "skills"]
     interests = [fact.body for fact in profile_facts if fact.facet == "interests"]
+    narrative_contacts = list(narrative.get("contact_modes") or [])
+    legacy_contacts = [
+        {
+            "label": item.get("label") or item.get("title") or "",
+            "value": item.get("value") or item.get("body") or "",
+            "href": str(item.get("href") or ""),
+            "fact_key": item.get("fact_key") or item.get("key") or "",
+            "note": item.get("note") or "",
+        }
+        for item in narrative_contacts
+        if item.get("href")
+    ]
+    configured_contacts = [
+        {
+            "label": fact.title,
+            "value": fact.body,
+            "href": str((fact.metadata_ or {}).get("href") or ""),
+            "fact_key": fact.fact_key,
+            "note": "",
+        }
+        for fact in contact_facts
+        if str((fact.metadata_ or {}).get("href") or "")
+    ]
+    deduped_contacts: dict[str, dict[str, Any]] = {}
+    for item in legacy_contacts + configured_contacts:
+        key = (item.get("label") or item.get("fact_key") or "").lower()
+        if key:
+            deduped_contacts[key] = item
     profile_payload = {
-        "name": settings.public_profile_name,
-        "short_name": settings.public_profile_short_name,
-        "location": settings.public_profile_location,
+        "name": narrative.get("name") or settings.public_profile_name,
+        "short_name": narrative.get("preferred_name") or settings.public_profile_short_name,
+        "location": narrative.get("location") or settings.public_profile_location,
         "site_title": settings.public_site_title,
         "hero_summary": hero_summary or identity,
         "identity": identity,
@@ -735,29 +759,32 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "experience": [fact.body for fact in profile_facts if fact.fact_type == "experience"],
         "education": [fact.body for fact in profile_facts if fact.fact_type == "education"],
         "current_focus": [fact.body for fact in profile_facts if fact.fact_type in {"narrative", "decisions"}],
-        "contact": [
-            {
-                "label": fact.title,
-                "value": fact.body,
-                "href": str((fact.metadata_ or {}).get("href") or ""),
-                "fact_key": fact.fact_key,
-            }
-            for fact in contact_facts
-        ],
+        "contact": list(deduped_contacts.values()),
         "selected_projects": [
             {
-                "slug": fact.project_slug,
-                "title": fact.title,
-                "summary": _excerpt(fact.body, limit=220),
+                "slug": item.get("slug"),
+                "title": item.get("title"),
+                "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
             }
-            for fact in project_facts
-            if fact.fact_type == "project_case_study"
+            for item in (narrative.get("projects") or [])
         ][:6],
+        "identity_stack": narrative.get("identity_stack") or [],
+        "current_arc": narrative.get("current_arc") or {},
+        "eras": narrative.get("eras") or [],
+        "timeline": narrative.get("timeline") or [],
+        "roles": narrative.get("roles") or [],
+        "projects": narrative.get("projects") or [],
+        "capabilities": narrative.get("capabilities") or [],
+        "photos": narrative.get("photos") or {},
+        "proof_points": narrative.get("proof_points") or [],
+        "personal_texture": narrative.get("personal_texture") or [],
+        "thought_garden": narrative.get("thought_garden") or [],
+        "contact_modes": narrative_contacts,
     }
     profile_snapshot = await _upsert_public_profile_snapshot(
         session,
         snapshot_key="main",
-        title=settings.public_profile_name,
+        title=str(narrative.get("name") or settings.public_profile_name),
         summary=_excerpt(hero_summary or identity, limit=240),
         payload=profile_payload,
         source_refs=source_refs,
@@ -769,16 +796,31 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     for fact in project_facts:
         if fact.project_slug:
             project_groups[fact.project_slug].append(fact)
+    narrative_projects = {
+        str(item.get("slug") or ""): dict(item)
+        for item in (narrative.get("projects") or [])
+        if item.get("slug")
+    }
     project_snapshots: list[PublicProjectSnapshot] = []
-    for slug, facts in sorted(project_groups.items()):
-        facts = sorted(facts, key=lambda item: (item.sort_order, item.updated_at), reverse=False)
-        primary = next((fact for fact in facts if fact.fact_type == "project_case_study"), facts[0])
+    all_slugs = sorted(set(project_groups) | set(narrative_projects))
+    for slug in all_slugs:
+        facts = sorted(project_groups.get(slug, []), key=lambda item: (item.sort_order, item.updated_at), reverse=False)
+        primary = next((fact for fact in facts if fact.fact_type == "project_case_study"), facts[0]) if facts else None
+        narrative_project = narrative_projects.get(slug) or {}
         highlights = [_excerpt(fact.body, limit=320) for fact in facts]
+        narrative_highlights = list(narrative_project.get("resume_bullets") or [])[:4]
         payload = {
             "slug": slug,
-            "title": primary.title,
-            "summary": _excerpt(primary.body, limit=500),
-            "highlights": highlights,
+            "title": narrative_project.get("title") or (primary.title if primary else slug),
+            "summary": narrative_project.get("summary") or _excerpt(primary.body if primary else "", limit=500),
+            "tagline": narrative_project.get("tagline") or "",
+            "status": narrative_project.get("status") or "",
+            "stack": narrative_project.get("stack") or [],
+            "resume_bullets": narrative_project.get("resume_bullets") or [],
+            "demonstrates": narrative_project.get("demonstrates") or [],
+            "links": narrative_project.get("links") or [],
+            "proof": narrative_project.get("proof") or [],
+            "highlights": narrative_highlights + highlights,
             "signals": [
                 {
                     "title": fact.title,
@@ -793,37 +835,27 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             await _upsert_public_project_snapshot(
                 session,
                 slug=slug,
-                title=primary.title,
-                summary=_excerpt(primary.body, limit=220),
+                title=str(narrative_project.get("title") or (primary.title if primary else slug)),
+                summary=_excerpt(narrative_project.get("summary") or (primary.body if primary else ""), limit=220),
                 payload=payload,
-                source_refs=[fact.fact_key for fact in facts],
+                source_refs=[fact.fact_key for fact in facts] + [str(path) for path in (narrative.get("source_pack") or {}).get("files", [])],
             )
         )
 
     await session.execute(delete(PublicFAQSnapshot))
     await session.commit()
     faq_snapshots: list[PublicFAQSnapshot] = []
-    for key, question in PUBLIC_FAQ_SEED:
-        if "building" in question.lower():
-            answer = _excerpt(
-                " ".join(item.summary for item in project_snapshots[:3] if item.summary),
-                limit=360,
-            )
-            source_keys = [item.slug for item in project_snapshots[:3]]
-        elif "collaborator" in question.lower() or "hire" in question.lower():
-            answer = _excerpt(
-                " ".join(profile_payload.get("skills") or []) or hero_summary,
-                limit=360,
-            )
-            source_keys = ["profile:skills", "profile:professional-summary"]
-        else:
-            answer = _excerpt(" ".join(profile_payload.get("interests") or []) or identity, limit=360)
-            source_keys = ["profile:interests", "profile:identity"]
+    faq_seed = narrative.get("faq") or []
+    if not faq_seed:
+        faq_seed = [{"question": question, "answer": ""} for _key, question in PUBLIC_FAQ_SEED]
+    for index, item in enumerate(faq_seed, start=1):
+        answer = item.get("answer") or _excerpt(" ".join(profile_payload.get("interests") or []) or identity, limit=360)
+        source_keys = list((narrative.get("source_pack") or {}).get("files") or [])[:3]
         faq_snapshots.append(
             await _upsert_public_faq_snapshot(
                 session,
-                question_key=key,
-                question=question,
+                question_key=f"faq:narrative:{index}",
+                question=str(item.get("question") or f"FAQ {index}"),
                 answer=answer or "The public profile is still being curated.",
                 source_refs=source_keys,
             )
@@ -871,7 +903,14 @@ async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
     result = await session.execute(select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main"))
     record = result.scalar_one_or_none()
     if not record:
-        return {"name": settings.public_profile_name, "hero_summary": "", "selected_projects": []}
+        narrative = build_profile_narrative()
+        return {
+            "title": narrative.get("name") or settings.public_profile_name,
+            "summary": narrative.get("hero_summary") or "",
+            "payload": narrative,
+            "refreshed_at": None,
+            "source_refs": (narrative.get("source_pack") or {}).get("files") or [],
+        }
     return {
         "title": record.title,
         "summary": record.summary,
@@ -884,7 +923,7 @@ async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
 async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
     await refresh_public_snapshots_if_stale(session)
     result = await session.execute(select(PublicProjectSnapshot).order_by(PublicProjectSnapshot.title.asc()))
-    return [
+    items = [
         {
             "slug": record.slug,
             "title": record.title,
@@ -894,6 +933,19 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
         }
         for record in result.scalars().all()
     ]
+    if items:
+        return items
+    narrative = build_profile_narrative()
+    return [
+        {
+            "slug": item.get("slug"),
+            "title": item.get("title"),
+            "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
+            "payload": dict(item),
+            "refreshed_at": None,
+        }
+        for item in (narrative.get("projects") or [])
+    ]
 
 
 async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any] | None:
@@ -901,6 +953,16 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
     result = await session.execute(select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug))
     record = result.scalar_one_or_none()
     if not record:
+        narrative = build_profile_narrative()
+        for item in (narrative.get("projects") or []):
+            if item.get("slug") == slug:
+                return {
+                    "slug": item.get("slug"),
+                    "title": item.get("title"),
+                    "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
+                    "payload": dict(item),
+                    "refreshed_at": None,
+                }
         return None
     return {
         "slug": record.slug,
@@ -914,13 +976,24 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
 async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
     await refresh_public_snapshots_if_stale(session)
     result = await session.execute(select(PublicFAQSnapshot).order_by(PublicFAQSnapshot.question.asc()))
-    return [
+    items = [
         {
             "question": record.question,
             "answer": record.answer,
             "refreshed_at": format_display_datetime(record.refreshed_at),
         }
         for record in result.scalars().all()
+    ]
+    if items:
+        return items
+    narrative = build_profile_narrative()
+    return [
+        {
+            "question": item.get("question") or "",
+            "answer": item.get("answer") or "",
+            "refreshed_at": None,
+        }
+        for item in (narrative.get("faq") or [])
     ]
 
 
@@ -1029,11 +1102,54 @@ async def answer_public_question(
     faq = await list_public_faq(session)
     policy = await get_public_answer_policy(session)
     relevant_facts = await select_relevant_public_facts(session, question=question, limit=10)
+    profile_payload = dict(profile.get("payload") or {})
+    current_arc = dict(profile_payload.get("current_arc") or {})
+    identity_stack = list(profile_payload.get("identity_stack") or [])
+    eras = list(profile_payload.get("eras") or [])
+    capabilities = list(profile_payload.get("capabilities") or [])
+    proof_points = list(profile_payload.get("proof_points") or [])
+    thought_garden = list(profile_payload.get("thought_garden") or [])
+    recent_project_signals = []
+    for project in projects[:4]:
+        payload = dict(project.get("payload") or {})
+        for signal in list(payload.get("signals") or [])[:2]:
+            recent_project_signals.append(
+                f"- [{project.get('title')}] {signal.get('title')}: {_excerpt(signal.get('body'), limit=220)}"
+            )
 
     context_lines = [
         f"Public profile: {profile.get('summary') or ''}",
-        "Relevant approved facts:",
+        "Identity stack:",
     ]
+    context_lines.extend(f"- {item}" for item in identity_stack[:6])
+    context_lines.extend(
+        [
+            "Current arc:",
+            f"- {current_arc.get('summary') or ''}",
+        ]
+    )
+    context_lines.extend(f"- Focus: {item}" for item in list(current_arc.get("focus") or [])[:5])
+    context_lines.append("Life timeline:")
+    context_lines.extend(
+        f"- {item.get('years')}: {item.get('title')} | {_excerpt(item.get('summary'), limit=180)}"
+        for item in eras[:6]
+    )
+    context_lines.append("Expertise books:")
+    context_lines.extend(
+        f"- {item.get('title')}: {_excerpt(item.get('summary'), limit=180)}"
+        for item in capabilities[:6]
+    )
+    context_lines.append("Proof points:")
+    context_lines.extend(
+        f"- {item.get('title')}: {_excerpt(item.get('summary'), limit=180)}"
+        for item in proof_points[:6]
+    )
+    context_lines.append("Thought garden:")
+    context_lines.extend(
+        f"- {item.get('title')}: {_excerpt(item.get('summary'), limit=150)}"
+        for item in thought_garden[:6]
+    )
+    context_lines.append("Relevant approved facts:")
     context_lines.extend(
         f"- [{fact.facet}/{fact.fact_type}] {fact.title}: {_excerpt(fact.body, limit=280)}"
         for fact in relevant_facts
@@ -1042,6 +1158,9 @@ async def answer_public_question(
     context_lines.extend(f"- {project['title']}: {project['summary']}" for project in projects[:6])
     context_lines.append("FAQ:")
     context_lines.extend(f"- Q: {item['question']} A: {item['answer']}" for item in faq[:8])
+    if recent_project_signals:
+        context_lines.append("Recent approved live project signals:")
+        context_lines.extend(recent_project_signals)
 
     prompt = (
         "You are Ahmad's public-facing brain. Answer only from the approved public profile and public project material below. "

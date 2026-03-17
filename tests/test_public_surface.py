@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.config import settings
+from src.services import profile_narrative
 from src.services import public_surface
 
 
@@ -76,7 +77,7 @@ def test_public_seed_path_falls_back_to_container_mount(monkeypatch, tmp_path: P
     mounted.mkdir()
 
     monkeypatch.setattr(settings, "public_profile_seed_path", str(missing))
-    monkeypatch.setattr(public_surface, "Path", lambda value: mounted if value == "/public-seed" else Path(value))
+    monkeypatch.setattr(profile_narrative, "Path", lambda value: mounted if value == "/public-seed" else Path(value))
 
     path = public_surface._public_seed_path()
 

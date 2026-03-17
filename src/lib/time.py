@@ -68,6 +68,10 @@ def format_display_datetime(
     return local_value.strftime("%Y-%m-%d %I:%M %p")
 
 
+def human_datetime_text(value: datetime | str | None, *, fallback: str = "unknown") -> str:
+    return format_display_datetime(value, fallback=fallback)
+
+
 def format_display_date(value: date | datetime | None, *, fallback: str = "unknown") -> str:
     if value is None:
         return fallback
@@ -99,6 +103,7 @@ def display_timestamp_fields(
     value: datetime | str | None,
     *,
     prefix: str,
+    fallback: str = "unknown",
 ) -> dict[str, str | None]:
     info = describe_event_time(value)
     utc_key = f"{prefix}_utc"
@@ -107,8 +112,19 @@ def display_timestamp_fields(
     return {
         utc_key: info["event_time_utc"],
         local_key: info["event_time_local"],
-        label_key: format_display_datetime(value, fallback="unknown"),
+        label_key: format_display_datetime(value, fallback=fallback),
     }
+
+
+def human_datetime_payload(
+    value: datetime | str | None,
+    *,
+    prefix: str,
+    fallback: str = "unknown",
+) -> dict[str, str | None]:
+    payload = display_timestamp_fields(value, prefix=prefix, fallback=fallback)
+    payload[prefix] = format_display_datetime(value, fallback=fallback)
+    return payload
 
 
 def local_date_label(value: datetime | str | None, *, fallback: str = "unknown") -> str:

@@ -25,6 +25,7 @@ from src.services.digest import generate_or_refresh_digest
 from src.services.evaluation import run_query_eval
 from src.services.library_cleanup import build_library_cleanup_preview
 from src.services.library import build_final_stored_data, build_library_catalog
+from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
 from src.services.secrets import build_secret_inventory
 from src.services.public_surface import list_public_facts, refresh_public_snapshots, seed_public_facts_from_interview_prep, update_public_fact
@@ -35,7 +36,7 @@ api_router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 def _login_page(*, next_path: str, error: str | None = None) -> HTMLResponse:
-    safe_next = html.escape(next_path or "/dashboard/library")
+    safe_next = html.escape(next_path or "/dashboard/overview")
     error_html = f'<div class="atlas-login-error">{html.escape(error)}</div>' if error else ""
     return HTMLResponse(
         f"""<!doctype html>
@@ -117,6 +118,257 @@ async def _public_fact_payloads(session) -> list[dict]:
     ]
 
 
+def _render_overview_page(payload: dict, *, token: str) -> HTMLResponse:
+    identity = list(payload.get("identity_stack") or [])
+    metrics = list(payload.get("key_metrics") or [])
+    projects = list(payload.get("flagship_projects") or [])
+    current_arc = dict(payload.get("current_arc") or {})
+    cards_html = "".join(
+        _list_item(
+            item.get("title") or "Project",
+            item.get("summary") or item.get("tagline") or "",
+            meta=[item.get("status") or "", item.get("slug") or ""],
+        )
+        for item in projects
+    ) or '<div class="atlas-empty">No curated projects in the overview model yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {''.join(_metric(item.get('label') or 'Metric', str(item.get('value') or '0')) for item in metrics)}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Identity Stack</h2>
+        <div class="atlas-list">{''.join(_list_item(f'Layer {index}', line, meta=[]) for index, line in enumerate(identity, start=1))}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Current Arc</h2>
+        <p>{html.escape(current_arc.get('summary') or payload.get('summary') or '')}</p>
+        <div class="atlas-list">
+          {''.join(_list_item('Focus', item, meta=[]) for item in list(current_arc.get('focus') or []))}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Flagship Projects</h2>
+        <div class="atlas-list">{cards_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Overview",
+        token=token,
+        active_page="overview",
+        hero_kicker="Narrative View",
+        hero_title="Profile Overview",
+        hero_subtitle=payload.get("headline") or "A curated overview of identity, current arc, and flagship work.",
+        content_html=content_html,
+    )
+
+
+def _render_timeline_page(payload: dict, *, token: str) -> HTMLResponse:
+    eras = list(payload.get("eras") or [])
+    events = list(payload.get("events") or [])
+    eras_html = "".join(
+        _list_item(
+            item.get("title") or "Era",
+            item.get("summary") or "",
+            meta=[item.get("years") or "", ", ".join(item.get("institutions") or [])],
+        )
+        for item in eras
+    ) or '<div class="atlas-empty">No eras in the timeline model yet.</div>'
+    events_html = "".join(
+        _list_item(item.get("year") or "Year", item.get("event") or "", meta=[])
+        for item in events
+    ) or '<div class="atlas-empty">No timeline events available.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Life Eras</h2>
+        <div class="atlas-list">{eras_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Timeline Events</h2>
+        <div class="atlas-list">{events_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Timeline",
+        token=token,
+        active_page="timeline",
+        hero_kicker="Chaptered Biography",
+        hero_title="Timeline",
+        hero_subtitle="The private chapter model from IIT KGP through NYU, Amazon, and the builder phase.",
+        content_html=content_html,
+    )
+
+
+def _render_expertise_page(payload: dict, *, token: str) -> HTMLResponse:
+    books = list(payload.get("books") or [])
+    mapping = dict(payload.get("library_mapping") or {})
+    books_html = "".join(
+        _list_item(
+            item.get("title") or "Capability",
+            item.get("summary") or "",
+            meta=[item.get("slug") or "", f"chapters={len(item.get('chapters') or [])}"],
+        )
+        for item in books
+    ) or '<div class="atlas-empty">No expertise books materialized yet.</div>'
+    mapping_html = "".join(_list_item(key.title(), value, meta=[]) for key, value in mapping.items())
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Expertise Books</h2>
+        <div class="atlas-list">{books_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Library Metaphor</h2>
+        <div class="atlas-list">{mapping_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Expertise",
+        token=token,
+        active_page="expertise",
+        hero_kicker="Capability Layer",
+        hero_title="Expertise",
+        hero_subtitle="Domains and capabilities that convert raw signals into stable expertise narratives.",
+        content_html=content_html,
+    )
+
+
+def _render_profile_projects_page(payload: dict, *, token: str) -> HTMLResponse:
+    items = list(payload.get("items") or [])
+    cards_html = "".join(
+        _list_item(
+            item.get("title") or "Project",
+            item.get("summary") or item.get("tagline") or "",
+            meta=[item.get("status") or "", ", ".join(item.get("stack") or [])[:80]],
+        )
+        for item in items
+    ) or '<div class="atlas-empty">No curated project cases yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Project Cases</h2>
+        <p>These cases are sourced from CompanyInterviewPrep narrative files, not generated from stale atlas facets.</p>
+        <div class="atlas-list">{cards_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Projects",
+        token=token,
+        active_page="projects",
+        hero_kicker="Proof-Rich Cases",
+        hero_title="Projects",
+        hero_subtitle="Case studies grounded in explicit narrative sources and evidence framing.",
+        content_html=content_html,
+    )
+
+
+def _render_sources_page(payload: dict, *, token: str) -> HTMLResponse:
+    source_pack = dict(payload.get("seed_pack") or {})
+    inventory = dict(payload.get("inventory") or {})
+    live_counts = list(payload.get("live_source_counts") or [])
+    advice = list(payload.get("advice") or [])
+    files_html = "".join(
+        _list_item("Seed file", item, meta=[])
+        for item in list(source_pack.get("files") or [])
+    ) or '<div class="atlas-empty">No source-pack files configured.</div>'
+    counts_html = "".join(
+        _list_item(item.get("source_type") or "source", str(item.get("items") or 0), meta=["items"])
+        for item in live_counts
+    ) or '<div class="atlas-empty">No live source counts available.</div>'
+    roots_html = "".join(
+        _list_item("Scanned root", item, meta=[])
+        for item in list(inventory.get("roots_scanned") or [])[:8]
+    ) or '<div class="atlas-empty">No inventory roots scanned yet.</div>'
+    advice_html = "".join(_list_item("Guidance", item, meta=[]) for item in advice)
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Narrative Source Pack</h2>
+        <div class="atlas-list">{files_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Live Source Counts</h2>
+        <div class="atlas-list">{counts_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Inventory Roots</h2>
+        <div class="atlas-list">{roots_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Ingestion Guidance</h2>
+        <div class="atlas-list">{advice_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Sources",
+        token=token,
+        active_page="sources",
+        hero_kicker="Data Inputs",
+        hero_title="Sources",
+        hero_subtitle="Where the biography and expertise layers come from, and which feeds remain thin.",
+        content_html=content_html,
+    )
+
+
+def _render_coverage_page(payload: dict, *, token: str) -> HTMLResponse:
+    gaps = list(payload.get("gaps") or [])
+    chapters = list(payload.get("expected_chapters") or [])
+    institution_hits = dict(payload.get("institution_hits") or {})
+    inventory = dict(payload.get("inventory") or {})
+    imports = list(inventory.get("recommended_next_imports") or [])
+    gaps_html = "".join(
+        _list_item(
+            item.get("title") or "Coverage gap",
+            item.get("summary") or "",
+            meta=[item.get("severity") or "", item.get("recommendation") or ""],
+        )
+        for item in gaps
+    ) or '<div class="atlas-empty">No gaps currently flagged.</div>'
+    chapters_html = "".join(_list_item("Chapter", item, meta=[]) for item in chapters)
+    hits_html = "".join(
+        _list_item(key.upper(), json.dumps(value), meta=["keyword coverage"])
+        for key, value in institution_hits.items()
+    ) or '<div class="atlas-empty">No institution hit metrics available.</div>'
+    imports_html = "".join(_list_item("Import candidate", item, meta=[]) for item in imports[:8]) or '<div class="atlas-empty">No import candidates detected yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Coverage Gaps</h2>
+        <div class="atlas-list">{gaps_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Expected Chapters</h2>
+        <div class="atlas-list">{chapters_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Institution Hit Metrics</h2>
+        <div class="atlas-list">{hits_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Recommended Imports</h2>
+        <div class="atlas-list">{imports_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Coverage",
+        token=token,
+        active_page="coverage",
+        hero_kicker="Data Quality",
+        hero_title="Coverage",
+        hero_subtitle="Gaps and chapter coverage so we can strengthen memory quality systematically.",
+        content_html=content_html,
+    )
+
+
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
     return HTMLResponse(
         f"""<!doctype html>
@@ -179,7 +431,7 @@ def _render_artifact_rows(items: list[dict], token: str) -> str:
 
 
 @router.get("/dashboard/login", response_class=HTMLResponse)
-async def dashboard_login(next: str = Query(default="/dashboard/library")) -> HTMLResponse:
+async def dashboard_login(next: str = Query(default="/dashboard/overview")) -> HTMLResponse:
     return _login_page(next_path=next)
 
 
@@ -188,13 +440,13 @@ async def dashboard_login_submit(
     request: Request,
     username: str = Form(default=""),
     password: str = Form(default=""),
-    next: str = Form(default="/dashboard/library"),
+    next: str = Form(default="/dashboard/overview"),
 ) -> Response:
     if not dashboard_credentials_match(username=username, password=password):
         return _login_page(next_path=next, error="That login didn’t match the private dashboard credentials.")
     request.session["dashboard_authenticated"] = True
     request.session["dashboard_username"] = dashboard_username()
-    destination = next if next.startswith("/dashboard") else "/dashboard/library"
+    destination = next if next.startswith("/dashboard") else "/dashboard/overview"
     return RedirectResponse(url=destination, status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -767,7 +1019,42 @@ def _render_public_facts_page(facts: list[dict], *, token: str) -> HTMLResponse:
 
 @router.get("/dashboard", dependencies=[Depends(require_dashboard_token)])
 async def dashboard_root(token: str = Query(default="")) -> RedirectResponse:
-    return RedirectResponse(url=dashboard_url("/dashboard/library", token), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url=dashboard_url("/dashboard/overview", token), status_code=status.HTTP_302_FOUND)
+
+
+async def _profile_models() -> dict[str, dict]:
+    async with async_session() as session:
+        return await materialize_profile_read_models(session)
+
+
+@router.get("/dashboard/overview", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_overview(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:overview", {})
+    return _render_overview_page(payload, token=token)
+
+
+@router.get("/dashboard/timeline", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_timeline(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:timeline", {})
+    return _render_timeline_page(payload, token=token)
+
+
+@router.get("/dashboard/expertise", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_expertise(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:expertise", {})
+    return _render_expertise_page(payload, token=token)
+
+
+@router.get("/dashboard/sources", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_sources(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:sources", {})
+    return _render_sources_page(payload, token=token)
+
+
+@router.get("/dashboard/coverage", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_coverage(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:coverage", {})
+    return _render_coverage_page(payload, token=token)
 
 
 @router.get("/dashboard/atlas", dependencies=[Depends(require_dashboard_token)])
@@ -795,6 +1082,7 @@ async def dashboard_library(
             q=q.strip() or None,
             record_kind=record_kind or None,
             facet=facet or None,
+            sync=False,
         )
     return _render_library_page(items, token=token, q=q, facet=facet, record_kind=record_kind)
 
@@ -954,6 +1242,12 @@ async def dashboard_notes(token: str = Query(default="")) -> HTMLResponse:
 
 @router.get("/dashboard/projects", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
+    payload = (await _profile_models()).get("profile:projects", {})
+    return _render_profile_projects_page(payload, token=token)
+
+
+@router.get("/dashboard/projects-legacy", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_projects_legacy(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
         snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
     project_facets = [facet for facet in snapshot.get("facets", []) if facet.get("facet_type") == "projects"]
@@ -1225,6 +1519,48 @@ async def get_dashboard_atlas() -> dict:
         return (await build_brain_atlas_snapshot(session)).as_dict()
 
 
+@api_router.get("/overview", dependencies=[Depends(require_api_token)])
+async def get_dashboard_overview() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:overview", {})
+
+
+@api_router.get("/timeline", dependencies=[Depends(require_api_token)])
+async def get_dashboard_timeline() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:timeline", {})
+
+
+@api_router.get("/expertise", dependencies=[Depends(require_api_token)])
+async def get_dashboard_expertise() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:expertise", {})
+
+
+@api_router.get("/projects", dependencies=[Depends(require_api_token)])
+async def get_dashboard_projects_model() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:projects", {})
+
+
+@api_router.get("/sources", dependencies=[Depends(require_api_token)])
+async def get_dashboard_sources() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:sources", {})
+
+
+@api_router.get("/coverage", dependencies=[Depends(require_api_token)])
+async def get_dashboard_coverage() -> dict:
+    async with async_session() as session:
+        payloads = await materialize_profile_read_models(session)
+    return payloads.get("profile:coverage", {})
+
+
 @api_router.get("/library", dependencies=[Depends(require_api_token)])
 async def get_dashboard_library(
     q: str | None = None,
@@ -1237,6 +1573,7 @@ async def get_dashboard_library(
             q=q,
             record_kind=record_kind,
             facet=facet,
+            sync=False,
         )
     return {
         "display_timezone": "America/New_York",

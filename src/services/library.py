@@ -325,8 +325,10 @@ async def build_library_catalog(
     record_kind: str | None = None,
     facet: str | None = None,
     limit: int = 200,
+    sync: bool = False,
 ) -> list[dict[str, Any]]:
-    await sync_canonical_library(session)
+    if sync:
+        await sync_canonical_library(session)
     items: list[dict[str, Any]] = []
     if record_kind in (None, "", "thread"):
         for record in await store.list_thread_records(session, q=q, limit=limit):
@@ -426,8 +428,15 @@ async def build_library_catalog(
 
 
 async def build_final_stored_data(session: AsyncSession) -> dict[str, Any]:
-    counts = await sync_canonical_library(session)
-    recent_items = await build_library_catalog(session, limit=40)
+    counts = {
+        "threads": len(await store.list_thread_records(session, limit=500)),
+        "entities": len(await store.list_entity_records(session, limit=500)),
+        "observations": len(await store.list_observation_records(session, limit=500)),
+        "episodes": len(await store.list_episode_records(session, limit=500)),
+        "syntheses": len(await store.list_synthesis_records(session, limit=500)),
+        "evidence": len(await store.list_evidence_records(session, limit=500)),
+    }
+    recent_items = await build_library_catalog(session, limit=40, sync=False)
     return {
         "counts": counts,
         "items": recent_items,

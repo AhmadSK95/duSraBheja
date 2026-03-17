@@ -27,10 +27,12 @@ def render_public_shell(
     hero_kicker: str,
     hero_title: str,
     hero_subtitle: str,
+    hero_media_html: str = "",
     content_html: str,
     active_nav: str,
     page_data: dict | None = None,
     page_script: str = "",
+    body_class: str = "",
 ) -> str:
     nav_html = []
     for key, label, path in PUBLIC_NAV:
@@ -43,8 +45,10 @@ def render_public_shell(
         hero_kicker=html.escape(hero_kicker),
         hero_title=html.escape(hero_title),
         hero_subtitle=html.escape(hero_subtitle),
+        hero_media_html=hero_media_html,
         nav_html="".join(nav_html),
         content_html=content_html,
         page_data_json=html.escape(json.dumps(page_data or {}, ensure_ascii=False)),
         page_script=page_script,
+        body_class=html.escape(body_class),
     )

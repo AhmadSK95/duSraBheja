@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.storyteller import assess_project_state
 from src.lib import store
+from src.lib.time import human_datetime_text
 from src.services.identity import is_low_signal_project_name
 
 RECENT_WINDOW_DAYS = 14
@@ -451,7 +452,7 @@ def _build_project_assessment_context(metrics: ProjectMetrics) -> str:
         lines.extend(["", "Reminders:"])
         for reminder in metrics.reminders[:6]:
             lines.append(
-                f"- {reminder.title} | next_fire={reminder.next_fire_at.isoformat() if reminder.next_fire_at else 'none'}"
+                f"- {reminder.title} | next_fire={human_datetime_text(reminder.next_fire_at, fallback='none')}"
             )
     return "\n".join(lines).strip()
 

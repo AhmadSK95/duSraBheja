@@ -28,6 +28,7 @@ from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
 from src.lib.auth import require_api_token, require_dashboard_token
 from src.lib.embeddings import embed_text
+from src.lib.time import human_datetime_payload
 from src.lib.store import get_note, vector_search
 from src.lib import store
 from src.services.brain_os import build_brain_self_description
@@ -43,7 +44,7 @@ from src.services.session_bootstrap import (
     publish_curated_session_story,
     record_session_closeout,
 )
-from src.services.story import build_project_brief_payload, build_project_story_payload
+from src.services.story import build_project_brief_payload, build_project_latest_closeout_payload, build_project_story_payload
 from src.services.voice import refresh_voice_profile
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
@@ -75,8 +76,11 @@ async def library_route(
     record_kind: str | None = None,
     facet: str | None = None,
     limit: int = Query(default=100, ge=1, le=300),
+    sync: bool = Query(default=False),
 ) -> dict:
     async with async_session() as session:
+        if sync:
+            await sync_canonical_library(session)
         items = await build_library_catalog(
             session,
             q=q,
@@ -96,9 +100,11 @@ async def threads_route(
     q: str | None = None,
     thread_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=300),
+    sync: bool = Query(default=False),
 ) -> dict:
     async with async_session() as session:
-        await sync_canonical_library(session)
+        if sync:
+            await sync_canonical_library(session)
         records = await store.list_thread_records(session, thread_type=thread_type, q=q, limit=limit)
     return {
         "count": len(records),
@@ -113,7 +119,7 @@ async def threads_route(
                 "subject_ref": record.subject_ref,
                 "aliases": record.aliases or [],
                 "provenance_kind": record.provenance_kind,
-                "last_event_at": record.last_event_at.isoformat() if record.last_event_at else None,
+                **human_datetime_payload(record.last_event_at, prefix="last_event_at"),
             }
             for record in records
         ],
@@ -125,9 +131,11 @@ async def episodes_route(
     q: str | None = None,
     episode_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=300),
+    sync: bool = Query(default=False),
 ) -> dict:
     async with async_session() as session:
-        await sync_canonical_library(session)
+        if sync:
+            await sync_canonical_library(session)
         records = await store.list_episode_records(session, episode_type=episode_type, q=q, limit=limit)
     return {
         "count": len(records),
@@ -139,8 +147,8 @@ async def episodes_route(
                 "summary": record.summary,
                 "participants": record.participants or [],
                 "provenance_kind": record.provenance_kind,
-                "coverage_start": record.coverage_start.isoformat() if record.coverage_start else None,
-                "coverage_end": record.coverage_end.isoformat() if record.coverage_end else None,
+                **human_datetime_payload(record.coverage_start, prefix="coverage_start"),
+                **human_datetime_payload(record.coverage_end, prefix="coverage_end"),
             }
             for record in records
         ],
@@ -152,9 +160,11 @@ async def entities_route(
     q: str | None = None,
     entity_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=300),
+    sync: bool = Query(default=False),
 ) -> dict:
     async with async_session() as session:
-        await sync_canonical_library(session)
+        if sync:
+            await sync_canonical_library(session)
         records = await store.list_entity_records(session, entity_type=entity_type, q=q, limit=limit)
     return {
         "count": len(records),
@@ -166,7 +176,7 @@ async def entities_route(
                 "summary": record.summary,
                 "aliases": record.aliases or [],
                 "thread_ids": record.thread_ids or [],
-                "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None,
+                **human_datetime_payload(record.last_seen_at, prefix="last_seen_at"),
             }
             for record in records
         ],
@@ -178,9 +188,11 @@ async def syntheses_route(
     q: str | None = None,
     synthesis_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=300),
+    sync: bool = Query(default=False),
 ) -> dict:
     async with async_session() as session:
-        await sync_canonical_library(session)
+        if sync:
+            await sync_canonical_library(session)
         records = await store.list_synthesis_records(session, synthesis_type=synthesis_type, q=q, limit=limit)
     return {
         "count": len(records),
@@ -192,7 +204,7 @@ async def syntheses_route(
                 "summary": record.summary,
                 "certainty_class": record.certainty_class,
                 "provenance_kind": record.provenance_kind,
-                "event_time": record.event_time.isoformat() if record.event_time else None,
+                **human_datetime_payload(record.event_time, prefix="event_time"),
             }
             for record in records
         ],
@@ -210,9 +222,10 @@ async def changes_route(limit: int = Query(default=40, ge=1, le=100)) -> dict:
 
 
 @router.get("/coverage-gaps", dependencies=[Depends(require_api_token)])
-async def coverage_gaps_route() -> dict:
+async def coverage_gaps_route(sync: bool = Query(default=False)) -> dict:
     async with async_session() as session:
-        await sync_canonical_library(session)
+        if sync:
+            await sync_canonical_library(session)
         threads = await store.list_thread_records(session, limit=300)
         observations = await store.list_observation_records(session, limit=400)
     empty_threads = [thread for thread in threads if not (thread.summary or "").strip()]
@@ -303,18 +316,27 @@ async def report_sync_run(payload: SyncReportRequest) -> SyncRunResponse:
 
 
 @router.get("/projects/{project_id}/story", dependencies=[Depends(require_api_token)])
-async def get_project_story_route(project_id: str) -> dict:
+async def get_project_story_route(project_id: uuid.UUID) -> dict:
     async with async_session() as session:
-        payload = await build_project_story_payload(session, uuid.UUID(project_id))
+        payload = await build_project_story_payload(session, project_id)
     if not payload:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return payload
 
 
 @router.get("/projects/{project_id}/brief", dependencies=[Depends(require_api_token)])
-async def get_project_brief_route(project_id: str) -> dict:
+async def get_project_brief_route(project_id: uuid.UUID) -> dict:
     async with async_session() as session:
-        payload = await build_project_brief_payload(session, uuid.UUID(project_id))
+        payload = await build_project_brief_payload(session, project_id)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return payload
+
+
+@router.get("/projects/{project_id}/latest-closeout", dependencies=[Depends(require_api_token)])
+async def get_project_latest_closeout_route(project_id: uuid.UUID) -> dict:
+    async with async_session() as session:
+        payload = await build_project_latest_closeout_payload(session, project_id)
     if not payload:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     return payload
@@ -442,7 +464,7 @@ async def create_reminder_route(payload: ReminderCreateRequest) -> dict:
         "status": "stored",
         "reminder_id": str(reminder.id),
         "title": reminder.title,
-        "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+        **human_datetime_payload(reminder.next_fire_at, prefix="next_fire_at", fallback="unscheduled"),
     }
 
 
@@ -456,8 +478,8 @@ async def list_due_reminders_route() -> list[dict]:
         {
             "id": str(item.id),
             "title": item.title,
-            "next_fire_at": str(item.next_fire_at) if item.next_fire_at else None,
             "status": item.status,
+            **human_datetime_payload(item.next_fire_at, prefix="next_fire_at", fallback="unscheduled"),
         }
         for item in reminders
     ]

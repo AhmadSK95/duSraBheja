@@ -10,6 +10,7 @@ from src.lib import store
 from src.services.identity import resolve_project
 from src.services.openai_web import research_topic_brief
 from src.services.persona import build_persona_packet
+from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
 from src.services.query import collect_sources
 from src.services.source_ingest import ingest_source_entries
@@ -73,6 +74,73 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return result
 
 
+def _detect_self_bootstrap_mode(task_hint: str | None, cwd: str | None) -> str:
+    lowered = " ".join(filter(None, [task_hint or "", cwd or ""])).lower()
+    if any(token in lowered for token in ("iit", "kharagpur", "nyu", "amazon", "citicorp", "loylty", "institution")):
+        return "institution"
+    if any(token in lowered for token in ("expertise", "skill", "strength", "engineer", "know")):
+        return "expertise"
+    if any(token in lowered for token in ("project", "built", "case study", "portfolio")):
+        return "project_cases"
+    if any(token in lowered for token in ("coverage", "missing", "ingest", "history")):
+        return "coverage"
+    return "identity"
+
+
+def _self_bootstrap_from_models(profile_models: dict[str, dict], *, mode: str) -> tuple[dict, list[dict], list[str]]:
+    overview = dict(profile_models.get("profile:overview") or {})
+    timeline = dict(profile_models.get("profile:timeline") or {})
+    expertise = dict(profile_models.get("profile:expertise") or {})
+    projects = dict(profile_models.get("profile:projects") or {})
+    coverage = dict(profile_models.get("profile:coverage") or {})
+    institutions = dict(profile_models.get("profile:institutions") or {})
+    identity = dict(profile_models.get("profile:identity") or {})
+
+    focus = list((overview.get("current_arc") or {}).get("focus") or [])
+    coverage_gaps = list(coverage.get("gaps") or [])
+    institution_items = list(institutions.get("items") or [])
+    expertise_books = list(expertise.get("books") or [])
+    project_items = list(projects.get("items") or [])
+    era_items = list(timeline.get("eras") or [])
+
+    sources: list[dict] = []
+    open_loops = focus[:4]
+    blockers = [item.get("title") or "" for item in coverage_gaps[:4] if item.get("title")]
+    related_refs: list[str] = []
+
+    if mode == "institution":
+        sources = institution_items[:5] or era_items[:5]
+        open_loops = [item.get("summary") or "" for item in institution_items[:3] if item.get("summary")] or open_loops
+        related_refs = [item.get("title") or "" for item in institution_items[:5] if item.get("title")]
+    elif mode == "expertise":
+        sources = expertise_books[:6]
+        open_loops = [item.get("summary") or "" for item in expertise_books[:3] if item.get("summary")] or open_loops
+        related_refs = [item.get("title") or "" for item in expertise_books[:6] if item.get("title")]
+    elif mode == "project_cases":
+        sources = project_items[:6]
+        related_refs = [item.get("title") or "" for item in project_items[:6] if item.get("title")]
+    elif mode == "coverage":
+        sources = coverage_gaps[:6]
+        open_loops = [item.get("recommendation") or "" for item in coverage_gaps[:4] if item.get("recommendation")] or open_loops
+        related_refs = [item.get("title") or "" for item in coverage_gaps[:6] if item.get("title")]
+    else:
+        sources = [
+            {"title": "Identity", "summary": item}
+            for item in list(identity.get("identity_stack") or overview.get("identity_stack") or [])[:5]
+        ]
+        related_refs = [item.get("title") or "" for item in project_items[:4] if item.get("title")]
+
+    reboot_brief = {
+        "where_it_stands": (overview.get("current_arc") or {}).get("summary") or overview.get("summary"),
+        "what_changed": "Private self-knowledge is now materialized through profile read models instead of only project reboots.",
+        "what_is_left": (coverage_gaps[0] or {}).get("recommendation") if coverage_gaps else None,
+        "blockers": blockers[:8],
+        "open_loops": _dedupe_strings([item for item in open_loops if item])[:6],
+        "related_repos": related_refs[:5],
+    }
+    return reboot_brief, sources[:6], related_refs[:5]
+
+
 async def build_session_bootstrap(
     session: AsyncSession,
     *,
@@ -100,6 +168,8 @@ async def build_session_bootstrap(
     brain_sources = await collect_sources(session, subject, category="project" if project_payload else None, limit=6)
     voice_profile = await store.get_voice_profile(session, "ahmad-default")
     persona_packet = await build_persona_packet(session)
+    profile_models = await materialize_profile_read_models(session) if not project_payload else {}
+    self_bootstrap_mode = _detect_self_bootstrap_mode(task_hint, cwd) if not project_payload else "project"
 
     web_brief = None
     if include_web and subject:
@@ -133,9 +203,28 @@ async def build_session_bootstrap(
     what_changed = " | ".join(recent_titles[:2]) if recent_titles else snapshot.get("what_changed")
     what_is_left = (open_loops[0] if open_loops else None) or snapshot.get("remaining")
 
+    if not project_payload:
+        reboot_brief, curated_sources, related_refs = _self_bootstrap_from_models(profile_models, mode=self_bootstrap_mode)
+        if curated_sources:
+            brain_sources = [
+                {
+                    "title": item.get("title") or item.get("slug") or f"profile:{index}",
+                    "summary": item.get("summary") or item.get("tagline") or "",
+                    "category": "profile",
+                }
+                for index, item in enumerate(curated_sources, start=1)
+            ]
+        where_it_stands = reboot_brief.get("where_it_stands")
+        what_changed = reboot_brief.get("what_changed")
+        what_is_left = reboot_brief.get("what_is_left")
+        blockers = reboot_brief.get("blockers") or blockers
+        open_loops = reboot_brief.get("open_loops") or open_loops
+        recent_titles = related_refs or recent_titles
+
     return {
         "agent_kind": agent_kind,
         "session_id": session_id,
+        "bootstrap_mode": self_bootstrap_mode,
         "project": project_payload["project"] if project_payload else None,
         "reboot_brief": {
             "where_it_stands": where_it_stands,
@@ -151,6 +240,11 @@ async def build_session_bootstrap(
         "connections": ((project_payload or {}).get("connections") or [])[:8],
         "brain_sources": brain_sources,
         "web_sources": list((web_brief or {}).get("findings") or [])[:5] if web_brief else [],
+        "profile_models": {
+            key: profile_models.get(key)
+            for key in ("profile:overview", "profile:timeline", "profile:expertise", "profile:projects", "profile:coverage")
+            if key in profile_models
+        },
         "voice_profile": (
             {
                 "summary": voice_profile.summary,

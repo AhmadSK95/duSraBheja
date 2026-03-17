@@ -10,6 +10,7 @@ from src.constants import BRAIN_CATEGORIES
 from src.bot.cogs.inbox import build_answer_embed, build_digest_embeds
 from src.database import async_session
 from src.lib.store import get_pending_reviews
+from src.lib.time import human_datetime_text
 from src.services.digest import generate_or_refresh_digest
 from src.services.identity import resolve_project
 from src.services.session_bootstrap import build_session_bootstrap
@@ -224,7 +225,7 @@ class CommandsCog(commands.Cog):
                 discord_channel_id=str(interaction.channel_id),
             )
         await interaction.followup.send(
-            f"Reminder stored: {reminder.title} at {reminder.next_fire_at.isoformat() if reminder.next_fire_at else 'unscheduled'}"
+            f"Reminder stored: {reminder.title} at {human_datetime_text(reminder.next_fire_at, fallback='unscheduled')}"
         )
 
     @app_commands.command(name="remember", description="Save a quick note to your brain")

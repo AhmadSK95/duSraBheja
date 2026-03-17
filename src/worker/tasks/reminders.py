@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from src.config import settings
 from src.database import async_session
 from src.lib.notifications import publish as publish_notification
+from src.lib.time import human_datetime_text
 from src.lib import store
 from src.services.reminders import advance_reminder_schedule
 from src.services.story import publish_story_entry
@@ -50,7 +51,7 @@ async def process_due_reminders(ctx) -> dict:
                     "body": reminder.body,
                     "project_ref": project_ref,
                     "discord_channel_id": reminder.discord_channel_id,
-                    "next_fire_at": str(updated.next_fire_at) if updated and updated.next_fire_at else None,
+                    "next_fire_at": human_datetime_text(updated.next_fire_at if updated else None, fallback="unscheduled"),
                 },
             )
             processed += 1

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.lib import store
 from src.services.brain_atlas import build_brain_atlas_snapshot
+from src.services.profile_narrative import materialize_profile_read_models
 
 
 def _top_titles(items: list[dict[str, Any]], *, limit: int = 4) -> list[str]:
@@ -80,6 +81,16 @@ async def build_persona_packet(
             snapshot_payload = {}
 
     fallback = _fallback_packet(snapshot_payload)
+    try:
+        profile_models = await materialize_profile_read_models(session)
+    except Exception:
+        profile_models = {}
+    overview = dict(profile_models.get("profile:overview") or {})
+    timeline = dict(profile_models.get("profile:timeline") or {})
+    expertise = dict(profile_models.get("profile:expertise") or {})
+    identity_stack = list(overview.get("identity_stack") or [])
+    eras = list(timeline.get("eras") or [])
+    books = list(expertise.get("books") or [])
 
     try:
         voice_profile = await store.get_voice_profile(session, "ahmad-default")
@@ -87,7 +98,12 @@ async def build_persona_packet(
         voice_profile = None
 
     if not voice_profile:
-        return fallback
+        return {
+            **fallback,
+            "identity_stack": identity_stack[:5],
+            "life_chapters": [item.get("title") for item in eras[:5] if item.get("title")],
+            "expertise_books": [item.get("title") for item in books[:6] if item.get("title")],
+        }
 
     traits = dict(voice_profile.traits or {})
     tone_traits = [str(item) for item in list(traits.get("tone") or [])[:4]]
@@ -109,6 +125,9 @@ async def build_persona_packet(
         },
         "current_headspace": _current_headspace_titles(snapshot_payload),
         "active_projects": _facet_titles(snapshot_payload, "projects"),
+        "identity_stack": identity_stack[:5],
+        "life_chapters": [item.get("title") for item in eras[:5] if item.get("title")],
+        "expertise_books": [item.get("title") for item in books[:6] if item.get("title")],
         "taste_signals": {
             "interests": _facet_titles(snapshot_payload, "interests"),
             "media": _facet_titles(snapshot_payload, "media"),
@@ -148,6 +167,18 @@ def render_persona_context(packet: dict[str, Any] | None) -> str:
     active_projects = list(payload.get("active_projects") or [])
     if active_projects:
         lines.append(f"Active projects: {', '.join(active_projects[:4])}")
+
+    identity_stack = list(payload.get("identity_stack") or [])
+    if identity_stack:
+        lines.append(f"Identity stack: {' | '.join(identity_stack[:4])}")
+
+    life_chapters = list(payload.get("life_chapters") or [])
+    if life_chapters:
+        lines.append(f"Life chapters: {', '.join(life_chapters[:5])}")
+
+    expertise_books = list(payload.get("expertise_books") or [])
+    if expertise_books:
+        lines.append(f"Expertise books: {', '.join(expertise_books[:6])}")
 
     taste_signals = dict(payload.get("taste_signals") or {})
     interest_titles = list(taste_signals.get("interests") or [])

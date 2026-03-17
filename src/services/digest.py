@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from src.config import settings
 from src.lib import store
+from src.lib.time import human_datetime_text
 from src.services.boards import daily_board_window, generate_or_refresh_board
 from src.services.project_state import recompute_project_states
 
@@ -92,7 +93,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         {
             "id": str(reminder.id),
             "title": reminder.title,
-            "next_fire_at": str(reminder.next_fire_at) if reminder.next_fire_at else None,
+            "next_fire_at": human_datetime_text(reminder.next_fire_at, fallback="unscheduled"),
         }
         for reminder in reminders
         if reminder.next_fire_at and reminder.next_fire_at.astimezone(reminder_zone).date() == digest_date

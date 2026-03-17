@@ -12,18 +12,13 @@ TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 SHELL_TEMPLATE = Template((TEMPLATE_DIR / "dashboard_shell.html").read_text(encoding="utf-8"))
 
 NAV_ITEMS = [
-    ("library", "Library", "/dashboard/library"),
-    ("final-data", "Final Data", "/dashboard/final-data"),
-    ("cognitive-map", "Cognitive Map", "/dashboard/cognitive-map"),
-    ("story-river", "Story River", "/dashboard/story-river"),
+    ("overview", "Overview", "/dashboard/overview"),
+    ("timeline", "Timeline", "/dashboard/timeline"),
+    ("expertise", "Expertise", "/dashboard/expertise"),
     ("projects", "Projects", "/dashboard/projects"),
-    ("media", "Media", "/dashboard/media"),
-    ("subconscious", "Subconscious", "/dashboard/subconscious"),
-    ("brain-os", "Brain OS", "/dashboard/brain-os"),
-    ("public-facts", "Public Facts", "/dashboard/public-facts"),
-    ("secret-vault", "Secret Vault", "/dashboard/secret-vault"),
-    ("cleanup", "Cleanup", "/dashboard/cleanup"),
-    ("health", "Health", "/dashboard/health"),
+    ("sources", "Sources", "/dashboard/sources"),
+    ("coverage", "Coverage", "/dashboard/coverage"),
+    ("library", "Library", "/dashboard/library"),
 ]
 
 

@@ -30,6 +30,7 @@ from src.services.brain_os import build_brain_self_description
 from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
 from src.services.openai_web import answer_question_with_web
 from src.services.persona import build_persona_packet, render_persona_context
+from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
 
@@ -197,6 +198,32 @@ SELF_PROTOCOL_HINTS = (
     "what tools do you expose",
     "bootstrap and close out",
 )
+PROFILE_QUERY_HINTS = (
+    "who is ahmad",
+    "tell me about ahmad",
+    "tell me about me",
+    "who am i",
+    "my journey",
+    "my background",
+    "my profile",
+    "my experience",
+    "my work history",
+    "my career",
+    "my education",
+    "my expertise",
+    "what do i know",
+    "what expertise do i carry",
+    "what kind of engineer am i",
+    "what have i built",
+    "what projects have i built",
+    "what should the website say about me",
+    "where did i study",
+    "iit",
+    "kharagpur",
+    "nyu",
+    "amazon",
+    "languages do i speak",
+)
 QUERY_STAGE_ROUTING = "routing"
 QUERY_STAGE_CANDIDATE_RETRIEVAL = "candidate_retrieval"
 QUERY_STAGE_NARRATION = "narration"
@@ -205,6 +232,13 @@ QUERY_STAGE_NARRATION = "narration"
 def _is_brain_protocol_question(question: str) -> bool:
     lowered = (question or "").lower()
     return any(hint in lowered for hint in SELF_PROTOCOL_HINTS)
+
+
+def _is_profile_query(question: str, *, project_payload: dict | None) -> bool:
+    if project_payload:
+        return False
+    lowered = (question or "").lower()
+    return any(hint in lowered for hint in PROFILE_QUERY_HINTS)
 
 
 def _format_brain_protocol_answer(payload: dict[str, Any]) -> str:
@@ -289,12 +323,15 @@ def should_use_web_enrichment(
     resolved_intent: str,
     project_payload: dict | None,
     evidence_quality: dict | None = None,
+    profile_query: bool = False,
 ) -> bool:
     if resolved_mode in {"sources", "timeline", "changed_since", "active_projects"}:
         return False
     if resolved_intent.startswith("facet_"):
         return False
     if resolved_intent == "exact_fact":
+        return False
+    if profile_query:
         return False
     lowered = (question or "").strip().lower()
     if project_payload and resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"}:
@@ -551,6 +588,8 @@ def _source_merge_score(item: dict) -> float:
         score += 0.08
     elif retrieval_kind == "project_snapshot":
         score += 0.05
+    elif retrieval_kind == "profile_read_model":
+        score += 0.07
     elif retrieval_kind == "temporal_path":
         score += 0.1
     elif retrieval_kind == "vector":
@@ -631,6 +670,129 @@ def _build_source_item(
         "metadata": metadata or {},
         **event_info,
     }
+
+
+def _question_terms(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]{3,}", (value or "").lower())
+        if token not in QUERY_STOPWORDS
+    }
+
+
+def _profile_model_source_text(capability_key: str, payload: dict[str, Any]) -> tuple[str, str]:
+    if capability_key == "profile:overview":
+        current_arc = payload.get("current_arc") or {}
+        return (
+            "Profile Overview",
+            "\n".join(
+                filter(
+                    None,
+                    [
+                        str(payload.get("headline") or ""),
+                        str(payload.get("summary") or ""),
+                        "\n".join(payload.get("identity_stack") or []),
+                        str(current_arc.get("summary") or ""),
+                        "\n".join(current_arc.get("focus") or []),
+                    ],
+                )
+            ),
+        )
+    if capability_key == "profile:timeline":
+        eras = payload.get("eras") or []
+        events = payload.get("events") or []
+        return (
+            "Life Timeline",
+            "\n".join(
+                [f"{item.get('years')}: {item.get('title')} | {item.get('summary')}" for item in eras[:5]]
+                + [f"{item.get('year')}: {item.get('event')}" for item in events[:8]]
+            ),
+        )
+    if capability_key == "profile:expertise":
+        books = payload.get("books") or []
+        return (
+            "Expertise Books",
+            "\n".join(
+                [
+                    f"{item.get('title')}: {item.get('summary')} | chapters={', '.join((item.get('chapters') or [])[:4])}"
+                    for item in books[:6]
+                ]
+            ),
+        )
+    if capability_key == "profile:projects":
+        items = payload.get("items") or []
+        return (
+            "Project Cases",
+            "\n".join(
+                [
+                    f"{item.get('title')}: {item.get('summary')} | demonstrates={', '.join((item.get('demonstrates') or [])[:3])}"
+                    for item in items[:6]
+                ]
+            ),
+        )
+    if capability_key == "profile:coverage":
+        gaps = payload.get("gaps") or []
+        return (
+            "Coverage Report",
+            "\n".join(
+                [
+                    f"{item.get('title')}: {item.get('summary')} | recommendation={item.get('recommendation')}"
+                    for item in gaps[:6]
+                ]
+            ),
+        )
+    if capability_key == "profile:sources":
+        items = payload.get("live_source_counts") or []
+        return (
+            "Source Inventory",
+            "\n".join(f"{item.get('source_type')}: {item.get('items')}" for item in items[:12]),
+        )
+    if capability_key == "profile:library":
+        return ("Library Meaning", str(payload.get("summary") or ""))
+    return (capability_key, str(payload))
+
+
+async def _collect_profile_sources(
+    session: AsyncSession,
+    *,
+    question: str,
+    now: datetime,
+    limit: int = 5,
+) -> list[dict]:
+    payloads = await materialize_profile_read_models(session)
+    question_terms = _question_terms(question)
+    items: list[dict] = []
+    for capability_key, payload in payloads.items():
+        title, content = _profile_model_source_text(capability_key, payload)
+        content_terms = _question_terms(content)
+        overlap = len(question_terms & content_terms)
+        intent_bonus = 0.0
+        lowered = question.lower()
+        if capability_key == "profile:timeline" and any(token in lowered for token in ("journey", "timeline", "study", "education", "iit", "nyu", "amazon")):
+            intent_bonus = 0.18
+        elif capability_key == "profile:expertise" and any(token in lowered for token in ("expertise", "know", "skills", "engineer")):
+            intent_bonus = 0.18
+        elif capability_key == "profile:projects" and any(token in lowered for token in ("projects", "built", "work")):
+            intent_bonus = 0.18
+        elif capability_key == "profile:coverage" and any(token in lowered for token in ("missing", "ingest", "data", "coverage")):
+            intent_bonus = 0.18
+        similarity = min(0.95, 0.48 + min(overlap, 6) * 0.07 + intent_bonus)
+        items.append(
+            _build_source_item(
+                source_id=capability_key,
+                title=title,
+                category="profile",
+                content=content,
+                similarity=similarity,
+                retrieval_kind="profile_read_model",
+                signal_kind="direct_sync",
+                source_name="profile_narrative",
+                event_time=now,
+                metadata={"capability_key": capability_key},
+            )
+        )
+    items.sort(key=lambda item: item["similarity"], reverse=True)
+    return items[:limit]
 
 
 def _coerce_source_item(candidate: dict, *, retrieval_kind: str, fallback_signal_kind: str = "direct_sync") -> dict:
@@ -1443,6 +1605,8 @@ def _build_evidence_quality(
             sum(_project_match_strength(item["title"] + " " + item["content"], project_payload) for item in sources[:5])
             / max(1, min(len(sources), 5)),
         )
+    elif any(item.get("retrieval_kind") == "profile_read_model" for item in sources):
+        project_alignment = 0.7
     exactness = 1.0 if any(item["retrieval_kind"].startswith("exact_") for item in sources) else 0.0
     contradiction_risk = 0.05
     if intent == "exact_fact":
@@ -1833,8 +1997,10 @@ async def query_brain(
             return result
 
         project_payload = await resolve_project_payload(session, question)
+        profile_query = _is_profile_query(question, project_payload=project_payload)
         resolved_intent = _detect_query_intent(question, resolved_mode=resolved_mode, project_payload=project_payload)
         trace_payload["resolved_project"] = (project_payload or {}).get("project", {}).get("title")
+        trace_payload["profile_query"] = profile_query
 
         since_boundary = parse_since_boundary(question, current_time) if resolved_mode == "changed_since" else None
 
@@ -1912,6 +2078,14 @@ async def query_brain(
                 limit=8,
             )
             exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]
+        profile_sources = []
+        if profile_query:
+            profile_sources = await _collect_profile_sources(
+                session,
+                question=question,
+                now=current_time,
+                limit=6,
+            )
         if facet_sources:
             project_sources = [_coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources]
         else:
@@ -1928,6 +2102,8 @@ async def query_brain(
                 _coerce_source_item(item, retrieval_kind="project_snapshot")
                 for item in _collect_project_sources(project_payload, now=current_time, limit=8)
             ]
+        if profile_sources:
+            project_sources = [*profile_sources, *project_sources]
         if resolved_intent.startswith("facet_") and facet_sources:
             vector_sources = []
         else:
@@ -1960,12 +2136,15 @@ async def query_brain(
             for item in selected_sources
         )
         used_vector_search = any(item["retrieval_kind"] == "vector" for item in selected_sources)
+        used_profile_read_model = any(item["retrieval_kind"] == "profile_read_model" for item in selected_sources)
 
         trace_payload["candidate_lists"] = {
             "exact": _sanitize_sources(exact_sources),
             "project": _sanitize_sources(project_sources),
             "vector": _sanitize_sources(vector_sources),
         }
+        if profile_sources:
+            trace_payload["candidate_lists"]["profile"] = _sanitize_sources(profile_sources)
         if facet_sources:
             trace_payload["candidate_lists"]["facet"] = _sanitize_sources(project_sources)
 
@@ -1994,6 +2173,7 @@ async def query_brain(
                 "used_exact_match": used_exact_match,
                 "used_project_snapshot": used_project_snapshot,
                 "used_vector_search": used_vector_search,
+                "used_profile_read_model": used_profile_read_model,
                 "used_web": False,
             }
             await _persist_trace(
@@ -2008,7 +2188,12 @@ async def query_brain(
                 used_project_snapshot=used_project_snapshot,
                 used_vector_search=used_vector_search,
                 used_web=False,
-                payload={**trace_payload, "selected_evidence": _sanitize_sources(selected_sources), "answer": answer},
+                payload={
+                    **trace_payload,
+                    "selected_evidence": _sanitize_sources(selected_sources),
+                    "answer": answer,
+                    "used_profile_read_model": used_profile_read_model,
+                },
             )
             return result
 
@@ -2031,6 +2216,7 @@ async def query_brain(
                 "used_exact_match": used_exact_match,
                 "used_project_snapshot": used_project_snapshot,
                 "used_vector_search": used_vector_search,
+                "used_profile_read_model": used_profile_read_model,
                 "used_web": False,
             }
             await _persist_trace(
@@ -2045,7 +2231,7 @@ async def query_brain(
                 used_project_snapshot=used_project_snapshot,
                 used_vector_search=used_vector_search,
                 used_web=False,
-                payload={**trace_payload, "selected_evidence": []},
+                payload={**trace_payload, "selected_evidence": [], "used_profile_read_model": used_profile_read_model},
             )
             return result
 
@@ -2109,6 +2295,7 @@ async def query_brain(
             resolved_intent=resolved_intent,
             project_payload=project_payload,
             evidence_quality=evidence_quality,
+            profile_query=profile_query,
         ):
             web_payload = await answer_question_with_web(
                 question=question,
@@ -2170,6 +2357,7 @@ async def query_brain(
             "used_exact_match": used_exact_match,
             "used_project_snapshot": used_project_snapshot,
             "used_vector_search": used_vector_search,
+            "used_profile_read_model": used_profile_read_model,
             "used_web": used_web,
         }
         await _persist_trace(
@@ -2190,6 +2378,7 @@ async def query_brain(
                 "events": result["events"],
                 "answer": final_answer,
                 "web_sources": web_sources,
+                "used_profile_read_model": used_profile_read_model,
             },
         )
         return result

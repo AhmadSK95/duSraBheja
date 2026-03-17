@@ -6,11 +6,16 @@ from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
 from src.lib import store
 from src.services.identity import resolve_project
+from src.services.profile_narrative import materialize_profile_read_models
 from src.services.session_bootstrap import build_session_bootstrap
 from src.services.story import build_project_story_payload
 
 
 def register(mcp: FastMCP):
+    async def _profile_models() -> dict:
+        async with async_session() as session:
+            return await materialize_profile_read_models(session)
+
     @mcp.tool()
     async def get_project_context(project_name: str) -> dict:
         """Get full context for a specific project: description, tasks, recent ideas,
@@ -47,6 +52,49 @@ def register(mcp: FastMCP):
                 "reboot_brief": reboot_brief.get("reboot_brief"),
                 "voice_profile": reboot_brief.get("voice_profile"),
             }
+
+    @mcp.tool()
+    async def get_identity_profile() -> dict:
+        """Get the private identity/profile read model for Ahmad."""
+        payloads = await _profile_models()
+        overview = dict(payloads.get("profile:overview") or {})
+        identity = dict(payloads.get("profile:identity") or {})
+        return {
+            "overview": overview,
+            "identity": identity,
+        }
+
+    @mcp.tool()
+    async def get_life_timeline() -> dict:
+        """Get Ahmad's life timeline and eras from the curated private read model."""
+        payloads = await _profile_models()
+        return dict(payloads.get("profile:timeline") or {})
+
+    @mcp.tool()
+    async def get_expertise_books() -> dict:
+        """Get the curated expertise/capability books for Ahmad."""
+        payloads = await _profile_models()
+        return dict(payloads.get("profile:expertise") or {})
+
+    @mcp.tool()
+    async def get_project_case(project_slug: str) -> dict:
+        """Get a curated project case by slug from Ahmad's profile read models."""
+        payloads = await _profile_models()
+        projects = list((payloads.get("profile:projects") or {}).get("items") or [])
+        for item in projects:
+            if str(item.get("slug") or "") == project_slug:
+                return dict(item)
+        return {"error": f"Project case '{project_slug}' not found"}
+
+    @mcp.tool()
+    async def get_profile_coverage() -> dict:
+        """Get coverage gaps and source inventory for Ahmad's private self-knowledge layer."""
+        payloads = await _profile_models()
+        return {
+            "coverage": dict(payloads.get("profile:coverage") or {}),
+            "sources": dict(payloads.get("profile:sources") or {}),
+            "library": dict(payloads.get("profile:library") or {}),
+        }
 
     @mcp.tool()
     async def get_full_brain_dump(
