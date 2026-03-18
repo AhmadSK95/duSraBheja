@@ -73,6 +73,54 @@ async def call_claude(
     }
 
 
+async def call_claude_conversation(
+    messages: list[dict],
+    system: str = "",
+    model: str | None = None,
+    max_tokens: int = 4096,
+    temperature: float = 0.0,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    """Call Claude with a multi-turn messages array.
+
+    Args:
+        messages: List of {role, content} dicts for multi-turn conversation.
+        system: Optional system prompt.
+        model: Model ID override.
+        max_tokens: Max output tokens.
+        temperature: Sampling temperature.
+        trace_id: Optional trace ID for audit logging.
+
+    Returns same dict shape as call_claude().
+    """
+    model = model or model_for_role("reasoning")
+    trace_id = trace_id or uuid.uuid4()
+    start = time.monotonic()
+
+    kwargs: dict = {
+        "model": model, "max_tokens": max_tokens,
+        "messages": messages, "temperature": temperature,
+    }
+    if system:
+        kwargs["system"] = system
+
+    response = await client.messages.create(**kwargs)
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+
+    return {
+        "text": response.content[0].text,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": estimate_cost(model, input_tokens, output_tokens),
+        "duration_ms": duration_ms,
+        "trace_id": trace_id,
+    }
+
+
 async def call_claude_vision(
     image_data: bytes,
     media_type: str,

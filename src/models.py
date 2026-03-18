@@ -1169,3 +1169,54 @@ class EvalCaseResult(Base):
         Index("idx_eval_case_results_run", "eval_run_id"),
         Index("idx_eval_case_results_status", "status"),
     )
+
+
+class PublicConversation(Base):
+    __tablename__ = "public_conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(String, nullable=False)
+    remote_ip = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    topic_summary = Column(String, nullable=True)
+    turn_count = Column(Integer, nullable=False, default=0)
+    intent = Column(String, nullable=True)
+    persona_hash = Column(String, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    turns = relationship("PublicConversationTurn", back_populates="conversation", cascade="all, delete")
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id"),
+        Index("idx_public_conversations_expires", "expires_at"),
+        Index("idx_public_conversations_ip", "remote_ip"),
+    )
+
+
+class PublicConversationTurn(Base):
+    __tablename__ = "public_conversation_turns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("public_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    intent = Column(String, nullable=True)
+    model_used = Column(String, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(12, 6), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    conversation = relationship("PublicConversation", back_populates="turns")
+
+    __table_args__ = (
+        Index("idx_public_conversation_turns_conv", "conversation_id"),
+        Index("idx_public_conversation_turns_created", "created_at"),
+    )

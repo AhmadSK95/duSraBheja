@@ -341,6 +341,13 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
         "work": pick("02_feb2026_nyc_street_portrait_with_badge.jpg"),
         "contact": pick("03_jan2026_oscar_on_shoulder_white_wall.jpg"),
         "home": pick("01_feb2026_home_selfie_with_oscar_and_iris.jpg"),
+        "photo_break": pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
+        "mosaic": [
+            pick("01_feb2026_home_selfie_with_oscar_and_iris.jpg"),
+            pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
+            pick("08_aug2025_holding_oscar_at_home.jpg"),
+            pick("10_aug2025_pokemon_plushies.jpg"),
+        ],
         "gallery": [asset.as_dict() for asset in sorted(assets.values(), key=lambda item: item.filename)][:8],
     }
 

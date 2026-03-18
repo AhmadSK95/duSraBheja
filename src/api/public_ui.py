@@ -20,34 +20,83 @@ PUBLIC_NAV = (
     ("open-brain", "Open Brain", "/open-brain"),
 )
 
+OG_DEFAULTS = {
+    "og:type": "website",
+    "og:site_name": settings.public_site_title,
+}
+
+
+def _og_meta_tags(
+    *,
+    title: str,
+    description: str = "",
+    url: str = "",
+    image: str = "",
+) -> str:
+    tags = {
+        **OG_DEFAULTS,
+        "og:title": title,
+        "og:description": description,
+    }
+    if url:
+        tags["og:url"] = url
+    if image:
+        tags["og:image"] = image
+    lines = [f'<meta property="{k}" content="{html.escape(v)}" />' for k, v in tags.items() if v]
+    lines.append(f'<meta name="description" content="{html.escape(description)}" />')
+    return "\n    ".join(lines)
+
+
+def _footer_nav(active_nav: str) -> str:
+    links = []
+    for key, label, path in PUBLIC_NAV:
+        cls = f"public-footer-link{' is-active' if key == active_nav else ''}"
+        escaped = html.escape(label)
+        links.append(f'<a class="{cls}" href="{path}">{escaped}</a>')
+    return " ".join(links)
+
 
 def render_public_shell(
     *,
     page_title: str,
-    hero_kicker: str,
-    hero_title: str,
-    hero_subtitle: str,
-    hero_media_html: str = "",
     content_html: str,
     active_nav: str,
     page_data: dict | None = None,
     page_script: str = "",
     body_class: str = "",
+    og_description: str = "",
+    og_image: str = "",
+    # Legacy params kept for backward compat — now unused by template
+    hero_kicker: str = "",
+    hero_title: str = "",
+    hero_subtitle: str = "",
+    hero_media_html: str = "",
 ) -> str:
     nav_html = []
     for key, label, path in PUBLIC_NAV:
-        active_class = "is-active" if key == active_nav else ""
-        nav_html.append(f'<a class="public-nav-link {active_class}" href="{path}">{html.escape(label)}</a>')
+        cls = f"public-nav-link{' is-active' if key == active_nav else ''}"
+        escaped = html.escape(label)
+        nav_html.append(f'<a class="{cls}" href="{path}">{escaped}</a>')
+
+    base_url = (settings.public_base_url or "").rstrip("/")
+    og_meta = _og_meta_tags(
+        title=page_title,
+        description=og_description or hero_subtitle,
+        url=base_url,
+        image=og_image,
+    )
+
     return SHELL_TEMPLATE.substitute(
         page_title=html.escape(page_title),
+        og_meta_html=og_meta,
         site_title=html.escape(settings.public_site_title),
-        site_host=html.escape((settings.public_base_url or "").replace("https://", "").replace("http://", "").rstrip("/")),
-        hero_kicker=html.escape(hero_kicker),
-        hero_title=html.escape(hero_title),
-        hero_subtitle=html.escape(hero_subtitle),
-        hero_media_html=hero_media_html,
+        site_host=html.escape(base_url.replace("https://", "").replace("http://", "")),
         nav_html="".join(nav_html),
         content_html=content_html,
+        footer_nav_html=_footer_nav(active_nav),
+        footer_sig=html.escape(
+            f"\u00a9 {settings.public_profile_name} \u00b7 Built with duSraBheja"
+        ),
         page_data_json=html.escape(json.dumps(page_data or {}, ensure_ascii=False)),
         page_script=page_script,
         body_class=html.escape(body_class),

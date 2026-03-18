@@ -13,7 +13,7 @@ from src.config import settings
 from src.database import async_session
 from src.services.profile_narrative import public_asset_path
 from src.services.public_surface import (
-    answer_public_question,
+    answer_public_chat,
     get_public_answer_policy,
     get_public_profile,
     get_public_project,
@@ -24,159 +24,83 @@ from src.services.public_surface import (
 router = APIRouter(tags=["public"])
 
 
-def _profile_payload(profile: dict) -> dict:
+# ──────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────
+
+def _payload(profile: dict) -> dict:
     return dict(profile.get("payload") or {})
 
 
-def _safe(value: object | None) -> str:
+def _s(value: object | None) -> str:
     return html.escape(str(value or ""))
 
 
-def _public_short_name(payload: dict) -> str:
-    return str(payload.get("short_name") or payload.get("preferred_name") or settings.public_profile_short_name)
+def _short_name(payload: dict) -> str:
+    return str(
+        payload.get("short_name")
+        or payload.get("preferred_name")
+        or settings.public_profile_short_name
+    )
 
 
-def _photo_block(photo: dict | None, *, class_name: str = "public-photo-card", label: str | None = None) -> str:
+def _photo_url(photo: dict | None) -> str:
     if not photo or not photo.get("url"):
         return ""
-    caption = _safe(photo.get("title") or "")
-    eyebrow = f'<div class="public-kicker">{_safe(label)}</div>' if label else ""
-    description = _safe(photo.get("description") or photo.get("vibe") or "")
-    return f"""
-    <figure class="{class_name}">
-      <img src="{_safe(photo.get('url'))}" alt="{caption}" loading="eager" />
-      <figcaption>
-        {eyebrow}
-        <strong>{caption}</strong>
-        <span>{description}</span>
-      </figcaption>
-    </figure>
-    """
+    return _s(photo["url"])
 
 
-def _string_list(items: list[str], *, class_name: str = "public-bullet-list") -> str:
-    rows = "".join(f"<li>{_safe(item)}</li>" for item in items if item)
-    if not rows:
+def _photo_img(photo: dict | None, *, loading: str = "lazy", alt: str = "") -> str:
+    url = _photo_url(photo)
+    if not url:
         return ""
-    return f'<ul class="{class_name}">{rows}</ul>'
+    return f'<img src="{url}" alt="{_s(alt or photo.get("title", ""))}" loading="{loading}" />'
 
 
-def _pill_list(items: list[str], *, class_name: str = "public-pill-list") -> str:
-    rows = "".join(f'<span class="public-pill">{_safe(item)}</span>' for item in items if item)
-    return f'<div class="{class_name}">{rows}</div>' if rows else ""
+def _pills(items: list[str], *, cls: str = "pill-list") -> str:
+    tags = "".join(f'<span class="pill">{_s(item)}</span>' for item in items if item)
+    return f'<div class="{cls}">{tags}</div>' if tags else ""
 
 
-def _contact_rows(contacts: list[dict]) -> str:
-    rows = []
-    for item in contacts:
-        href = item.get("href")
-        if not href:
-            continue
-        rows.append(
-            f"""
-            <article class="public-contact-card">
-              <div class="public-kicker">{_safe(item.get("label") or "Contact")}</div>
-              <h3>{_safe(item.get("value") or item.get("label"))}</h3>
-              <p>{_safe(item.get("note") or "")}</p>
-              <a class="public-inline-link" href="{_safe(href)}" target="_blank" rel="noreferrer">Open channel</a>
-            </article>
-            """
-        )
-    return "".join(rows)
+def _numbered_list(items: list[str]) -> str:
+    rows = "".join(f"<li>{_s(item)}</li>" for item in items if item)
+    return f'<ol class="numbered-list">{rows}</ol>' if rows else ""
 
 
-def _project_card(project: dict, *, detail: bool = False) -> str:
-    payload = dict(project.get("payload") or {})
-    stack = payload.get("stack") or project.get("stack") or []
-    bullets = payload.get("resume_bullets") or project.get("resume_bullets") or []
-    demonstrates = payload.get("demonstrates") or project.get("demonstrates") or []
-    links = payload.get("links") or project.get("links") or []
+def _bullet_list(items: list[str]) -> str:
+    rows = "".join(f"<li>{_s(item)}</li>" for item in items if item)
+    return f'<ul class="public-bullet-list">{rows}</ul>' if rows else ""
+
+
+def _project_card_html(project: dict, *, featured: bool = False) -> str:
+    p = dict(project.get("payload") or {})
+    stack = p.get("stack") or []
+    slug = project.get("slug") or ""
+    featured_cls = " project-card--featured" if featured else ""
     links_html = "".join(
-        f'<a class="public-inline-link" href="{_safe(item.get("href"))}" target="_blank" rel="noreferrer">{_safe(item.get("label") or "Open")}</a>'
-        for item in links
+        f'<a class="inline-link" href="{_s(item.get("href"))}"'
+        f' target="_blank" rel="noreferrer">'
+        f'{_s(item.get("label") or "Open")}</a>'
+        for item in (p.get("links") or [])
         if item.get("href")
     )
-    detail_html = ""
-    if detail:
-        detail_html = (
-            f'<div class="public-detail-block"><h3>How it is framed</h3>{_string_list(bullets[:4])}</div>'
-            f'<div class="public-detail-block"><h3>What it demonstrates</h3>{_string_list(demonstrates[:4])}</div>'
-        )
     return f"""
-    <article class="public-case-card">
-      <div class="public-kicker">{_safe(payload.get("status") or "Case Study")}</div>
-      <h3>{_safe(project.get("title"))}</h3>
-      <p>{_safe(payload.get("tagline") or project.get("summary") or "")}</p>
-      {_pill_list(stack[:6], class_name="public-pill-list public-pill-list--tight")}
-      {detail_html}
-      <div class="public-link-row">
-        <a class="public-inline-link" href="/projects/{_safe(project.get('slug'))}">Read case study</a>
+    <article class="project-card{featured_cls} reveal">
+      <div class="public-kicker">{_s(p.get("status") or "Case Study")}</div>
+      <h3>{_s(project.get("title"))}</h3>
+      <p>{_s(p.get("tagline") or project.get("summary") or "")}</p>
+      {_pills(stack[:6])}
+      <div class="link-row mt-2">
+        <a class="inline-link" href="/projects/{_s(slug)}">Read case study</a>
         {links_html}
       </div>
     </article>
     """
 
 
-def _timeline_cards(eras: list[dict]) -> str:
-    return "".join(
-        f"""
-        <article class="public-timeline-card">
-          <div class="public-timeline-rail"></div>
-          <div class="public-timeline-content">
-            <div class="public-kicker">{_safe(item.get("years"))}</div>
-            <h3>{_safe(item.get("title"))}</h3>
-            <p>{_safe(item.get("summary"))}</p>
-            {_string_list(list(item.get("highlights") or [])[:4])}
-          </div>
-        </article>
-        """
-        for item in eras
-    )
-
-
-def _capability_cards(items: list[dict]) -> str:
-    return "".join(
-        f"""
-        <article class="public-capability-card">
-          <div class="public-kicker">Expertise Book</div>
-          <h3>{_safe(item.get("title"))}</h3>
-          <p>{_safe(item.get("summary"))}</p>
-          {_string_list(list(item.get("chapters") or [])[:4])}
-        </article>
-        """
-        for item in items[:4]
-    )
-
-
-def _proof_cards(items: list[dict]) -> str:
-    return "".join(
-        f"""
-        <article class="public-proof-card">
-          <div class="public-kicker">{_safe(item.get("title"))}</div>
-          <p>{_safe(item.get("summary"))}</p>
-          {_string_list(list(item.get("points") or [])[:4])}
-        </article>
-        """
-        for item in items[:3]
-    )
-
-
-def _render_public_recent_signals(projects: list[dict]) -> str:
-    rows = []
-    for project in projects[:3]:
-        payload = dict(project.get("payload") or {})
-        summary = payload.get("tagline") or project.get("summary") or ""
-        rows.append(
-            f"""
-            <article class="public-signal-card">
-              <div class="public-kicker">Approved Signal</div>
-              <strong>{_safe(project.get("title"))}</strong>
-              <p>{_safe(summary)}</p>
-            </article>
-            """
-        )
-    return "".join(rows)
-
+# ──────────────────────────────────────────────
+# Asset route
+# ──────────────────────────────────────────────
 
 @router.get("/public-assets/profile/{filename}")
 async def public_profile_asset(filename: str) -> FileResponse:
@@ -186,388 +110,660 @@ async def public_profile_asset(filename: str) -> FileResponse:
     return FileResponse(path)
 
 
+# ──────────────────────────────────────────────
+# Home
+# ──────────────────────────────────────────────
+
 @router.get("/", response_class=HTMLResponse)
 async def public_home() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
-    payload = _profile_payload(profile)
-    short_name = _public_short_name(payload)
-    hero_media = _photo_block((payload.get("photos") or {}).get("hero"), class_name="public-hero-visual", label="Hero Portrait")
-    content = f"""
-    <section class="public-editorial-band">
-      <article class="public-story-card public-story-card--wide">
-        <div class="public-kicker">Identity Stack</div>
-        <h2>A living professional biography, not a template portfolio.</h2>
-        <p>{_safe(payload.get("professional_summary") or payload.get("hero_summary") or profile.get("summary"))}</p>
-        {_string_list(list(payload.get("identity_stack") or [])[:4])}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Current Arc</div>
-        <h2>{_safe(((payload.get("current_arc") or {}).get("title")) or "What is happening now")}</h2>
-        <p>{_safe(((payload.get("current_arc") or {}).get("summary")) or "")}</p>
-        {_string_list(list((payload.get("current_arc") or {}).get("focus") or [])[:3])}
-      </article>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Selected Work</div>
-        <h2>Proof of scope across AI systems, product thinking, and real delivery.</h2>
+    p = _payload(profile)
+    name = _short_name(p)
+    photos = p.get("photos") or {}
+    hero_photo = photos.get("hero")
+    personality_photo = photos.get("personality")
+    photo_break = photos.get("photo_break")
+    current_arc = p.get("current_arc") or {}
+    # 1. Full-viewport hero
+    hero_html = f"""
+    <section class="hero-full">
+      <div class="hero-full__bg">
+        {_photo_img(hero_photo, loading="eager", alt=f"{name} portrait")}
       </div>
-      <div class="public-case-grid">
-        {''.join(_project_card(project) for project in projects[:4])}
+      <div class="hero-full__content">
+        <div class="public-kicker">Living Profile</div>
+        <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
+        <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
       </div>
-    </section>
-    <section class="public-editorial-band">
-      <article class="public-story-card">
-        <div class="public-kicker">Professional Read</div>
-        <h2>What this body of work signals.</h2>
-        <div class="public-proof-grid">{_proof_cards(list(payload.get("proof_points") or []))}</div>
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Human Texture</div>
-        <h2>The person behind the engineering.</h2>
-        {_pill_list(list(payload.get("personal_texture") or [])[:6])}
-        {_photo_block((payload.get("photos") or {}).get("personality"), label="Personality Anchor")}
-      </article>
+      <div class="hero-full__scroll">scroll</div>
     </section>
     """
+
+    # 2. Statement band (dark bg with metrics)
+    stat_html = f"""
+    <section class="full-bleed dark-band reveal">
+      <div class="container">
+        <div class="stat-band">
+          <div class="stat-item">
+            <div class="stat-item__number">6+</div>
+            <div class="stat-item__label">Years Engineering</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item__number">{len(projects)}</div>
+            <div class="stat-item__label">Shipped Products</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item__number">3</div>
+            <div class="stat-item__label">Countries Worked</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item__number">1</div>
+            <div class="stat-item__label">AI Second Brain</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+    # 3. About teaser (60/40 asymmetric)
+    about_html = f"""
+    <section class="section container reveal">
+      <div class="offset-grid offset-grid--60-40">
+        <div>
+          <div class="public-kicker">About</div>
+          <h2 class="display-heading display-heading--section">
+            Builder, engineer, restless generalist.</h2>
+          <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
+          <a class="inline-link mt-2" href="/about">Read the full story</a>
+        </div>
+        <div class="hero-inner__photo">
+          {_photo_img(personality_photo, alt="Ahmad with Oscar")}
+        </div>
+      </div>
+    </section>
+    """
+
+    # 4. Selected work (staggered)
+    first_project = _project_card_html(projects[0], featured=True) if projects else ""
+    grid_projects = "".join(_project_card_html(proj) for proj in projects[1:4])
+    work_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Selected Work</div>
+      <h2 class="display-heading display-heading--section">
+        Proof across AI systems, product thinking,
+        and real delivery.</h2>
+      {first_project}
+      <div class="project-grid mt-3">
+        {grid_projects}
+        <article class="project-card reveal"
+          style="display:flex;align-items:center;
+          justify-content:center;">
+          <a class="cta" href="/projects">View all projects</a>
+        </article>
+      </div>
+    </section>
+    """
+
+    # 5. Photo break
+    photo_break_html = ""
+    if photo_break and photo_break.get("url"):
+        photo_break_html = f"""
+        <section class="full-bleed photo-break reveal">
+          <img src="{_s(photo_break['url'])}" alt="NYC skyline" loading="lazy" />
+          <div class="photo-break__overlay">
+            <p class="photo-break__quote">Build things that remember. Ship things that matter.</p>
+          </div>
+        </section>
+        """
+
+    # 6. Current arc
+    focus_items = list(current_arc.get("focus") or [])[:5]
+    arc_html = f"""
+    <section class="section container container--narrow text-center reveal">
+      <div class="public-kicker">Current Arc</div>
+      <h2 class="display-heading display-heading--section">
+        {_s(current_arc.get("title") or "What is happening now")}
+      </h2>
+      <p>{_s(current_arc.get("summary") or "")}</p>
+      {_numbered_list(focus_items)}
+    </section>
+    """
+
+    content = hero_html + stat_html + about_html + work_html + photo_break_html + arc_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{short_name} — Living Profile",
-            hero_kicker="Living Profile",
-            hero_title=f"{short_name} builds systems with memory, taste, and proof.",
-            hero_subtitle=(payload.get("hero_summary") or profile.get("summary") or "").strip(),
-            hero_media_html=hero_media,
+            page_title=f"{name} — Builder, Engineer, Restless Generalist",
             content_html=content,
             active_nav="home",
             page_data={"page": "home"},
             body_class="public-page-home",
+            og_description=(p.get("hero_summary") or "").strip(),
         )
     )
 
+
+# ──────────────────────────────────────────────
+# About
+# ──────────────────────────────────────────────
 
 @router.get("/about", response_class=HTMLResponse)
 async def public_about() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
-    payload = _profile_payload(profile)
-    short_name = _public_short_name(payload)
-    hero_media = _photo_block((payload.get("photos") or {}).get("personality"), class_name="public-hero-visual", label="About Portrait")
-    content = f"""
-    <section class="public-editorial-band">
-      <article class="public-story-card public-story-card--wide">
-        <div class="public-kicker">Narrative Arc</div>
-        <h2>A career built by moving into harder rooms and shipping real things.</h2>
-        <p>{_safe(((payload.get("current_arc") or {}).get("summary")) or profile.get("summary") or "")}</p>
-        {_string_list(list(payload.get("timeline_highlights") or [])[:6])}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Personal Notes</div>
-        <h2>Selective public details.</h2>
-        {_string_list(list(payload.get("personal_texture") or [])[:5])}
-      </article>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Chapters</div>
-        <h2>The chapters that shape the whole picture.</h2>
-      </div>
-      <div class="public-timeline-grid">{_timeline_cards(list(payload.get("eras") or []))}</div>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Roles</div>
-        <h2>Career proof, condensed.</h2>
-      </div>
-      <div class="public-roles-grid">
-        {''.join(
-            f'''
-            <article class="public-role-card">
-              <div class="public-kicker">{_safe(item.get("period"))}</div>
-              <h3>{_safe(item.get("organization"))}</h3>
-              <strong>{_safe(item.get("title"))}</strong>
-              <p>{_safe(item.get("summary"))}</p>
-            </article>
-            '''
-            for item in list(payload.get("roles") or [])[:5]
-        )}
+    p = _payload(profile)
+    name = _short_name(p)
+    photos = p.get("photos") or {}
+    personality_photo = photos.get("personality")
+    mosaic_photos = [item for item in (photos.get("mosaic") or []) if item and item.get("url")]
+    eras = list(p.get("eras") or [])
+    roles = list(p.get("roles") or [])
+    current_arc = p.get("current_arc") or {}
+
+    # 1. Hero
+    hero_html = f"""
+    <section class="hero-inner">
+      <div class="container">
+        <div>
+          <div class="public-kicker">About</div>
+          <h1 class="display-heading display-heading--hero">
+            From IIT Kharagpur to New York
+            to independent builder.</h1>
+          <p>{_s(current_arc.get("summary") or profile.get("summary") or "")}</p>
+        </div>
       </div>
     </section>
     """
+
+    # 2. Origin statement
+    origin_html = f"""
+    <section class="section container container--narrow reveal">
+      <div class="offset-grid offset-grid--60-40">
+        <div>
+          <div class="public-kicker">Origin</div>
+          <h2 class="display-heading display-heading--sub">
+            A career built by moving into harder rooms
+            and shipping real things.</h2>
+          <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
+        </div>
+        <div class="hero-inner__photo">
+          {_photo_img(personality_photo, alt="Ahmad with Oscar")}
+        </div>
+      </div>
+    </section>
+    """
+
+    # 3. Timeline (horizontal scroll)
+    timeline_panels = "".join(
+        f"""
+        <div class="timeline-panel">
+          <div class="public-kicker">{_s(era.get("years"))}</div>
+          <h3>{_s(era.get("title"))}</h3>
+          <p>{_s(era.get("summary"))}</p>
+          {_bullet_list(list(era.get("highlights") or [])[:4])}
+        </div>
+        """
+        for era in eras
+    )
+    timeline_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Chapters</div>
+      <h2 class="display-heading display-heading--section">
+        The chapters that shape the whole picture.</h2>
+      <div class="timeline-scroll">
+        {timeline_panels}
+      </div>
+    </section>
+    """
+
+    # 4. Photo mosaic
+    mosaic_html = ""
+    if mosaic_photos:
+        mosaic_imgs = "".join(
+            f'<img src="{_s(item["url"])}" alt="{_s(item.get("title", ""))}" loading="lazy" />'
+            for item in mosaic_photos[:5]
+        )
+        mosaic_html = f"""
+        <section class="section container reveal">
+          <div class="photo-mosaic">{mosaic_imgs}</div>
+        </section>
+        """
+
+    # 5. Roles (compact table)
+    role_rows = "".join(
+        f"""
+        <div class="role-row">
+          <span class="role-row__period">{_s(item.get("period"))}</span>
+          <span class="role-row__org">{_s(item.get("organization"))}</span>
+          <span class="role-row__title">{_s(item.get("title"))}</span>
+          <span class="role-row__summary">{_s(item.get("summary"))}</span>
+        </div>
+        """
+        for item in roles[:6]
+    )
+    roles_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Career</div>
+      <h2 class="display-heading display-heading--section">Career proof, condensed.</h2>
+      <div class="roles-table">{role_rows}</div>
+    </section>
+    """
+
+    content = hero_html + origin_html + timeline_html + mosaic_html + roles_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"About {short_name}",
-            hero_kicker="About",
-            hero_title="From IIT Kharagpur to New York to independent builder.",
-            hero_subtitle="The site is arranged like a biography because the source material spans institutions, migration, work, and personal life rather than isolated portfolio bullets.",
-            hero_media_html=hero_media,
+            page_title=f"About {name}",
             content_html=content,
             active_nav="about",
             page_data={"page": "about"},
             body_class="public-page-about",
+            og_description="From IIT Kharagpur to New York to independent builder.",
         )
     )
 
 
-@router.get("/contact", response_class=HTMLResponse)
-async def public_contact() -> HTMLResponse:
-    async with async_session() as session:
-        profile = await get_public_profile(session)
-    payload = _profile_payload(profile)
-    short_name = _public_short_name(payload)
-    contact_items = list(payload.get("contact") or payload.get("contact_modes") or [])
-    hero_media = _photo_block((payload.get("photos") or {}).get("contact"), class_name="public-hero-visual", label="Contact Portrait")
-    content = f"""
-    <section class="public-editorial-band">
-      <article class="public-story-card public-story-card--wide">
-        <div class="public-kicker">Collaboration Modes</div>
-        <h2>Clean lanes for serious conversations.</h2>
-        <p>Best fits include high-ownership engineering roles, AI-native product work, and selective freelance collaborations where the product and systems challenge are both real.</p>
-        {_string_list([
-            "Hiring conversations for backend, platform, AI, or product engineering roles.",
-            "Freelance work where design, engineering, deployment, and maintenance matter together.",
-            "Peer conversations about agents, memory systems, data products, or operations."
-        ])}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Base</div>
-        <h2>{_safe(payload.get("location") or settings.public_profile_location)}</h2>
-        <p>{_safe(payload.get("professional_summary") or profile.get("summary") or "")}</p>
-      </article>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Channels</div>
-        <h2>Public-facing contact only.</h2>
-      </div>
-      <div class="public-contact-grid">{_contact_rows(contact_items)}</div>
-    </section>
-    """
-    return HTMLResponse(
-        render_public_shell(
-            page_title=f"Contact {short_name}",
-            hero_kicker="Contact",
-            hero_title="Reach Ahmad without digging through the private brain.",
-            hero_subtitle="Selective public channels for collaboration, hiring, and direct follow-up.",
-            hero_media_html=hero_media,
-            content_html=content,
-            active_nav="contact",
-            page_data={"page": "contact"},
-            body_class="public-page-contact",
-        )
-    )
-
+# ──────────────────────────────────────────────
+# Projects
+# ──────────────────────────────────────────────
 
 @router.get("/projects", response_class=HTMLResponse)
 async def public_projects() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
-    payload = _profile_payload(profile)
-    short_name = _public_short_name(payload)
-    hero_media = _photo_block((payload.get("photos") or {}).get("work"), class_name="public-hero-visual", label="Work Portrait")
-    content = f"""
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Case Studies</div>
-        <h2>Products, client work, and systems that carry proof.</h2>
+    p = _payload(profile)
+    name = _short_name(p)
+    photos = p.get("photos") or {}
+    capabilities = list(p.get("capabilities") or [])
+
+    # Hero
+    hero_html = f"""
+    <section class="hero-inner">
+      <div class="container">
+        <div>
+          <div class="public-kicker">Projects</div>
+          <h1 class="display-heading display-heading--hero">Work.</h1>
+          <p>Each project is framed as proof: what problem
+            it came from, how it was built,
+            and what it demonstrates.</p>
+        </div>
+        <div class="hero-inner__photo">
+          {_photo_img(photos.get("work"), alt="Ahmad street portrait")}
+        </div>
       </div>
-      <div class="public-case-grid public-case-grid--full">
-        {''.join(_project_card(project, detail=True) for project in projects)}
-      </div>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Expertise Books</div>
-        <h2>The domains these projects roll up into.</h2>
-      </div>
-      <div class="public-capability-grid">{_capability_cards(list(payload.get("capabilities") or []))}</div>
     </section>
     """
+
+    # Featured + grid
+    featured = _project_card_html(projects[0], featured=True) if projects else ""
+    grid = "".join(_project_card_html(proj) for proj in projects[1:])
+    projects_html = f"""
+    <section class="section container">
+      {featured}
+      <div class="project-grid mt-3">
+        {grid}
+      </div>
+    </section>
+    """
+
+    # Capabilities (horizontal scroll tags)
+    cap_tags = "".join(
+        f'<span class="capability-tag">{_s(item.get("title"))}</span>'
+        for item in capabilities[:8]
+    )
+    cap_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Domains</div>
+      <h2 class="display-heading display-heading--sub">The domains these projects roll up into.</h2>
+      <div class="capability-scroll">{cap_tags}</div>
+    </section>
+    """
+
+    content = hero_html + projects_html + cap_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{short_name} Projects",
-            hero_kicker="Projects",
-            hero_title="A body of work built around ownership, systems depth, and product conviction.",
-            hero_subtitle="Each project is framed as proof: what problem it came from, how it was built, and what it demonstrates.",
-            hero_media_html=hero_media,
+            page_title=f"{name} Projects",
             content_html=content,
             active_nav="projects",
             page_data={"page": "projects"},
             body_class="public-page-projects",
+            og_description=(
+                "A body of work built around ownership,"
+                " systems depth, and product conviction."
+            ),
         )
     )
 
+
+# ──────────────────────────────────────────────
+# Project Detail
+# ──────────────────────────────────────────────
 
 @router.get("/projects/{slug}", response_class=HTMLResponse)
 async def public_project_detail(slug: str) -> HTMLResponse:
     async with async_session() as session:
-        profile = await get_public_profile(session)
+        await get_public_profile(session)
         project = await get_public_project(session, slug)
     if not project:
         raise HTTPException(status_code=404, detail="Public project not found")
-    payload = dict(project.get("payload") or {})
-    profile_payload = _profile_payload(profile)
-    hero_media = _photo_block((profile_payload.get("photos") or {}).get("work"), class_name="public-hero-visual", label="Project Context")
-    signals = list(payload.get("signals") or [])
-    content = f"""
-    <section class="public-editorial-band">
-      <article class="public-story-card public-story-card--wide">
-        <div class="public-kicker">{_safe(payload.get("status") or "Project")}</div>
-        <h2>{_safe(payload.get("tagline") or project.get("summary") or "")}</h2>
-        <p>{_safe(payload.get("summary") or project.get("summary") or "")}</p>
-        {_pill_list(list(payload.get("stack") or [])[:8])}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Live Links</div>
-        <div class="public-link-column">
-          {''.join(f'<a class="public-inline-link" href="{_safe(item.get("href"))}" target="_blank" rel="noreferrer">{_safe(item.get("label") or "Open")}</a>' for item in list(payload.get("links") or []) if item.get("href")) or '<span>No public links yet.</span>'}
+    proj_p = dict(project.get("payload") or {})
+    signals = list(proj_p.get("signals") or [])
+
+    # Hero
+    hero_html = f"""
+    <section class="hero-inner">
+      <div class="container">
+        <div>
+          <div class="public-kicker">Project</div>
+          <h1 class="display-heading display-heading--section">{_s(project["title"])}</h1>
+          <span class="status-badge">{_s(proj_p.get("status") or "Active")}</span>
+          <p class="mt-2">{_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
         </div>
-      </article>
-    </section>
-    <section class="public-editorial-band">
-      <article class="public-story-card">
-        <div class="public-kicker">How It Was Framed</div>
-        {_string_list(list(payload.get("resume_bullets") or [])[:5])}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">What It Demonstrates</div>
-        {_string_list(list(payload.get("demonstrates") or [])[:5])}
-      </article>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">Signals</div>
-        <h2>Approved narrative and live status fragments.</h2>
-      </div>
-      <div class="public-signal-grid">
-        {''.join(
-            f'''
-            <article class="public-signal-card">
-              <div class="public-kicker">{_safe(item.get("fact_type") or "signal")}</div>
-              <strong>{_safe(item.get("title") or project.get("title"))}</strong>
-              <p>{_safe(item.get("body") or "")}</p>
-              <span>{_safe(item.get("updated_at") or "")}</span>
-            </article>
-            '''
-            for item in signals
-        ) or '<article class="public-signal-card"><strong>No separate signal cards yet.</strong></article>'}
       </div>
     </section>
     """
+
+    # Two-column layout
+    stack_pills = _pills(list(proj_p.get("stack") or [])[:8])
+    links_html = "".join(
+        f'<a class="inline-link" href="{_s(item.get("href"))}"'
+        f' target="_blank" rel="noreferrer">'
+        f'{_s(item.get("label") or "Open")}</a>'
+        for item in list(proj_p.get("links") or [])
+        if item.get("href")
+    ) or "<span class='mono-accent'>No public links yet.</span>"
+
+    demonstrates_html = _bullet_list(list(proj_p.get("demonstrates") or [])[:5])
+    summary_html = _s(proj_p.get("summary") or project.get("summary") or "")
+    framing_html = _bullet_list(list(proj_p.get("resume_bullets") or [])[:5])
+
+    # Signal feed
+    signal_items = "".join(
+        f"""
+        <div class="signal-item">
+          <span class="signal-item__time">{_s(item.get("updated_at") or "")}</span>
+          <div class="signal-item__body">
+            <strong>{_s(item.get("title") or project.get("title"))}</strong>
+            <p>{_s(item.get("body") or "")}</p>
+          </div>
+        </div>
+        """
+        for item in signals
+    ) or '<p class="mono-accent">No signal entries yet.</p>'
+
+    detail_html = f"""
+    <section class="section container">
+      <div class="detail-layout">
+        <div>
+          <div class="public-kicker">Overview</div>
+          <p>{summary_html}</p>
+          <div class="mt-3">
+            <div class="public-kicker">How It Was Framed</div>
+            {framing_html}
+          </div>
+          <div class="mt-3">
+            <div class="public-kicker">Signals</div>
+            <div class="signal-feed">{signal_items}</div>
+          </div>
+        </div>
+        <div class="detail-sidebar">
+          <div class="detail-sidebar__block">
+            <h4>Stack</h4>
+            {stack_pills}
+          </div>
+          <div class="detail-sidebar__block">
+            <h4>Links</h4>
+            <div class="link-column">{links_html}</div>
+          </div>
+          <div class="detail-sidebar__block">
+            <h4>Demonstrates</h4>
+            {demonstrates_html}
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+    content = hero_html + detail_html
     return HTMLResponse(
         render_public_shell(
-            page_title=_safe(project["title"]),
-            hero_kicker="Project",
-            hero_title=_safe(project["title"]),
-            hero_subtitle=_safe(payload.get("summary") or project.get("summary") or ""),
-            hero_media_html=hero_media,
+            page_title=_s(project["title"]),
             content_html=content,
             active_nav="projects",
             page_data={"page": "project-detail", "project": project},
             body_class="public-page-project-detail",
+            og_description=_s(proj_p.get("tagline") or project.get("summary") or ""),
         )
     )
 
+
+# ──────────────────────────────────────────────
+# Contact
+# ──────────────────────────────────────────────
+
+@router.get("/contact", response_class=HTMLResponse)
+async def public_contact() -> HTMLResponse:
+    async with async_session() as session:
+        profile = await get_public_profile(session)
+    p = _payload(profile)
+    name = _short_name(p)
+    photos = p.get("photos") or {}
+    contact_items = list(p.get("contact") or p.get("contact_modes") or [])
+
+    # Hero
+    hero_html = f"""
+    <section class="hero-inner">
+      <div class="container">
+        <div>
+          <div class="public-kicker">Contact</div>
+          <h1 class="display-heading display-heading--hero">Let's talk.</h1>
+          <p>Selective public channels for collaboration, hiring, and direct follow-up.</p>
+        </div>
+        <div class="hero-inner__photo">
+          {_photo_img(photos.get("contact"), alt="Ahmad with Oscar")}
+        </div>
+      </div>
+    </section>
+    """
+
+    # Contact rows
+    rows_html = ""
+    for item in contact_items:
+        href = item.get("href")
+        if not href:
+            continue
+        rows_html += f"""
+        <div class="contact-row">
+          <span class="contact-row__label">{_s(item.get("label") or "Contact")}</span>
+          <span class="contact-row__value">{_s(item.get("value") or item.get("label"))}</span>
+          <span class="contact-row__action">
+            <a href="{_s(href)}"
+              target="_blank" rel="noreferrer">Open</a>
+          </span>
+        </div>
+        """
+
+    location = p.get("location") or settings.public_profile_location
+    contact_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Channels</div>
+      <h2 class="display-heading display-heading--sub">Public-facing contact only.</h2>
+      <div class="contact-rows">{rows_html}</div>
+      <p class="mt-4" style="font-size:1.25rem;font-weight:600;">{_s(location)}</p>
+    </section>
+    """
+
+    content = hero_html + contact_html
+    return HTMLResponse(
+        render_public_shell(
+            page_title=f"Contact {name}",
+            content_html=content,
+            active_nav="contact",
+            page_data={"page": "contact"},
+            body_class="public-page-contact",
+            og_description=(
+                "Selective public channels for"
+                " collaboration, hiring, and direct follow-up."
+            ),
+        )
+    )
+
+
+# ──────────────────────────────────────────────
+# Open Brain
+# ──────────────────────────────────────────────
 
 @router.get("/open-brain", response_class=HTMLResponse)
 async def public_open_brain() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
-        projects = await list_public_projects(session)
         faq = await list_public_faq(session)
-        policy = await get_public_answer_policy(session)
-    payload = _profile_payload(profile)
-    short_name = _public_short_name(payload)
-    hero_media = _photo_block((payload.get("photos") or {}).get("personality"), class_name="public-hero-visual", label="Open Brain Portrait")
-    faq_html = "".join(
+        await get_public_answer_policy(session)
+    p = _payload(profile)
+    name = _short_name(p)
+    thought_garden = list(p.get("thought_garden") or [])
+
+    turnstile_configured = bool(
+        settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key
+    )
+
+    # Chat shell (promoted above fold, terminal aesthetic)
+    turnstile_widget = ""
+    if turnstile_configured:
+        turnstile_widget = '<div id="turnstile-widget"></div>'
+
+    chat_html = f"""
+    <section class="section container">
+      <div class="offset-grid offset-grid--65-35">
+        <div>
+          <div class="public-kicker">Digital Clone</div>
+          <h1 class="display-heading display-heading--section">Ask Ahmad's brain.</h1>
+          <p>A conversational clone built from approved
+            public facts, project history, and persona.
+            Multi-turn, evidence-led, opinionated.</p>
+        </div>
+        <div></div>
+      </div>
+      <div class="chat-shell mt-3">
+        <div class="chat-shell__header">
+          <span class="chat-shell__dot"></span>
+          <span class="chat-shell__title">open-brain &mdash; {_s(name)}</span>
+          <button class="chat-shell__new-btn" data-new-conversation>New conversation</button>
+        </div>
+        <div class="chat-log" data-public-chat-log>
+          <div class="chat-message">
+            <strong>Ahmad's Clone</strong>
+            <div>Ask about my work, projects, strengths,
+              interests, or collaboration fit.
+              I'm not a general-purpose assistant
+              — I'm a conversational version of Ahmad,
+              built from real evidence.</div>
+          </div>
+        </div>
+        <form class="chat-form" data-public-chat-form>
+          <textarea name="question"
+            placeholder="What kind of engineer is Ahmad?
+            What is duSraBheja?
+            Would he be a strong fit for an AI
+            infrastructure role?"></textarea>
+          <input type="hidden" name="turnstile_token" value="" />
+          {turnstile_widget}
+          <button class="cta" type="submit"
+            {'disabled' if not turnstile_configured else ''}
+          >Ask the clone</button>
+          <div class="chat-footnote"
+            data-public-chat-status>
+            {'Multi-turn conversation. Ask follow-ups.'
+             if turnstile_configured
+             else "Turnstile isn't configured yet,"
+                  " so chat is locked."}
+          </div>
+        </form>
+      </div>
+    </section>
+    """
+
+    # FAQ accordion
+    faq_items = "".join(
         f"""
-        <article class="public-proof-card">
-          <div class="public-kicker">FAQ</div>
-          <h3>{_safe(item["question"])}</h3>
-          <p>{_safe(item["answer"])}</p>
-        </article>
+        <details class="faq-item">
+          <summary>{_s(item["question"])}</summary>
+          <div class="faq-answer">{_s(item["answer"])}</div>
+        </details>
         """
         for item in faq
     )
-    turnstile_configured = bool(settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key)
-    content = f"""
-    <section class="public-editorial-band">
-      <article class="public-story-card public-story-card--wide">
-        <div class="public-kicker">Approved Scope</div>
-        <h2>The public brain answers from approved narrative only.</h2>
-        <p>{_safe(policy.get("summary") or "The public surface is curated and intentionally narrow.")}</p>
-        {_render_public_recent_signals(projects)}
-      </article>
-      <article class="public-story-card">
-        <div class="public-kicker">Thought Garden</div>
-        {_pill_list([item.get("title") or "" for item in list(payload.get("thought_garden") or [])[:6]])}
-      </article>
-    </section>
-    <section class="public-chat-shell">
-      <div class="public-chat-log" data-public-chat-log>
-        <div class="public-chat-message">
-          <strong>Open Brain</strong>
-          <div>Ask about Ahmad's work, projects, strengths, interests, or collaboration fit. This is not a general-purpose assistant.</div>
-        </div>
-      </div>
-      <form class="public-chat-form" data-public-chat-form>
-        <textarea name="question" placeholder="What kind of engineer is Ahmad? What is duSraBheja? Would he be a strong collaborator on AI infrastructure?"></textarea>
-        <input type="hidden" name="turnstile_token" value="" />
-        <div id="turnstile-widget"></div>
-        <button class="public-cta" type="submit" {'disabled' if not turnstile_configured else ''}>Ask the open brain</button>
-        <div class="public-chat-footnote" data-public-chat-status>
-          {'Public chat is limited to Ahmad/profile/project questions.' if turnstile_configured else 'Turnstile isn’t configured yet, so public chat is locked for now.'}
-        </div>
-      </form>
-    </section>
-    <section class="public-section">
-      <div class="public-section-heading">
-        <div class="public-kicker">FAQ</div>
-        <h2>Common public questions.</h2>
-      </div>
-      <div class="public-proof-grid">{faq_html}</div>
+    faq_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">FAQ</div>
+      <h2 class="display-heading display-heading--sub">Common questions.</h2>
+      <div class="faq-list">{faq_items}</div>
     </section>
     """
+
+    # Thought garden
+    garden_tags = "".join(
+        f'<span class="thought-tag">{_s(item.get("title") or "")}</span>'
+        for item in thought_garden[:8]
+    )
+    garden_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Thought Garden</div>
+      <div class="thought-garden">{garden_tags}</div>
+    </section>
+    """ if garden_tags else ""
+
     page_script = ""
     if turnstile_configured:
         page_script = f"""
         window.addEventListener('load', function () {{
-          const renderWidget = function () {{
-            if (!window.turnstile) return;
-            window.turnstile.render('#turnstile-widget', {{
-              sitekey: {settings.cloudflare_turnstile_site_key!r},
-              callback: function (token) {{
-                const field = document.querySelector('input[name="turnstile_token"]');
-                if (field) field.value = token;
-              }},
-            }});
-          }};
-          renderWidget();
+          if (!window.turnstile) return;
+          window.turnstile.render('#turnstile-widget', {{
+            sitekey: {settings.cloudflare_turnstile_site_key!r},
+            callback: function (token) {{
+              var field = document.querySelector('input[name="turnstile_token"]');
+              if (field) field.value = token;
+            }},
+          }});
         }});
         """
-        content = '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' + content
+        turnstile_tag = (
+            '<script src="https://challenges.cloudflare.com'
+            '/turnstile/v0/api.js" async defer></script>'
+        )
+        chat_html = turnstile_tag + chat_html
+
+    content = chat_html + faq_html + garden_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"Open Brain — {short_name}",
-            hero_kicker="Open Brain",
-            hero_title="Ask the public-facing brain.",
-            hero_subtitle="A curated profile bot for collaborators, recruiters, and curious humans. It only answers from approved public narrative and approved public facts.",
-            hero_media_html=hero_media,
+            page_title=f"Open Brain — {name}",
             content_html=content,
             active_nav="open-brain",
             page_data={"page": "open-brain", "turnstileConfigured": turnstile_configured},
             page_script=page_script,
             body_class="public-page-open-brain",
+            og_description=(
+                "A conversational digital clone for"
+                " collaborators, recruiters,"
+                " and curious humans."
+            ),
         )
     )
 
+
+# ──────────────────────────────────────────────
+# Admin redirect
+# ──────────────────────────────────────────────
 
 @router.get("/admin", response_class=HTMLResponse)
 async def public_admin_redirect() -> RedirectResponse:
     return RedirectResponse(url="/dashboard/login", status_code=303)
 
+
+# ──────────────────────────────────────────────
+# JSON APIs
+# ──────────────────────────────────────────────
 
 @router.get("/api/public/profile")
 async def public_profile_api() -> dict:
@@ -592,15 +788,19 @@ async def public_faq_api() -> dict:
 @router.post("/api/public/chat")
 async def public_chat_api(request: Request, payload: PublicChatRequest) -> dict:
     async with async_session() as session:
-        result = await answer_public_question(
+        result = await answer_public_chat(
             session,
             question=payload.question,
             remote_ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
             turnstile_token=payload.turnstile_token,
+            conversation_id=payload.conversation_id,
         )
     if not result.get("ok"):
-        raise HTTPException(status_code=int(result.get("status_code") or 400), detail=result.get("detail") or "Public chat failed.")
+        raise HTTPException(
+            status_code=int(result.get("status_code") or 400),
+            detail=result.get("detail") or "Public chat failed.",
+        )
     return result
 
 
@@ -609,5 +809,7 @@ async def public_health_api() -> dict:
     return {
         "status": "ok",
         "site_title": settings.public_site_title,
-        "chat_enabled": bool(settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key),
+        "chat_enabled": bool(
+            settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key
+        ),
     }

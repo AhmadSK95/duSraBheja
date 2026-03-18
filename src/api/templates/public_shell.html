@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>$page_title</title>
+    $og_meta_html
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/public/site.css" />
   </head>
   <body class="public-body $body_class">
@@ -16,26 +20,24 @@
           <small>$site_host</small>
         </span>
       </a>
-      <nav class="public-nav">
+      <button class="public-nav-toggle" aria-label="Toggle navigation" data-nav-toggle>
+        <span></span><span></span><span></span>
+      </button>
+      <nav class="public-nav" data-nav>
         $nav_html
       </nav>
-      <a class="public-dashboard-link" href="/admin">Admin</a>
     </header>
     <main class="public-main">
-      <section class="public-hero">
-        <div class="public-hero-grid">
-          <div class="public-hero-copy">
-            <div class="public-kicker">$hero_kicker</div>
-            <h1>$hero_title</h1>
-            <p>$hero_subtitle</p>
-          </div>
-          $hero_media_html
-        </div>
-      </section>
-      <section class="public-content">
-        $content_html
-      </section>
+      $content_html
     </main>
+    <footer class="public-footer">
+      <div class="container">
+        <nav class="public-footer-nav">
+          $footer_nav_html
+        </nav>
+        <p class="public-footer-sig">$footer_sig</p>
+      </div>
+    </footer>
     <script id="public-page-data" type="application/json">$page_data_json</script>
     <script src="/static/public/site.js"></script>
     <script>$page_script</script>
