@@ -570,14 +570,45 @@ def _identity_stack(job_hunt_text: str, professional_summary: str) -> list[str]:
 def _current_arc(personal_bible_text: str, brain_dump_text: str, projects: list[ProjectCase]) -> dict[str, Any]:
     bible_sections = _section_map(personal_bible_text)
     dump_sections = _section_map(brain_dump_text)
+
+    # Parse Part 8 into structured acts instead of raw dump
+    part8_body = (
+        bible_sections.get("part 8: the narrative arc (for the website)")
+        or ""
+    )
+    acts: list[dict[str, str]] = []
+    act_pattern = re.compile(
+        r"\*\*Act\s*\d+\s*[-—–]\s*(?P<label>[^(]+?)\s*\((?P<period>[^)]+)\)\s*:?\s*\*\*"
+        r"\s*(?P<body>.*?)(?=\*\*Act\s*\d+|\*\*(?:The\s+)?Throughline|$)",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in act_pattern.finditer(part8_body):
+        acts.append({
+            "label": _compact(m.group("label")),
+            "period": _compact(m.group("period")),
+            "body": _compact(m.group("body")),
+        })
+
+    throughline_match = re.search(
+        r"\*\*(?:The\s+)?Throughline\s*:?\s*\*\*\s*(?P<body>.*?)$",
+        part8_body,
+        re.DOTALL | re.IGNORECASE,
+    )
+    throughline = _compact(throughline_match.group("body")) if throughline_match else ""
+
+    # Use Act 3 body as summary, or fall back to dump/excerpt
+    act3_body = next((a["body"] for a in acts if "builder" in a.get("label", "").lower()), "")
+    summary = act3_body or _excerpt(
+        dump_sections.get("why i want to join narrative")
+        or part8_body,
+        limit=420,
+    )
+
     return {
         "title": "Current Arc",
-        "summary": _excerpt(
-            dump_sections.get("why i want to join narrative")
-            or bible_sections.get("act 3 — the builder (2025-present):")
-            or bible_sections.get("part 8: the narrative arc (for the website)"),
-            limit=420,
-        ),
+        "summary": summary,
+        "acts": acts,
+        "throughline": throughline,
         "focus": [
             "Building duSraBheja into a trustworthy memory and project-state system.",
             "Turning dataGenie into a serious analytics product for non-technical users.",

@@ -79,11 +79,16 @@ def render_public_shell(
         nav_html.append(f'<a class="{cls}" href="{path}">{escaped}</a>')
 
     base_url = (settings.public_base_url or "").rstrip("/")
+    default_og_image = (
+        f"{base_url}/public-assets/profile/05_nov2025_waterfront_fullbody_portrait.jpg"
+        if base_url
+        else ""
+    )
     og_meta = _og_meta_tags(
         title=page_title,
         description=og_description or hero_subtitle,
         url=base_url,
-        image=og_image,
+        image=og_image or default_og_image,
     )
 
     return SHELL_TEMPLATE.substitute(

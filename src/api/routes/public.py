@@ -124,76 +124,83 @@ async def public_home() -> HTMLResponse:
     photos = p.get("photos") or {}
     hero_photo = photos.get("hero")
     personality_photo = photos.get("personality")
-    photo_break = photos.get("photo_break")
-    current_arc = p.get("current_arc") or {}
-    # 1. Full-viewport hero
+
+    # 1. Compact text-first hero
     hero_html = f"""
-    <section class="hero-full">
-      <div class="hero-full__bg">
-        {_photo_img(hero_photo, loading="eager", alt=f"{name} portrait")}
+    <section class="hero-home">
+      <div class="container">
+        <div class="hero-home__text">
+          <div class="public-kicker">Software Engineer</div>
+          <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
+          <p>Software engineer. Builder of AI systems, shipped products,
+            and things that remember.</p>
+          <div class="hero-home__ctas">
+            <a class="cta" href="/projects">See the work</a>
+            <a class="cta cta--outline" href="/open-brain">Ask my AI clone</a>
+          </div>
+        </div>
+        <div class="hero-home__photo">
+          {_photo_img(hero_photo, loading="eager", alt=f"{name} waterfront portrait")}
+        </div>
       </div>
-      <div class="hero-full__content">
-        <div class="public-kicker">Living Profile</div>
-        <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
-        <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
-      </div>
-      <div class="hero-full__scroll">scroll</div>
     </section>
     """
 
-    # 2. Statement band (dark bg with metrics)
-    stat_html = f"""
+    # 2. Proof band (dark bg)
+    stat_html = """
     <section class="full-bleed dark-band reveal">
       <div class="container">
-        <div class="stat-band">
-          <div class="stat-item">
-            <div class="stat-item__number">6+</div>
-            <div class="stat-item__label">Years Engineering</div>
+        <div class="proof-grid">
+          <div class="proof-card">
+            <div class="proof-card__number">3+</div>
+            <div class="proof-card__label">Years at Amazon</div>
           </div>
-          <div class="stat-item">
-            <div class="stat-item__number">{len(projects)}</div>
-            <div class="stat-item__label">Shipped Products</div>
+          <div class="proof-card">
+            <div class="proof-card__number">4</div>
+            <div class="proof-card__label">Shipped Products</div>
           </div>
-          <div class="stat-item">
-            <div class="stat-item__number">3</div>
-            <div class="stat-item__label">Countries Worked</div>
+          <div class="proof-card">
+            <div class="proof-card__number">5</div>
+            <div class="proof-card__label">AI Agents in Production</div>
           </div>
-          <div class="stat-item">
-            <div class="stat-item__number">1</div>
-            <div class="stat-item__label">AI Second Brain</div>
+          <div class="proof-card">
+            <div class="proof-card__number">6+</div>
+            <div class="proof-card__label">Years Engineering</div>
           </div>
         </div>
       </div>
     </section>
     """
 
-    # 3. About teaser (60/40 asymmetric)
+    # 3. What I build
     about_html = f"""
     <section class="section container reveal">
       <div class="offset-grid offset-grid--60-40">
         <div>
-          <div class="public-kicker">About</div>
+          <div class="public-kicker">What I Build</div>
           <h2 class="display-heading display-heading--section">
-            Builder, engineer, restless generalist.</h2>
-          <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
-          <a class="inline-link mt-2" href="/about">Read the full story</a>
+            AI systems that solve real problems.</h2>
+          <p>I build AI systems that solve real problems. My current work spans
+            a personal AI second brain with 5 specialized agents, a conversational
+            data analytics platform, and production client sites.
+            I care about ownership &mdash; architecture to deployment to operations.</p>
+          <a class="inline-link mt-2" href="/about">The full picture</a>
         </div>
-        <div class="hero-inner__photo">
+        <div class="photo-accent--md">
           {_photo_img(personality_photo, alt="Ahmad with Oscar")}
         </div>
       </div>
     </section>
     """
 
-    # 4. Selected work (staggered)
+    # 4. Selected projects
     first_project = _project_card_html(projects[0], featured=True) if projects else ""
     grid_projects = "".join(_project_card_html(proj) for proj in projects[1:4])
     work_html = f"""
     <section class="section container reveal">
       <div class="public-kicker">Selected Work</div>
       <h2 class="display-heading display-heading--section">
-        Proof across AI systems, product thinking,
-        and real delivery.</h2>
+        Built, shipped, running.</h2>
       {first_project}
       <div class="project-grid mt-3">
         {grid_projects}
@@ -206,40 +213,54 @@ async def public_home() -> HTMLResponse:
     </section>
     """
 
-    # 5. Photo break
-    photo_break_html = ""
-    if photo_break and photo_break.get("url"):
-        photo_break_html = f"""
-        <section class="full-bleed photo-break reveal">
-          <img src="{_s(photo_break['url'])}" alt="NYC skyline" loading="lazy" />
-          <div class="photo-break__overlay">
-            <p class="photo-break__quote">Build things that remember. Ship things that matter.</p>
-          </div>
-        </section>
-        """
-
-    # 6. Current arc
-    focus_items = list(current_arc.get("focus") or [])[:5]
-    arc_html = f"""
-    <section class="section container container--narrow text-center reveal">
-      <div class="public-kicker">Current Arc</div>
-      <h2 class="display-heading display-heading--section">
-        {_s(current_arc.get("title") or "What is happening now")}
-      </h2>
-      <p>{_s(current_arc.get("summary") or "")}</p>
-      {_numbered_list(focus_items)}
+    # 5. Chatbot teaser (dark bg card)
+    chatbot_html = """
+    <section class="section container reveal">
+      <div class="chatbot-teaser">
+        <div class="public-kicker" style="color:var(--rust);">Digital Clone</div>
+        <h2 class="display-heading display-heading--section">
+          Talk to my AI clone.</h2>
+        <p>Built from real evidence, not a generic chatbot.
+          Ask about my work, my projects, whether I'd be a good fit
+          for your team.</p>
+        <a class="cta" href="/open-brain">Open the brain</a>
+      </div>
     </section>
     """
 
-    content = hero_html + stat_html + about_html + work_html + photo_break_html + arc_html
+    # 6. Contact strip
+    contact_items = list(p.get("contact") or p.get("contact_modes") or [])
+    contact_links = ""
+    for item in contact_items:
+        href = item.get("href")
+        if not href:
+            continue
+        contact_links += (
+            f'<a href="{_s(href)}" target="_blank" rel="noreferrer">'
+            f'{_s(item.get("label") or "Contact")}</a>'
+        )
+    location = p.get("location") or "Jersey City, NJ"
+    contact_html = f"""
+    <section class="section container reveal">
+      <div class="contact-strip">
+        {contact_links}
+        <span>{_s(location)}</span>
+      </div>
+    </section>
+    """
+
+    content = hero_html + stat_html + about_html + work_html + chatbot_html + contact_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{name} — Builder, Engineer, Restless Generalist",
+            page_title=f"{name} — Software Engineer",
             content_html=content,
             active_nav="home",
             page_data={"page": "home"},
             body_class="public-page-home",
-            og_description=(p.get("hero_summary") or "").strip(),
+            og_description=(
+                "Software engineer. Builder of AI systems,"
+                " shipped products, and things that remember."
+            ),
         )
     )
 
@@ -255,82 +276,48 @@ async def public_about() -> HTMLResponse:
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-    personality_photo = photos.get("personality")
     mosaic_photos = [item for item in (photos.get("mosaic") or []) if item and item.get("url")]
-    eras = list(p.get("eras") or [])
     roles = list(p.get("roles") or [])
     current_arc = p.get("current_arc") or {}
 
-    # 1. Hero
-    hero_html = f"""
+    # 1. Text-only hero
+    hero_html = """
     <section class="hero-inner">
-      <div class="container">
-        <div>
-          <div class="public-kicker">About</div>
-          <h1 class="display-heading display-heading--hero">
-            From IIT Kharagpur to New York
-            to independent builder.</h1>
-          <p>{_s(current_arc.get("summary") or profile.get("summary") or "")}</p>
-        </div>
+      <div class="container" style="display:block;">
+        <div class="public-kicker">About</div>
+        <h1 class="display-heading display-heading--hero">The full picture.</h1>
+        <p style="max-width:54ch;color:var(--ink-light);font-size:1.08rem;line-height:1.72;">
+          From IIT Kharagpur to Amazon to building independently in New York.</p>
       </div>
     </section>
     """
 
-    # 2. Origin statement
-    origin_html = f"""
-    <section class="section container container--narrow reveal">
-      <div class="offset-grid offset-grid--60-40">
-        <div>
-          <div class="public-kicker">Origin</div>
-          <h2 class="display-heading display-heading--sub">
-            A career built by moving into harder rooms
-            and shipping real things.</h2>
-          <p>{_s(p.get("hero_summary") or profile.get("summary") or "")}</p>
-        </div>
-        <div class="hero-inner__photo">
-          {_photo_img(personality_photo, alt="Ahmad with Oscar")}
-        </div>
-      </div>
-    </section>
-    """
-
-    # 3. Timeline (horizontal scroll)
-    timeline_panels = "".join(
-        f"""
-        <div class="timeline-panel">
-          <div class="public-kicker">{_s(era.get("years"))}</div>
-          <h3>{_s(era.get("title"))}</h3>
-          <p>{_s(era.get("summary"))}</p>
-          {_bullet_list(list(era.get("highlights") or [])[:4])}
+    # 2. Three acts (from structured current_arc.acts)
+    acts = list(current_arc.get("acts") or [])
+    act_cards = ""
+    for act in acts[:3]:
+        act_cards += f"""
+        <div class="act-card">
+          <div class="public-kicker">{_s(act.get("period", ""))}</div>
+          <h3>{_s(act.get("label", ""))}</h3>
+          <p>{_s(act.get("body", ""))}</p>
         </div>
         """
-        for era in eras
-    )
-    timeline_html = f"""
+    throughline = current_arc.get("throughline") or ""
+    throughline_html = ""
+    if throughline:
+        throughline_html = f'<blockquote class="throughline-quote">{_s(throughline)}</blockquote>'
+
+    acts_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Chapters</div>
-      <h2 class="display-heading display-heading--section">
-        The chapters that shape the whole picture.</h2>
-      <div class="timeline-scroll">
-        {timeline_panels}
-      </div>
+      <div class="public-kicker">The Arc</div>
+      <h2 class="display-heading display-heading--section">Three acts, one throughline.</h2>
+      <div class="act-cards">{act_cards}</div>
+      {throughline_html}
     </section>
     """
 
-    # 4. Photo mosaic
-    mosaic_html = ""
-    if mosaic_photos:
-        mosaic_imgs = "".join(
-            f'<img src="{_s(item["url"])}" alt="{_s(item.get("title", ""))}" loading="lazy" />'
-            for item in mosaic_photos[:5]
-        )
-        mosaic_html = f"""
-        <section class="section container reveal">
-          <div class="photo-mosaic">{mosaic_imgs}</div>
-        </section>
-        """
-
-    # 5. Roles (compact table)
+    # 3. Career table
     role_rows = "".join(
         f"""
         <div class="role-row">
@@ -350,7 +337,37 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    content = hero_html + origin_html + timeline_html + mosaic_html + roles_html
+    # 4. Photo row (3 constrained images)
+    photo_row_imgs = ""
+    # Use mosaic photos: personality (#9), bike (#7), pokemon (#10)
+    for item in mosaic_photos[1:4]:
+        if item and item.get("url"):
+            photo_row_imgs += f"""
+            <div class="photo-row__item">
+              <img src="{_s(item['url'])}" alt="{_s(item.get('title', ''))}" loading="lazy" />
+            </div>
+            """
+    photo_html = f"""
+    <section class="section container reveal">
+      <div class="photo-row">{photo_row_imgs}</div>
+    </section>
+    """ if photo_row_imgs else ""
+
+    # 5. Beyond the code
+    texture_html = """
+    <section class="section container reveal">
+      <div class="public-kicker">Beyond the Code</div>
+      <h2 class="display-heading display-heading--sub">The rest of the picture.</h2>
+      <ul class="texture-list">
+        <li>Five languages: English, Hindi, Telugu, Urdu, Tamil.</li>
+        <li>Married Annie in 2025. Cat dad to Oscar and Iris.</li>
+        <li>Cycles, collects Pokemon, loves hip hop and Indian film music.</li>
+        <li>Japanese markets, tattoos, strong opinions about food.</li>
+      </ul>
+    </section>
+    """
+
+    content = hero_html + acts_html + roles_html + photo_html + texture_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -358,7 +375,7 @@ async def public_about() -> HTMLResponse:
             active_nav="about",
             page_data={"page": "about"},
             body_class="public-page-about",
-            og_description="From IIT Kharagpur to New York to independent builder.",
+            og_description="From IIT Kharagpur to Amazon to building independently in New York.",
         )
     )
 
@@ -377,25 +394,24 @@ async def public_projects() -> HTMLResponse:
     photos = p.get("photos") or {}
     capabilities = list(p.get("capabilities") or [])
 
-    # Hero
+    # Hero with accent photo
     hero_html = f"""
     <section class="hero-inner">
       <div class="container">
         <div>
           <div class="public-kicker">Projects</div>
           <h1 class="display-heading display-heading--hero">Work.</h1>
-          <p>Each project is framed as proof: what problem
-            it came from, how it was built,
-            and what it demonstrates.</p>
+          <p>Everything here is real. Live URLs, real users,
+            production infrastructure.</p>
         </div>
-        <div class="hero-inner__photo">
+        <div class="photo-accent--sm">
           {_photo_img(photos.get("work"), alt="Ahmad street portrait")}
         </div>
       </div>
     </section>
     """
 
-    # Featured + grid
+    # Featured project
     featured = _project_card_html(projects[0], featured=True) if projects else ""
     grid = "".join(_project_card_html(proj) for proj in projects[1:])
     projects_html = f"""
@@ -407,7 +423,7 @@ async def public_projects() -> HTMLResponse:
     </section>
     """
 
-    # Capabilities (horizontal scroll tags)
+    # Domains strip
     cap_tags = "".join(
         f'<span class="capability-tag">{_s(item.get("title"))}</span>'
         for item in capabilities[:8]
@@ -415,7 +431,6 @@ async def public_projects() -> HTMLResponse:
     cap_html = f"""
     <section class="section container reveal">
       <div class="public-kicker">Domains</div>
-      <h2 class="display-heading display-heading--sub">The domains these projects roll up into.</h2>
       <div class="capability-scroll">{cap_tags}</div>
     </section>
     """
@@ -423,14 +438,14 @@ async def public_projects() -> HTMLResponse:
     content = hero_html + projects_html + cap_html
     return HTMLResponse(
         render_public_shell(
-            page_title=f"{name} Projects",
+            page_title=f"{name} — Projects",
             content_html=content,
             active_nav="projects",
             page_data={"page": "projects"},
             body_class="public-page-projects",
             og_description=(
-                "A body of work built around ownership,"
-                " systems depth, and product conviction."
+                "Everything here is real. Live URLs,"
+                " real users, production infrastructure."
             ),
         )
     )
@@ -551,16 +566,17 @@ async def public_contact() -> HTMLResponse:
     photos = p.get("photos") or {}
     contact_items = list(p.get("contact") or p.get("contact_modes") or [])
 
-    # Hero
+    # Hero with accent photo
     hero_html = f"""
     <section class="hero-inner">
       <div class="container">
         <div>
           <div class="public-kicker">Contact</div>
           <h1 class="display-heading display-heading--hero">Let's talk.</h1>
-          <p>Selective public channels for collaboration, hiring, and direct follow-up.</p>
+          <p>Looking for engineering roles where technical depth
+            meets product conviction. Also take freelance projects.</p>
         </div>
-        <div class="hero-inner__photo">
+        <div class="photo-accent--sm" style="max-width:300px;">
           {_photo_img(photos.get("contact"), alt="Ahmad with Oscar")}
         </div>
       </div>
@@ -588,13 +604,40 @@ async def public_contact() -> HTMLResponse:
     contact_html = f"""
     <section class="section container reveal">
       <div class="public-kicker">Channels</div>
-      <h2 class="display-heading display-heading--sub">Public-facing contact only.</h2>
       <div class="contact-rows">{rows_html}</div>
       <p class="mt-4" style="font-size:1.25rem;font-weight:600;">{_s(location)}</p>
     </section>
     """
 
-    content = hero_html + contact_html
+    # Three visitor cards
+    visitor_html = """
+    <section class="section container reveal">
+      <div class="visitor-cards">
+        <div class="visitor-card">
+          <h3>Hiring?</h3>
+          <p>I bring 3+ years of Amazon-scale distributed systems,
+            AI agent production experience, and end-to-end ownership.
+            I ship, deploy, and maintain what I build.</p>
+          <a class="inline-link" href="mailto:ahmad.shaik.dev@gmail.com">Email me</a>
+        </div>
+        <div class="visitor-card">
+          <h3>Need a site built?</h3>
+          <p>I take on select freelance projects. Full-stack delivery
+            from design through deployment &mdash; live client sites
+            running in production today.</p>
+          <a class="inline-link" href="/projects">See past work</a>
+        </div>
+        <div class="visitor-card">
+          <h3>Just curious?</h3>
+          <p>Ask my AI clone anything about my work, projects, or fit.
+            It's built from real evidence, not a prompt wrapper.</p>
+          <a class="inline-link" href="/open-brain">Talk to the clone</a>
+        </div>
+      </div>
+    </section>
+    """
+
+    content = hero_html + contact_html + visitor_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"Contact {name}",
@@ -603,8 +646,8 @@ async def public_contact() -> HTMLResponse:
             page_data={"page": "contact"},
             body_class="public-page-contact",
             og_description=(
-                "Selective public channels for"
-                " collaboration, hiring, and direct follow-up."
+                "Looking for engineering roles where"
+                " technical depth meets product conviction."
             ),
         )
     )
@@ -628,24 +671,28 @@ async def public_open_brain() -> HTMLResponse:
         settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key
     )
 
-    # Chat shell (promoted above fold, terminal aesthetic)
+    # Starter prompt chips
+    starter_prompts = [
+        "What kind of engineer is Ahmad?",
+        "Tell me about duSraBheja",
+        "Would he fit an AI infrastructure role?",
+    ]
+    starter_chips = "".join(
+        f'<button class="starter-chip" type="button"'
+        f' data-starter-prompt="{_s(prompt)}">{_s(prompt)}</button>'
+        for prompt in starter_prompts
+    )
+
     turnstile_widget = ""
     if turnstile_configured:
         turnstile_widget = '<div id="turnstile-widget"></div>'
 
+    # Chat shell above fold
     chat_html = f"""
     <section class="section container">
-      <div class="offset-grid offset-grid--65-35">
-        <div>
-          <div class="public-kicker">Digital Clone</div>
-          <h1 class="display-heading display-heading--section">Ask Ahmad's brain.</h1>
-          <p>A conversational clone built from approved
-            public facts, project history, and persona.
-            Multi-turn, evidence-led, opinionated.</p>
-        </div>
-        <div></div>
-      </div>
-      <div class="chat-shell mt-3">
+      <div class="public-kicker">Digital Clone</div>
+      <h1 class="display-heading display-heading--section">Ask Ahmad's brain.</h1>
+      <div class="chat-shell mt-2">
         <div class="chat-shell__header">
           <span class="chat-shell__dot"></span>
           <span class="chat-shell__title">open-brain &mdash; {_s(name)}</span>
@@ -657,16 +704,14 @@ async def public_open_brain() -> HTMLResponse:
             <div>Ask about my work, projects, strengths,
               interests, or collaboration fit.
               I'm not a general-purpose assistant
-              — I'm a conversational version of Ahmad,
+              &mdash; I'm a conversational version of Ahmad,
               built from real evidence.</div>
           </div>
         </div>
+        <div class="starter-prompts">{starter_chips}</div>
         <form class="chat-form" data-public-chat-form>
           <textarea name="question"
-            placeholder="What kind of engineer is Ahmad?
-            What is duSraBheja?
-            Would he be a strong fit for an AI
-            infrastructure role?"></textarea>
+            placeholder="Ask me anything..."></textarea>
           <input type="hidden" name="turnstile_token" value="" />
           {turnstile_widget}
           <button class="cta" type="submit"
@@ -680,6 +725,30 @@ async def public_open_brain() -> HTMLResponse:
                   " so chat is locked."}
           </div>
         </form>
+      </div>
+    </section>
+    """
+
+    # How it works — 3 mini cards
+    how_html = """
+    <section class="section container reveal">
+      <div class="public-kicker">How It Works</div>
+      <div class="how-cards">
+        <div class="how-card">
+          <h4>Approved Facts Only</h4>
+          <p>Every answer is grounded in a curated allowlist
+            of public facts — not the full brain.</p>
+        </div>
+        <div class="how-card">
+          <h4>Multi-Turn</h4>
+          <p>Ask follow-ups. The clone tracks conversation
+            context across multiple exchanges.</p>
+        </div>
+        <div class="how-card">
+          <h4>Evidence-Led</h4>
+          <p>Answers cite real projects, roles, and decisions
+            — not hallucinated filler.</p>
+        </div>
       </div>
     </section>
     """
@@ -734,7 +803,7 @@ async def public_open_brain() -> HTMLResponse:
         )
         chat_html = turnstile_tag + chat_html
 
-    content = chat_html + faq_html + garden_html
+    content = chat_html + how_html + faq_html + garden_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"Open Brain — {name}",
@@ -744,9 +813,9 @@ async def public_open_brain() -> HTMLResponse:
             page_script=page_script,
             body_class="public-page-open-brain",
             og_description=(
-                "A conversational digital clone for"
-                " collaborators, recruiters,"
-                " and curious humans."
+                "A conversational digital clone built from"
+                " real evidence. Ask about Ahmad's work,"
+                " projects, or fit."
             ),
         )
     )

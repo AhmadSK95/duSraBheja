@@ -52,8 +52,19 @@
     }
   }
 
-  // ── Chat (Open Brain) ──
+  // ── Starter prompt chips ──
   const form = document.querySelector("[data-public-chat-form]");
+  document.querySelectorAll("[data-starter-prompt]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var field = form ? form.querySelector("textarea[name='question']") : null;
+      if (field) {
+        field.value = btn.dataset.starterPrompt;
+        field.focus();
+      }
+    });
+  });
+
+  // ── Chat (Open Brain) ──
   if (!form) return;
 
   const log = document.querySelector("[data-public-chat-log]");
