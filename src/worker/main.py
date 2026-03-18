@@ -27,6 +27,7 @@ JOB_PROCESS_DUE_REMINDERS = "src.worker.tasks.reminders.process_due_reminders"
 JOB_GENERATE_KNOWLEDGE_REFRESH = "src.worker.tasks.knowledge.generate_knowledge_refresh"
 JOB_REFRESH_VOICE_PROFILE = "src.worker.tasks.voice.refresh_voice_profile_task"
 JOB_RUN_CONTINUOUS_COGNITION = "src.worker.tasks.cognition.run_continuous_cognition_task"
+JOB_REFRESH_WEBSITE_TASTE = "src.worker.tasks.website.refresh_website_taste_task"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
@@ -121,6 +122,7 @@ class WorkerSettings:
         JOB_GENERATE_KNOWLEDGE_REFRESH,
         JOB_REFRESH_VOICE_PROFILE,
         JOB_RUN_CONTINUOUS_COGNITION,
+        JOB_REFRESH_WEBSITE_TASTE,
     ]
 
     cron_jobs = [
@@ -148,6 +150,13 @@ class WorkerSettings:
             JOB_REFRESH_VOICE_PROFILE,
             hour={settings.voice_refresh_hour},
             minute=45,
+        ),
+        # Website taste refresh — weekly on Sundays at 3:15 AM
+        cron(
+            JOB_REFRESH_WEBSITE_TASTE,
+            weekday={6},
+            hour={3},
+            minute=15,
         ),
     ]
 

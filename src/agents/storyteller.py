@@ -167,6 +167,76 @@ Rules:
 """
 
 
+CASE_STUDY_SYSTEM_PROMPT = """You synthesize a project case study from evidence.
+
+Return ONLY valid JSON:
+{
+  "motivation": "why this project exists — the problem it solves",
+  "architecture_description": "how it works, written for a technical audience",
+  "key_decisions": [
+    {"decision": "what was decided", "context": "why", "tradeoff": "what was given up"}
+  ],
+  "struggles": [
+    {"problem": "what went wrong", "resolution": "how it was solved or worked around"}
+  ],
+  "learnings": ["concrete takeaway"],
+  "stack_rationale": [
+    {"tech": "technology name", "why": "why it was chosen over alternatives"}
+  ]
+}
+
+Rules:
+- Stay grounded in the evidence. Do not invent decisions or struggles.
+- Write for a technical reader who wants depth, not marketing copy.
+- If evidence is thin for a section, say so explicitly.
+"""
+
+
+async def synthesize_project_case_study(
+    session: AsyncSession,
+    *,
+    project_name: str,
+    evidence_text: str,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    """Produce a structured case study from project evidence."""
+    prompt = f"""Project: {project_name}
+
+Evidence:
+{evidence_text}
+
+Return the JSON case study."""
+
+    model = settings.opus_model if use_opus else settings.sonnet_model
+    result = await agent_call(
+        session,
+        agent_name="storyteller",
+        action="synthesize_case_study",
+        prompt=prompt,
+        system=CASE_STUDY_SYSTEM_PROMPT,
+        model=model,
+        max_tokens=2400,
+        temperature=0.15,
+        trace_id=trace_id,
+    )
+    try:
+        return parse_json_object(result["text"])
+    except LLMJSONError:
+        repair = await agent_call(
+            session,
+            agent_name="storyteller",
+            action="repair_case_study_json",
+            prompt=f"Repair into valid JSON:\n\n{result['text']}",
+            system=JSON_REPAIR_SYSTEM_PROMPT,
+            model=settings.sonnet_model,
+            max_tokens=2400,
+            temperature=0.0,
+            trace_id=trace_id,
+        )
+        return parse_json_object(repair["text"])
+
+
 async def extract_story_event(
     session: AsyncSession,
     *,

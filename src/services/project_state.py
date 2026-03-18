@@ -734,6 +734,65 @@ async def recompute_project_states(
     return saved_snapshots
 
 
+async def generate_case_study(
+    session: AsyncSession,
+    *,
+    project_note_id: uuid.UUID,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict | None:
+    """Generate a case study for a project from brain evidence and store it in metadata."""
+    from src.agents.storyteller import synthesize_project_case_study
+
+    project = await store.get_note(session, project_note_id)
+    if not project:
+        return None
+
+    snapshot = await store.get_project_state_snapshot(session, project_note_id)
+    story_entries = await store.list_journal_entries(
+        session, subject_ref=project.title, limit=20
+    )
+    sessions = await store.list_conversation_sessions(
+        session, project_note_id=project_note_id, limit=10
+    )
+
+    evidence_lines = [f"Project: {project.title}"]
+    if snapshot:
+        evidence_lines.extend([
+            f"Implemented: {snapshot.implemented or 'unknown'}",
+            f"Remaining: {snapshot.remaining or 'unknown'}",
+            f"Blockers: {', '.join(snapshot.blockers or []) or 'none'}",
+            f"Holes: {', '.join(snapshot.holes or []) or 'none'}",
+            f"What changed: {snapshot.what_changed or 'unknown'}",
+        ])
+    for entry in story_entries[:15]:
+        evidence_lines.append(
+            f"[{entry.entry_type}] {entry.title}: {entry.summary or entry.body_markdown or ''}"[:300]
+        )
+    for s in sessions[:5]:
+        evidence_lines.append(
+            f"[session] {getattr(s, 'summary', '') or getattr(s, 'title', '')}"[:200]
+        )
+
+    evidence_text = "\n".join(evidence_lines)
+    case_study = await synthesize_project_case_study(
+        session,
+        project_name=project.title,
+        evidence_text=evidence_text,
+        use_opus=use_opus,
+        trace_id=trace_id,
+    )
+
+    # Store in snapshot metadata
+    if snapshot:
+        meta = dict(snapshot.metadata_ or {})
+        meta["case_study"] = case_study
+        snapshot.metadata_ = meta
+        await session.flush()
+
+    return case_study
+
+
 async def get_project_review_payload(
     session: AsyncSession,
     *,

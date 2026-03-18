@@ -15,9 +15,9 @@ SHELL_TEMPLATE = Template((TEMPLATE_DIR / "public_shell.html").read_text(encodin
 PUBLIC_NAV = (
     ("home", "Home", "/"),
     ("about", "About", "/about"),
-    ("projects", "Projects", "/projects"),
-    ("contact", "Contact", "/contact"),
-    ("open-brain", "Open Brain", "/open-brain"),
+    ("projects", "Work", "/work"),
+    ("contact", "Connect", "/connect"),
+    ("open-brain", "Open Brain", "/brain"),
 )
 
 OG_DEFAULTS = {

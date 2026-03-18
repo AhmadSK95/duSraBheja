@@ -1171,6 +1171,34 @@ class EvalCaseResult(Base):
     )
 
 
+class WebsiteSection(Base):
+    __tablename__ = "website_sections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    page = Column(String, nullable=False)  # "home", "work", "brain", "connect"
+    section_key = Column(String, nullable=False)  # unique key: "hero", "proof_band", etc.
+    section_type = Column(
+        String, nullable=False
+    )  # "hero", "text_block", "stat_band", "card_grid",
+    # "interests_bar", "project_grid", "case_study",
+    # "photo_row", "chat_shell", "custom_html"
+    sort_order = Column(Integer, nullable=False, default=0)
+    title = Column(String, nullable=True)
+    content = Column(JSONB, nullable=False, default=dict)
+    style_hints = Column(JSONB, nullable=False, default=dict)
+    visible = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String, nullable=False, default="seed")  # "brain", "human", "seed"
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    metadata_ = Column("metadata", JSONB, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("page", "section_key"),
+        Index("idx_website_sections_page", "page"),
+        Index("idx_website_sections_visible", "visible"),
+    )
+
+
 class PublicConversation(Base):
     __tablename__ = "public_conversations"
 
