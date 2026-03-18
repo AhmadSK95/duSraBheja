@@ -832,8 +832,10 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         if item.get("slug")
     }
     # Pre-load case studies from ProjectStateSnapshot + repos from ProjectRepo
+    # Uses fuzzy slug matching: "barbershop" matches "balkan-barbershop-website"
     _case_studies: dict[str, dict] = {}
     _repo_links: dict[str, list[dict[str, str]]] = {}
+    _note_slug_map: dict[str, list[str]] = {}  # brain slug → [variants]
     try:
         note_rows = await session.execute(
             select(Note).where(Note.category == "project")
@@ -846,21 +848,48 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 )
             )
             snap = snap_row.scalar_one_or_none()
-            if snap and (snap.metadata_ or {}).get("case_study"):
-                _case_studies[nslug] = snap.metadata_["case_study"]
+            cs = (snap.metadata_ or {}).get("case_study") if snap else None
             repo_rows = await session.execute(
                 select(ProjectRepo).where(
                     ProjectRepo.project_note_id == note.id
                 )
             )
             repos = repo_rows.scalars().all()
-            if repos:
-                _repo_links[nslug] = [
-                    {"label": f"GitHub", "href": r.repo_url}
-                    for r in repos if r.repo_url
-                ]
+            rlinks = [
+                {"label": "GitHub", "href": r.repo_url}
+                for r in repos if r.repo_url
+            ]
+            # Store under all slug variants for fuzzy matching
+            # e.g. "barbershop" matches "balkan-barbershop-website"
+            variants = [nslug]
+            # Also store first word as variant (barbershop, datagenie, etc.)
+            first_word = nslug.split("-")[0]
+            if first_word and first_word != nslug:
+                variants.append(first_word)
+            for v in variants:
+                if cs:
+                    _case_studies[v] = cs
+                if rlinks:
+                    _repo_links[v] = rlinks
     except Exception:
         pass  # non-fatal — project data still renders from narrative
+
+    def _find_case_study(slug: str) -> dict | None:
+        """Fuzzy match: check exact slug, then check if any key is a substring."""
+        if slug in _case_studies:
+            return _case_studies[slug]
+        for key, cs in _case_studies.items():
+            if key in slug or slug in key:
+                return cs
+        return None
+
+    def _find_repo_links(slug: str) -> list[dict[str, str]]:
+        if slug in _repo_links:
+            return _repo_links[slug]
+        for key, links in _repo_links.items():
+            if key in slug or slug in key:
+                return links
+        return []
 
     project_snapshots: list[PublicProjectSnapshot] = []
     all_slugs = sorted(set(project_groups) | set(narrative_projects))
@@ -895,12 +924,12 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 for fact in facts
             ],
         }
-        # Merge case study from brain evidence
-        cs = _case_studies.get(slug)
+        # Merge case study from brain evidence (fuzzy slug match)
+        cs = _find_case_study(slug)
         if cs:
             payload["case_study"] = cs
-        # Merge GitHub repo links
-        for rl in _repo_links.get(slug, []):
+        # Merge GitHub repo links (fuzzy slug match)
+        for rl in _find_repo_links(slug):
             if rl["href"] not in {lk.get("href") for lk in payload["links"]}:
                 payload["links"].append(rl)
 
