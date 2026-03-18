@@ -352,15 +352,50 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
     }
 
 
+# Fallback links/stack for known projects (URLs not always in seed text)
+_KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
+    "balkan-barbershop-website": {
+        "links": [{"label": "Live site", "href": "https://balkan.thisisrikisart.com"}],
+        "stack": ["Next.js", "Framer Motion", "Vercel"],
+    },
+    "kaffa-espresso-bar-website": {
+        "links": [{"label": "Live site", "href": "https://kaffaespressobar.com"}],
+        "stack": ["Next.js", "Framer Motion", "Vercel"],
+    },
+    "dusrabheja": {
+        "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/duSraBheja"}],
+    },
+    "datagenie": {
+        "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/dataGenie"}],
+    },
+}
+
+
+def _clean_demonstrates(items: list[str]) -> list[str]:
+    """Filter garbage entries from demonstrates lists."""
+    return [
+        item for item in items
+        if item
+        and item.strip() not in {"---", "--", "-", ""}
+        and len(item.strip()) >= 10
+    ]
+
+
 def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
-    sections = list(re.finditer(r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)", text, re.MULTILINE | re.DOTALL))
+    sections = list(re.finditer(
+        r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)",
+        text, re.MULTILINE | re.DOTALL,
+    ))
     summary_match = re.search(
         r"##\s+PROFESSIONAL SUMMARY.*?\n\n(?P<body>.*?)(?=\n##\s+KEY PROJECTS|\Z)",
-        text,
-        re.DOTALL,
+        text, re.DOTALL,
     )
     professional_summary = _excerpt(
-        re.sub(r"^\s*---\s*$", "", summary_match.group("body") if summary_match else "", flags=re.MULTILINE),
+        re.sub(
+            r"^\s*---\s*$", "",
+            summary_match.group("body") if summary_match else "",
+            flags=re.MULTILINE,
+        ),
         limit=1000,
     )
     projects: list[ProjectCase] = []
@@ -368,26 +403,56 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         title = _compact(match.group("title"))
         body = match.group("body")
         slug = _slugify(title.split(" - ", 1)[0])
-        resume_body = _extract_labeled_block(body, "Resume", stop_labels=["LinkedIn", "What this project demonstrates"])
-        linkedin_body = _extract_labeled_block(body, "LinkedIn", stop_labels=["What this project demonstrates"])
-        demonstrates_body = _extract_labeled_block(body, "What this project demonstrates")
+        resume_body = _extract_labeled_block(
+            body, "Resume",
+            stop_labels=["LinkedIn", "What this project demonstrates"],
+        )
+        linkedin_body = _extract_labeled_block(
+            body, "LinkedIn",
+            stop_labels=["What this project demonstrates"],
+        )
+        demonstrates_body = _extract_labeled_block(
+            body, "What this project demonstrates",
+        )
         resume_bullets = _bullet_lines(resume_body)
-        demonstrates = _bullet_lines(demonstrates_body)
+        demonstrates = _clean_demonstrates(_bullet_lines(demonstrates_body))
         full_body = _compact(linkedin_body or resume_body or body)
-        stack = []
+        stack: list[str] = []
         stack_match = re.search(r"Stack:\s*(?P<value>.+?)(?:\.|$)", body)
         if stack_match:
-            stack = [item.strip() for item in stack_match.group("value").split(",") if item.strip()]
-        status = "Live client project" if "live client project" in title.lower() else "Active build"
+            stack = [
+                item.strip()
+                for item in stack_match.group("value").split(",")
+                if item.strip()
+            ]
+        status = (
+            "Live client project"
+            if "live client project" in title.lower()
+            else "Active build"
+        )
         links: list[dict[str, str]] = []
         live_url = _find_url(body)
         if live_url:
             links.append({"label": "Live site", "href": live_url})
+
+        # Merge known fallback links and stack
+        extras = _KNOWN_PROJECT_EXTRAS.get(slug, {})
+        existing_hrefs = {lk.get("href") for lk in links}
+        for fl in extras.get("links", []):
+            if fl["href"] not in existing_hrefs:
+                links.append(fl)
+        if not stack and extras.get("stack"):
+            stack = extras["stack"]
+
         projects.append(
             ProjectCase(
                 slug=slug,
                 title=title,
-                tagline=resume_bullets[0] if resume_bullets else _excerpt(full_body, limit=180),
+                tagline=(
+                    resume_bullets[0]
+                    if resume_bullets
+                    else _excerpt(full_body, limit=180)
+                ),
                 summary=_excerpt(full_body, limit=340),
                 status=status,
                 stack=stack,

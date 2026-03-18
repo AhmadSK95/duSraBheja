@@ -600,7 +600,27 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     </section>
     """
 
-    return hero_html + stat_html + about_html + work_html + chatbot_html + contact_html
+    # Interests bar
+    texture = list(p.get("personal_texture") or [])
+    interests_data = list(p.get("interests") or [])
+    interest_items = texture[:6] if texture else interests_data[:6]
+    interests_html = ""
+    if interest_items:
+        chips = "".join(
+            f'<span class="interests-chip">{_s(item)}</span>'
+            for item in interest_items
+        )
+        interests_html = f"""
+        <section class="section container reveal">
+          {_kicker("Interests")}
+          <div class="interests-bar">{chips}</div>
+        </section>
+        """
+
+    return (
+        hero_html + stat_html + about_html + interests_html
+        + work_html + chatbot_html + contact_html
+    )
 
 
 # ──────────────────────────────────────────────
@@ -673,14 +693,19 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
+    # Photo row with sticker tilts
+    tilts = ["left", "right", "slight"]
     photo_row_imgs = ""
-    for item in mosaic_photos[1:4]:
+    for i, item in enumerate(mosaic_photos[1:4]):
         if item and item.get("url"):
-            photo_row_imgs += f"""
-            <div class="photo-row__item">
-              <img src="{_s(item["url"])}" alt="{_s(item.get("title", ""))}" loading="lazy" />
-            </div>
-            """
+            tilt = tilts[i % len(tilts)]
+            photo_row_imgs += (
+                f'<div class="photo-row__item photo-sticker '
+                f'photo-sticker--tilt-{tilt}">'
+                f'<img src="{_s(item["url"])}" '
+                f'alt="{_s(item.get("title", ""))}" loading="lazy" />'
+                f"</div>"
+            )
     photo_html = (
         f"""
     <section class="section container reveal">
@@ -691,16 +716,37 @@ async def public_about() -> HTMLResponse:
         else ""
     )
 
-    texture_html = """
+    # Beyond the Code — use actual data from profile
+    texture = list(p.get("personal_texture") or [])
+    if texture:
+        texture_items = "".join(
+            f"<li>{_s(item)}</li>" for item in texture[:8]
+        )
+    else:
+        texture_items = (
+            "<li>Five languages: English, Hindi, Telugu, Urdu, Tamil.</li>"
+            "<li>Married Annie in 2025. Cat dad to Oscar and Iris.</li>"
+            "<li>Cycles, collects Pokemon, loves hip hop and Indian film music.</li>"
+            "<li>Japanese markets, tattoos, strong opinions about food.</li>"
+        )
+
+    interests_data = list(p.get("interests") or [])
+    interest_chips_html = ""
+    if interests_data:
+        chips = "".join(
+            f'<span class="interests-chip">{_s(item)}</span>'
+            for item in interests_data[:8]
+        )
+        interest_chips_html = (
+            f'<div class="interests-bar mt-2">{chips}</div>'
+        )
+
+    texture_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Beyond the Code</div>
+      {_kicker("Beyond the Code")}
       <h2 class="display-heading display-heading--sub">The rest of the picture.</h2>
-      <ul class="texture-list">
-        <li>Five languages: English, Hindi, Telugu, Urdu, Tamil.</li>
-        <li>Married Annie in 2025. Cat dad to Oscar and Iris.</li>
-        <li>Cycles, collects Pokemon, loves hip hop and Indian film music.</li>
-        <li>Japanese markets, tattoos, strong opinions about food.</li>
-      </ul>
+      <ul class="texture-list">{texture_items}</ul>
+      {interest_chips_html}
     </section>
     """
 
@@ -815,28 +861,35 @@ async def public_project_detail(slug: str) -> HTMLResponse:
 
 async def _render_project_detail(slug: str) -> HTMLResponse:
     async with async_session() as session:
-        await get_public_profile(session)
+        profile = await get_public_profile(session)
         project = await get_public_project(session, slug)
     if not project:
         raise HTTPException(status_code=404, detail="Public project not found")
+    p = _payload(profile)
+    photos = p.get("photos") or {}
     proj_p = dict(project.get("payload") or {})
-    signals = list(proj_p.get("signals") or [])
     case_study = proj_p.get("case_study") or {}
 
+    # Hero with photo accent
+    project_photo = _photo_img_sticker(photos, "work", "right")
     hero_html = f"""
     <section class="hero-inner">
       <div class="container">
         <div>
-          <div class="public-kicker">Project</div>
-          <h1 class="display-heading display-heading--section">{_s(project["title"])}</h1>
-          <span class="status-badge">{_s(proj_p.get("status") or "Active")}</span>
-          <p class="mt-2">{_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
+          {_kicker("Project")}
+          <h1 class="display-heading display-heading--section">
+            {_s(project["title"])}</h1>
+          <span class="status-badge">
+            {_s(proj_p.get("status") or "Active")}</span>
+          <p class="mt-2">
+            {_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
         </div>
+        <div class="photo-accent--sm">{project_photo}</div>
       </div>
     </section>
     """
 
-    # Case study section (from brain evidence)
+    # Case study section (primary content from brain evidence)
     case_html = ""
     if case_study:
         mot = case_study.get("motivation")
@@ -844,7 +897,10 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
         arch_desc = case_study.get("architecture_description")
         arch = ""
         if arch_desc:
-            arch = f'<div class="case-study__architecture">{_s(arch_desc)}</div>'
+            arch = (
+                f'<div class="case-study__architecture">'
+                f'{_s(arch_desc)}</div>'
+            )
         decisions_html = "".join(
             _card_html(
                 "decision-card",
@@ -865,20 +921,24 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             f'<div class="learning-card"><h4>{_s(lr)}</h4></div>'
             for lr in (case_study.get("learnings") or [])
         )
-        arch_block = f"{_kicker('Architecture')}{arch}" if arch else ""
+        arch_block = (
+            f'{_kicker("Architecture")}{arch}' if arch else ""
+        )
         dec_block = (
             f'<div class="case-study__decisions mt-3">'
-            f"{_kicker('Key Decisions')}{decisions_html}</div>"
+            f'{_kicker("Key Decisions")}{decisions_html}</div>'
             if decisions_html
             else ""
         )
         str_block = (
-            f'<div class="case-study__struggles mt-3">{_kicker("Struggles")}{struggles_html}</div>'
+            f'<div class="case-study__struggles mt-3">'
+            f'{_kicker("Struggles")}{struggles_html}</div>'
             if struggles_html
             else ""
         )
         lrn_block = (
-            f'<div class="case-study__learnings mt-3">{_kicker("Learnings")}{learnings_html}</div>'
+            f'<div class="case-study__learnings mt-3">'
+            f'{_kicker("Learnings")}{learnings_html}</div>'
             if learnings_html
             else ""
         )
@@ -893,7 +953,7 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
         </section>
         """
 
-    # Two-column layout (existing)
+    # Sidebar data
     stack_pills = _pills(list(proj_p.get("stack") or [])[:8])
     links_html = (
         "".join(
@@ -903,42 +963,38 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             for item in list(proj_p.get("links") or [])
             if item.get("href")
         )
-        or "<span class='mono-accent'>No public links yet.</span>"
+        or "<span class='mono-accent'>Links coming soon.</span>"
     )
 
-    demonstrates_html = _bullet_list(list(proj_p.get("demonstrates") or [])[:5])
-    summary_html = _s(proj_p.get("summary") or project.get("summary") or "")
-    framing_html = _bullet_list(list(proj_p.get("resume_bullets") or [])[:5])
+    # Clean demonstrates — filter garbage
+    raw_dem = list(proj_p.get("demonstrates") or [])
+    clean_dem = [
+        d
+        for d in raw_dem
+        if d and d.strip() not in {"---", "--", "-", ""}
+        and len(d.strip()) >= 10
+    ]
+    demonstrates_html = _bullet_list(clean_dem[:5])
 
-    signal_items = (
-        "".join(
-            f"""
-        <div class="signal-item">
-          <span class="signal-item__time">{_s(item.get("updated_at") or "")}</span>
-          <div class="signal-item__body">
-            <strong>{_s(item.get("title") or project.get("title"))}</strong>
-            <p>{_s(item.get("body") or "")}</p>
-          </div>
-        </div>
-        """
-            for item in signals
-        )
-        or '<p class="mono-accent">No signal entries yet.</p>'
+    # Truncate overview to avoid dump
+    raw_summary = proj_p.get("summary") or project.get("summary") or ""
+    if len(raw_summary) > 400:
+        raw_summary = raw_summary[:397].rstrip() + "..."
+    summary_html = _s(raw_summary)
+
+    framing_html = _bullet_list(
+        list(proj_p.get("resume_bullets") or [])[:5]
     )
 
     detail_html = f"""
     <section class="section container">
       <div class="detail-layout">
         <div>
-          <div class="public-kicker">Overview</div>
+          {_kicker("Overview")}
           <p>{summary_html}</p>
           <div class="mt-3">
-            <div class="public-kicker">How It Was Framed</div>
+            {_kicker("How It Was Framed")}
             {framing_html}
-          </div>
-          <div class="mt-3">
-            <div class="public-kicker">Signals</div>
-            <div class="signal-feed">{signal_items}</div>
           </div>
         </div>
         <div class="detail-sidebar">
@@ -967,7 +1023,9 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             active_nav="projects",
             page_data={"page": "project-detail", "project": project},
             body_class="public-page-project-detail",
-            og_description=_s(proj_p.get("tagline") or project.get("summary") or ""),
+            og_description=_s(
+                proj_p.get("tagline") or project.get("summary") or ""
+            ),
         )
     )
 

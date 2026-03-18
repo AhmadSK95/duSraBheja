@@ -18,6 +18,7 @@ from src.lib.claude import call_claude, call_claude_conversation
 from src.lib.time import format_display_datetime
 from src.models import (
     Note,
+    ProjectRepo,
     ProjectStateSnapshot,
     PublicAnswerPolicy,
     PublicConversation,
@@ -830,6 +831,37 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         for item in (narrative.get("projects") or [])
         if item.get("slug")
     }
+    # Pre-load case studies from ProjectStateSnapshot + repos from ProjectRepo
+    _case_studies: dict[str, dict] = {}
+    _repo_links: dict[str, list[dict[str, str]]] = {}
+    try:
+        note_rows = await session.execute(
+            select(Note).where(Note.category == "project")
+        )
+        for note in note_rows.scalars().all():
+            nslug = re.sub(r"[^a-z0-9]+", "-", note.title.lower()).strip("-")
+            snap_row = await session.execute(
+                select(ProjectStateSnapshot).where(
+                    ProjectStateSnapshot.project_note_id == note.id
+                )
+            )
+            snap = snap_row.scalar_one_or_none()
+            if snap and (snap.metadata_ or {}).get("case_study"):
+                _case_studies[nslug] = snap.metadata_["case_study"]
+            repo_rows = await session.execute(
+                select(ProjectRepo).where(
+                    ProjectRepo.project_note_id == note.id
+                )
+            )
+            repos = repo_rows.scalars().all()
+            if repos:
+                _repo_links[nslug] = [
+                    {"label": f"GitHub", "href": r.repo_url}
+                    for r in repos if r.repo_url
+                ]
+    except Exception:
+        pass  # non-fatal — project data still renders from narrative
+
     project_snapshots: list[PublicProjectSnapshot] = []
     all_slugs = sorted(set(project_groups) | set(narrative_projects))
     for slug in all_slugs:
@@ -846,7 +878,10 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             "status": narrative_project.get("status") or "",
             "stack": narrative_project.get("stack") or [],
             "resume_bullets": narrative_project.get("resume_bullets") or [],
-            "demonstrates": narrative_project.get("demonstrates") or [],
+            "demonstrates": [
+                d for d in (narrative_project.get("demonstrates") or [])
+                if d and d.strip() not in {"---", "--", "-", ""} and len(d.strip()) >= 10
+            ],
             "links": narrative_project.get("links") or [],
             "proof": narrative_project.get("proof") or [],
             "highlights": narrative_highlights + highlights,
@@ -860,6 +895,15 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 for fact in facts
             ],
         }
+        # Merge case study from brain evidence
+        cs = _case_studies.get(slug)
+        if cs:
+            payload["case_study"] = cs
+        # Merge GitHub repo links
+        for rl in _repo_links.get(slug, []):
+            if rl["href"] not in {lk.get("href") for lk in payload["links"]}:
+                payload["links"].append(rl)
+
         project_snapshots.append(
             await _upsert_public_project_snapshot(
                 session,
