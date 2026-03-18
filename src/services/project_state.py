@@ -749,11 +749,8 @@ async def generate_case_study(
         return None
 
     snapshot = await store.get_project_state_snapshot(session, project_note_id)
-    story_entries = await store.list_journal_entries(
+    story_entries = await store.list_story_events(
         session, subject_ref=project.title, limit=20
-    )
-    sessions = await store.list_conversation_sessions(
-        session, project_note_id=project_note_id, limit=10
     )
 
     evidence_lines = [f"Project: {project.title}"]
@@ -766,12 +763,9 @@ async def generate_case_study(
             f"What changed: {snapshot.what_changed or 'unknown'}",
         ])
     for entry in story_entries[:15]:
+        summary = entry.summary or entry.body_markdown or ""
         evidence_lines.append(
-            f"[{entry.entry_type}] {entry.title}: {entry.summary or entry.body_markdown or ''}"[:300]
-        )
-    for s in sessions[:5]:
-        evidence_lines.append(
-            f"[session] {getattr(s, 'summary', '') or getattr(s, 'title', '')}"[:200]
+            f"[{entry.entry_type}] {entry.title}: {summary}"[:300]
         )
 
     evidence_text = "\n".join(evidence_lines)

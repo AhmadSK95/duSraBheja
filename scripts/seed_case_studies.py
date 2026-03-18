@@ -67,9 +67,9 @@ async def main():
 
         # 4. Force-refresh public snapshots
         try:
-            from src.services.public_surface import refresh_public_snapshots_if_stale
+            from src.services.public_surface import refresh_public_snapshots
 
-            await refresh_public_snapshots_if_stale(session, force=True)
+            await refresh_public_snapshots(session, force=True)
             log.info("Public snapshots refreshed.")
         except Exception:
             log.exception("Public snapshot refresh failed (non-fatal)")

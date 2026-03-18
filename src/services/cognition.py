@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.base import agent_call
 from src.config import settings
-from src.lib.llm_json import LLMJSONError, parse_json_object
 from src.lib import store
+from src.lib.llm_json import LLMJSONError, parse_json_object
 from src.services.project_state import recompute_project_states
 from src.services.story import publish_story_entry
 
@@ -87,7 +87,7 @@ async def run_continuous_cognition(
         synthesized["blind_spots"] = [
             {
                 "title": f"Evidence gap: {project.title}",
-                "body": snapshot.remaining or "Need stronger proof of what remains and what is blocked.",
+                "body": snapshot.remaining or "Need stronger proof of what remains.",
                 "project_ref": project.title,
             }
             for project, snapshot in projects[:2]
@@ -98,7 +98,7 @@ async def run_continuous_cognition(
         synthesized["synapses"] = [
             {
                 "title": f"{left.title} x {right.title}",
-                "body": f"Both projects appear active and may share constraints or reusable approaches.",
+                "body": "Both active — may share constraints or reusable approaches.",
                 "source_refs": [left.title, right.title],
             }
         ]
@@ -165,4 +165,101 @@ async def run_continuous_cognition(
         )
         created += 1
 
+    # Phase 10: Expertise model synthesis
+    expertise_created = await _synthesize_expertise_models(
+        session, projects, trace_id=trace_id
+    )
+    created += expertise_created
+
     return {"status": "completed", "items_imported": created}
+
+
+EXPERTISE_SYSTEM_PROMPT = """\
+You create a deep expertise model for a project domain.
+
+Not just "uses Python" — capture how Ahmad approaches this domain:
+- Architectural patterns and preferences
+- Decision-making heuristics
+- Lessons from failure
+- What he'd do differently
+- Cross-domain connections
+
+Return ONLY valid JSON:
+{
+  "domain": "the domain name",
+  "approach": "how Ahmad approaches systems in this domain",
+  "patterns": ["specific patterns he gravitates toward"],
+  "heuristics": ["decision rules he applies"],
+  "anti_patterns": ["things he avoids and why"],
+  "cross_domain": ["connections to other domains"],
+  "depth_signals": ["evidence of genuine depth, not surface"]
+}
+
+Stay grounded in the evidence. If a section is thin, say so.
+"""
+
+
+async def _synthesize_expertise_models(
+    session: AsyncSession,
+    projects: list[tuple],
+    *,
+    trace_id: uuid.UUID | None = None,
+) -> int:
+    """For each active project domain, generate an expertise_model SynthesisRecord."""
+    created = 0
+    for project, snapshot in projects[:3]:
+        source_ref = f"expertise:{project.title}"
+
+        # Check staleness — skip if updated within 7 days
+        existing = await store.list_synthesis_records(
+            session, synthesis_type="expertise_model", q=project.title, limit=1
+        )
+        if existing:
+            from datetime import datetime, timedelta, timezone
+
+            now = datetime.now(timezone.utc)
+            last = existing[0].updated_at or existing[0].created_at
+            if last and (now - last) < timedelta(days=7):
+                continue
+
+        context = (
+            f"Project: {project.title}\n"
+            f"Implemented: {snapshot.implemented or 'unknown'}\n"
+            f"Remaining: {snapshot.remaining or 'unknown'}\n"
+            f"Holes: {', '.join(snapshot.holes or []) or 'none'}\n"
+            f"Risks: {', '.join(snapshot.risks or []) or 'none'}\n"
+            f"What changed: {snapshot.what_changed or 'unknown'}"
+        )
+
+        try:
+            result = await agent_call(
+                session,
+                agent_name="continuous_cognition",
+                action="expertise_model",
+                prompt=context,
+                system=EXPERTISE_SYSTEM_PROMPT,
+                model=settings.sonnet_model,
+                max_tokens=1600,
+                temperature=0.2,
+                trace_id=trace_id,
+            )
+            expertise = parse_json_object(result["text"])
+        except (LLMJSONError, Exception):
+            continue
+
+        await store.upsert_synthesis_record(
+            session,
+            source_kind="cognition",
+            source_ref=source_ref,
+            project_note_id=project.id,
+            synthesis_type="expertise_model",
+            title=f"Expertise: {expertise.get('domain', project.title)}",
+            summary=expertise.get("approach", "")[:500],
+            body=(expertise.get("approach", "") + "\n\n"
+                  + "\n".join(f"- {p}" for p in expertise.get("patterns", []))),
+            certainty_class="grounded_observation",
+            metadata_=expertise,
+        )
+        created += 1
+
+    return created

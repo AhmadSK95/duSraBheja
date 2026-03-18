@@ -138,7 +138,7 @@ Produce the JSON change plan."""
         prompt=prompt,
         system=WEBSITE_BUILDER_SYSTEM_PROMPT,
         model=settings.sonnet_model,
-        max_tokens=3000,
+        max_tokens=8000,
         temperature=0.2,
         trace_id=trace_id,
     )
@@ -152,7 +152,7 @@ Produce the JSON change plan."""
             prompt=f"Repair into valid JSON:\n\n{result['text']}",
             system=JSON_REPAIR_SYSTEM_PROMPT,
             model=settings.sonnet_model,
-            max_tokens=3000,
+            max_tokens=8000,
             temperature=0.0,
             trace_id=trace_id,
         )

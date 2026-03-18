@@ -228,6 +228,13 @@ async def execute_website_change(
     tier = plan.get("tier", "content")
     summary = plan.get("explanation", "Website updated.")
 
+    # Phase 11: Auto-commit code changes + ingest record into brain
+    commit_hash = ""
+    if files_modified:
+        commit_hash = await _auto_commit_and_track(
+            session, summary, files_modified
+        )
+
     return {
         "ok": True,
         "summary": summary,
@@ -235,6 +242,7 @@ async def execute_website_change(
         "content_changes": len(content_changes),
         "code_changes": len(files_modified),
         "files_modified": files_modified,
+        "commit": commit_hash,
     }
 
 
@@ -284,17 +292,65 @@ async def generate_case_study(
 # ── Git state awareness ────────────────────────────────────────
 
 
+def _run_git(cmd: list[str]) -> str:
+    """Run a git command in the project root, return stdout."""
+    try:
+        return subprocess.check_output(
+            cmd, cwd=str(PROJECT_ROOT), text=True, timeout=30
+        ).strip()
+    except Exception:
+        return ""
+
+
 def get_site_git_state() -> dict:
     """Brain knows its own codebase state."""
-
-    def _run(cmd: list[str]) -> str:
-        try:
-            return subprocess.check_output(cmd, cwd=str(PROJECT_ROOT), text=True).strip()
-        except Exception:
-            return ""
-
     return {
-        "current_branch": _run(["git", "branch", "--show-current"]),
-        "last_commit": _run(["git", "log", "-1", "--oneline"]),
-        "uncommitted_changes": _run(["git", "status", "--short"]),
+        "current_branch": _run_git(["git", "branch", "--show-current"]),
+        "last_commit": _run_git(["git", "log", "-1", "--oneline"]),
+        "uncommitted_changes": _run_git(["git", "status", "--short"]),
     }
+
+
+async def _auto_commit_and_track(
+    session: AsyncSession,
+    change_summary: str,
+    files_modified: list[str],
+) -> str:
+    """Auto-commit code changes, push, and ingest a record into the brain."""
+    # Commit
+    for f in files_modified:
+        _run_git(["git", "add", f])
+    msg = f"brain: {change_summary[:72]}"
+    _run_git(["git", "commit", "-m", msg])
+    commit_hash = _run_git(["git", "log", "-1", "--format=%h"])
+
+    # Push (non-blocking, best-effort)
+    _run_git(["git", "push", "origin", "main"])
+
+    # Ingest a record so the brain remembers what it changed
+    try:
+        from src.services.story import publish_story_entry
+
+        files_str = ", ".join(files_modified[:5])
+        await publish_story_entry(
+            session,
+            actor_type="system",
+            actor_name="website-builder",
+            subject_type="project",
+            subject_ref="duSraBheja",
+            entry_type="site_update",
+            title=f"Site update: {change_summary[:80]}",
+            body_markdown=(
+                f"Updated website: {change_summary}\n\n"
+                f"Files: {files_str}\n"
+                f"Commit: {commit_hash}"
+            ),
+            summary=change_summary[:240],
+            source="agent",
+            category="project",
+            tags=["website", "auto-deploy", "site-update"],
+        )
+    except Exception:
+        log.exception("Failed to ingest site update record")
+
+    return commit_hash
