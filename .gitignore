@@ -55,3 +55,8 @@ alembic/versions/__pycache__/
 .claude/
 Users/
 tmp/
+
+# Public seed — large binaries (photos, videos) managed outside git
+public-seed/website_photos/
+public-seed/demo_videos/
+myInput/website_photos/
