@@ -44,8 +44,12 @@ def public_asset_path(filename: str) -> Path | None:
     safe_name = Path(filename).name
     if not safe_name or safe_name != filename:
         return None
-    candidate = resolve_public_seed_path() / "website_photos" / safe_name
-    return candidate if candidate.exists() else None
+    # Check website_photos first, then demo_videos
+    for subdir in ("website_photos", "demo_videos"):
+        candidate = resolve_public_seed_path() / subdir / safe_name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def public_asset_url(filename: str | None) -> str | None:
@@ -341,11 +345,15 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
         "work": pick("02_feb2026_nyc_street_portrait_with_badge.jpg"),
         "contact": pick("03_jan2026_oscar_on_shoulder_white_wall.jpg"),
         "home": pick("01_feb2026_home_selfie_with_oscar_and_iris.jpg"),
+        "wedding": pick("13_nov2025_wedding_love_sign_flower_arch.jpg"),
+        "couple": pick("06_nov2025_couple_kiss_waterfront_dramatic_sky.jpg"),
+        "pokemon": pick("10_aug2025_pokemon_plushies.jpg"),
+        "cycling": pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
         "photo_break": pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
         "mosaic": [
-            pick("01_feb2026_home_selfie_with_oscar_and_iris.jpg"),
+            pick("09_aug2025_holding_oscar_colorful_art_wall.jpg"),
+            pick("13_nov2025_wedding_love_sign_flower_arch.jpg"),
             pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
-            pick("08_aug2025_holding_oscar_at_home.jpg"),
             pick("10_aug2025_pokemon_plushies.jpg"),
         ],
         "gallery": [asset.as_dict() for asset in sorted(assets.values(), key=lambda item: item.filename)][:8],
@@ -356,17 +364,22 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
 _KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
     "balkan-barbershop-website": {
         "links": [{"label": "Live site", "href": "https://balkan.thisisrikisart.com"}],
-        "stack": ["Next.js", "Framer Motion", "Vercel"],
+        "stack": ["React", "Node.js", "PostgreSQL", "Stripe", "Framer Motion", "Docker"],
     },
     "kaffa-espresso-bar-website": {
         "links": [{"label": "Live site", "href": "https://kaffaespressobar.com"}],
-        "stack": ["Next.js", "Framer Motion", "Vercel"],
+        "stack": ["React", "Next.js", "Nginx", "certbot", "DigitalOcean"],
     },
     "dusrabheja": {
         "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/duSraBheja"}],
+        "stack": [
+            "Python", "FastAPI", "PostgreSQL", "pgvector",
+            "Claude API", "Discord.py", "Docker",
+        ],
     },
     "datagenie": {
         "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/dataGenie"}],
+        "stack": ["Python", "FastAPI", "DuckDB", "Claude API", "Redis", "Docker"],
     },
 }
 
@@ -740,12 +753,17 @@ def _personal_texture(personal_bible_text: str) -> list[str]:
     interests = _bullet_lines(sections.get("interests & passions"))
     personal = _split_paragraphs(sections.get("part 5.5: the personal life"))
     texture = [
-        "Five languages across South Indian roots and a New York-based engineering career.",
-        "Cat dad to Oscar and Iris; Oscar is basically the public mascot.",
-        "Cycling, fitness, hip hop, Indian film music, and Japanese markets show up repeatedly in the source material.",
+        "Five languages: English, Hindi, Telugu, Urdu, Tamil.",
+        "Married Annie in 2025 — courthouse ceremony, LOVE sign, autumn leaves.",
+        "Cat dad to Oscar (7-year orange tabby) and Iris.",
+        "Anime watcher — currently on Naruto Shippuden S9, binged My Hero Academia.",
+        "Indian standup addict — KVizzing (Members-only), Tanmay Bhat, Rahul Subramanian.",
+        "Hip hop, Indian film music, and Def Jam India on repeat.",
+        "Cycles around Jersey City, collects Pokemon plushies (the OG starters).",
+        "Japanese markets, tattoos, and strong opinions about food.",
     ]
-    texture.extend(interests[:4])
-    texture.extend(personal[:2])
+    texture.extend(interests[:2])
+    texture.extend(personal[:1])
     deduped: list[str] = []
     seen: set[str] = set()
     for item in texture:
@@ -754,7 +772,7 @@ def _personal_texture(personal_bible_text: str) -> list[str]:
             continue
         seen.add(key)
         deduped.append(item)
-    return deduped[:8]
+    return deduped[:10]
 
 
 def _thought_garden(job_hunt_text: str, personal_bible_text: str) -> list[dict[str, str]]:

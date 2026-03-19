@@ -86,6 +86,49 @@ Collector (src/collector/) → Local file/browser/agent history ingestion
 | **Collector** | `src/collector/` | Local scanning — project files, git, Apple Notes, Chrome, life exports |
 | **Lib** | `src/lib/` | store.py (core data access, vector search), claude.py (LLM wrapper), audit.py, crypto.py, embeddings.py |
 
+## Code Patterns
+
+### Database Sessions
+
+All data access goes through `src/lib/store.py` (3000+ lines). Every function takes `session: AsyncSession` as its first parameter. Sessions are obtained via context manager from `src/database.py`:
+
+```python
+async with async_session() as session:
+    result = await store.get_note(session, note_id)
+    await session.commit()  # explicit commit required for mutations
+```
+
+**Naming conventions in store.py:** `get_*` (single record → `Model | None`), `list_*` (bulk queries), `create_*` (inserts), `update_*` (patches). All create/update functions set `created_at`/`updated_at` automatically.
+
+### Agent Base Layer
+
+All agents route through `src/agents/base.py` → `agent_call()`, which wraps the Claude SDK call and auto-logs to `AuditLog` (agent name, action, model, tokens, cost, duration, trace_id). Individual agents (`classifier.py`, `librarian.py`, `retriever.py`, `clarifier.py`, `storyteller.py`) are just prompt functions calling `agent_call`.
+
+### LLM Calls
+
+`src/lib/claude.py` provides three functions: `call_claude()`, `call_claude_conversation()`, `call_claude_vision()`. All return a dict with `{text, model, input_tokens, output_tokens, cost_usd, duration_ms, trace_id}`. Model selection uses `model_for_role()` from providers config.
+
+### Worker Tasks
+
+ARQ async jobs — each task is `async def task_name(ctx, ...)`. Tasks obtain their own sessions and use `log = logging.getLogger("brain-worker.task_name")`. Worker runs max 5 concurrent jobs with 5-minute timeout. Cron jobs are registered in `WorkerSettings.cron_jobs`.
+
+### MCP Tool Registration
+
+```python
+def register(mcp: FastMCP):
+    @mcp.tool()
+    async def tool_name(arg: str) -> dict:
+        """Docstring becomes tool description."""
+        async with async_session() as session:
+            return await service_call(session, ...)
+```
+
+### API Authentication
+
+- **Dashboard:** session-based auth (SessionMiddleware with secure cookies) + Bearer token fallback
+- **Private API (`/api/*`):** Bearer token via `Authorization: Bearer {api_token}`
+- **Public routes (`/`, `/about`, `/projects`, `/open-brain`):** no auth, reads from `PublicFactRecord` allowlist only
+
 ## Memory Model (Canonical Library)
 
 Story is presentation, not storage. Raw artifacts are promoted into:
@@ -142,7 +185,7 @@ Model routing can be customized via `providers.yaml` (see `providers.example.yam
 ## Testing
 
 - Framework: pytest + pytest-asyncio (async mode: auto)
-- Test directory: `tests/` (39 test files)
+- Test directory: `tests/`
 - Ruff: line-length 100, target py312, rules E/F/I/N/W
 
 ## Agent Session Loop

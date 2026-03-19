@@ -1545,6 +1545,23 @@ body.public-body {
   .photo-break { min-height: 280px; }
 }
 
+/* ===== Demo Video ===== */
+.demo-video-container {
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  background: var(--dark);
+}
+
+.demo-video {
+  width: 100%;
+  display: block;
+  max-height: 560px;
+  object-fit: contain;
+  background: #000;
+}
+
 /* ===== Legacy compat (kept for any straggling references) ===== */
 .public-bullet-list { margin: 0; padding-left: 1.1rem; }
 .public-bullet-list li { margin-bottom: 0.45rem; line-height: 1.65; }

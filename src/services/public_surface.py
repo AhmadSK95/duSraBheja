@@ -1052,27 +1052,37 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
 
 async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any] | None:
     await refresh_public_snapshots_if_stale(session)
+    # Exact match first
     result = await session.execute(select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug))
     record = result.scalar_one_or_none()
+    # Fuzzy match if exact fails — check substring both ways
     if not record:
-        narrative = build_profile_narrative()
-        for item in (narrative.get("projects") or []):
-            if item.get("slug") == slug:
-                return {
-                    "slug": item.get("slug"),
-                    "title": item.get("title"),
-                    "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
-                    "payload": dict(item),
-                    "refreshed_at": None,
-                }
-        return None
-    return {
-        "slug": record.slug,
-        "title": record.title,
-        "summary": record.summary,
-        "payload": record.payload or {},
-        "refreshed_at": format_display_datetime(record.refreshed_at),
-    }
+        all_result = await session.execute(select(PublicProjectSnapshot))
+        for candidate in all_result.scalars().all():
+            if candidate.slug in slug or slug in candidate.slug:
+                record = candidate
+                break
+    if record:
+        return {
+            "slug": record.slug,
+            "title": record.title,
+            "summary": record.summary,
+            "payload": record.payload or {},
+            "refreshed_at": format_display_datetime(record.refreshed_at),
+        }
+    # Fall back to narrative projects with same fuzzy matching
+    narrative = build_profile_narrative()
+    for item in (narrative.get("projects") or []):
+        item_slug = item.get("slug") or ""
+        if item_slug == slug or item_slug in slug or slug in item_slug:
+            return {
+                "slug": item.get("slug"),
+                "title": item.get("title"),
+                "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
+                "payload": dict(item),
+                "refreshed_at": None,
+            }
+    return None
 
 
 async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:

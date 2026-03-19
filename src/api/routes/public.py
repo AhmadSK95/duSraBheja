@@ -116,6 +116,49 @@ def _card_html(cls: str, title: str, body: str) -> str:
     return f'<div class="{cls}"><h4>{_s(title)}</h4><p>{_s(body)}</p></div>'
 
 
+_DEMO_VIDEOS: dict[str, dict[str, str]] = {
+    "kaffa-espresso-bar-website": {
+        "file": "kaffa_espresso_bar_demo.mp4",
+        "label": "Kaffa Espresso Bar — Full Site Walkthrough",
+    },
+    "balkan-barbershop-website": {
+        "file": "balkan_barbers_demo.mp4",
+        "label": "Balkan Barbers — Customer Booking Flow",
+    },
+    "datagenie": {
+        "file": "datagenie_demo.mp4",
+        "label": "DataGenie — AI Chat & Query Interface",
+    },
+}
+
+
+def _demo_video_html(slug: str) -> str:
+    """Render demo video section if one exists for this project."""
+    info = _DEMO_VIDEOS.get(slug)
+    if not info:
+        # Try fuzzy match
+        for key, val in _DEMO_VIDEOS.items():
+            if key in slug or slug in key:
+                info = val
+                break
+    if not info:
+        return ""
+    url = f"/public-assets/profile/{info['file']}"
+    return f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Demo</div>
+      <h2 class="display-heading display-heading--sub">{_s(info['label'])}</h2>
+      <div class="demo-video-container mt-2">
+        <video controls preload="metadata" playsinline
+          poster="" class="demo-video">
+          <source src="{url}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
+    </section>
+    """
+
+
 def _project_card_html(project: dict, *, featured: bool = False) -> str:
     p = dict(project.get("payload") or {})
     stack = p.get("stack") or []
@@ -441,7 +484,14 @@ async def public_profile_asset(filename: str) -> FileResponse:
     path = public_asset_path(filename)
     if not path:
         raise HTTPException(status_code=404, detail="Public asset not found")
-    return FileResponse(path)
+    media_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif",
+        ".mp4": "video/mp4", ".webm": "video/webm",
+    }
+    ext = "".join(path.suffixes[-1:]).lower() if path.suffixes else ""
+    media_type = media_types.get(ext)
+    return FileResponse(path, media_type=media_type)
 
 
 # ──────────────────────────────────────────────
@@ -489,8 +539,9 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
         <div class="hero-home__text">
           <div class="public-kicker">Software Engineer</div>
           <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
-          <p>Software engineer. Builder of AI systems, shipped products,
-            and things that remember.</p>
+          <p>Ex-Amazon engineer building AI-native products in Jersey City.
+            I ship real things for real people &mdash; from barbershop booking
+            systems to personal AI second brains.</p>
           <div class="hero-home__ctas">
             <a class="cta" href="/work">See the work</a>
             <a class="cta cta--outline" href="/brain">Ask my AI clone</a>
@@ -512,18 +563,33 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
             <div class="proof-card__label">Years at Amazon</div>
           </div>
           <div class="proof-card">
-            <div class="proof-card__number">4</div>
-            <div class="proof-card__label">Shipped Products</div>
-          </div>
-          <div class="proof-card">
             <div class="proof-card__number">5</div>
             <div class="proof-card__label">AI Agents in Production</div>
+          </div>
+          <div class="proof-card">
+            <div class="proof-card__number">2</div>
+            <div class="proof-card__label">Live Client Sites</div>
           </div>
           <div class="proof-card">
             <div class="proof-card__number">6+</div>
             <div class="proof-card__label">Years Engineering</div>
           </div>
         </div>
+      </div>
+    </section>
+    """
+
+    # Chatbot teaser right after hero + stats for maximum impact
+    chatbot_html = """
+    <section class="section container reveal">
+      <div class="chatbot-teaser">
+        <div class="public-kicker">Digital Clone</div>
+        <h2 class="display-heading display-heading--section">
+          I built an AI that knows my work.</h2>
+        <p>Not a generic chatbot &mdash; a conversational clone built
+          from real evidence. Ask it what I'd build for your problem,
+          why I left Amazon, or what anime I'm watching.</p>
+        <a class="cta" href="/brain">Open the brain</a>
       </div>
     </section>
     """
@@ -535,15 +601,32 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
           <div class="public-kicker">What I Build</div>
           <h2 class="display-heading display-heading--section">
             AI systems that solve real problems.</h2>
-          <p>I build AI systems that solve real problems. My current work spans
-            a personal AI second brain with 5 specialized agents, a conversational
-            data analytics platform, and production client sites.
+          <p>Like duSraBheja &mdash; my personal AI that ingests everything
+            I capture across Discord, PDFs, and voice memos, then organizes
+            it into searchable knowledge using 5 specialized AI agents.
             I care about ownership &mdash; architecture to deployment to operations.</p>
           <a class="inline-link mt-2" href="/about">The full picture</a>
         </div>
         <div class="photo-accent--md">
-          {_photo_img(personality_photo, alt="Ahmad with Oscar")}
+          {_photo_img(personality_photo, alt="Ahmad with Oscar at colorful art wall")}
         </div>
+      </div>
+    </section>
+    """
+
+    # Beyond the Code — real personality, not LinkedIn interests
+    interests_html = """
+    <section class="section container reveal">
+      <div class="public-kicker">Beyond the Code</div>
+      <div class="interests-bar">
+        <span class="interests-chip">Hip hop &amp; Indian film music</span>
+        <span class="interests-chip">Anime (currently Naruto Shippuden)</span>
+        <span class="interests-chip">Cycling</span>
+        <span class="interests-chip">Pokemon collector</span>
+        <span class="interests-chip">Indian standup comedy</span>
+        <span class="interests-chip">Cat dad (Oscar &amp; Iris)</span>
+        <span class="interests-chip">Five languages</span>
+        <span class="interests-chip">Japanese markets &amp; food</span>
       </div>
     </section>
     """
@@ -562,20 +645,6 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
           style="display:flex;align-items:center;justify-content:center;">
           <a class="cta" href="/work">View all projects</a>
         </article>
-      </div>
-    </section>
-    """
-
-    chatbot_html = """
-    <section class="section container reveal">
-      <div class="chatbot-teaser">
-        <div class="public-kicker">Digital Clone</div>
-        <h2 class="display-heading display-heading--section">
-          Talk to my AI clone.</h2>
-        <p>Built from real evidence, not a generic chatbot.
-          Ask about my work, my projects, whether I'd be a good fit
-          for your team.</p>
-        <a class="cta" href="/brain">Open the brain</a>
       </div>
     </section>
     """
@@ -600,26 +669,9 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     </section>
     """
 
-    # Interests bar
-    texture = list(p.get("personal_texture") or [])
-    interests_data = list(p.get("interests") or [])
-    interest_items = texture[:6] if texture else interests_data[:6]
-    interests_html = ""
-    if interest_items:
-        chips = "".join(
-            f'<span class="interests-chip">{_s(item)}</span>'
-            for item in interest_items
-        )
-        interests_html = f"""
-        <section class="section container reveal">
-          {_kicker("Interests")}
-          <div class="interests-bar">{chips}</div>
-        </section>
-        """
-
     return (
-        hero_html + stat_html + about_html + interests_html
-        + work_html + chatbot_html + contact_html
+        hero_html + stat_html + chatbot_html + about_html
+        + interests_html + work_html + contact_html
     )
 
 
@@ -716,20 +768,62 @@ async def public_about() -> HTMLResponse:
         else ""
     )
 
-    # Beyond the Code — use actual data from profile
-    texture = list(p.get("personal_texture") or [])
-    if texture:
-        texture_items = "".join(
-            f"<li>{_s(item)}</li>" for item in texture[:8]
-        )
-    else:
-        texture_items = (
-            "<li>Five languages: English, Hindi, Telugu, Urdu, Tamil.</li>"
-            "<li>Married Annie in 2025. Cat dad to Oscar and Iris.</li>"
-            "<li>Cycles, collects Pokemon, loves hip hop and Indian film music.</li>"
-            "<li>Japanese markets, tattoos, strong opinions about food.</li>"
-        )
+    # Personal life section with wedding photo
+    wedding_photo = photos.get("wedding")
+    pokemon_photo = photos.get("pokemon")
+    cycling_photo = photos.get("cycling")
 
+    personal_html = f"""
+    <section class="section container reveal">
+      {_kicker("Life Outside Code")}
+      <h2 class="display-heading display-heading--sub">The human behind the commits.</h2>
+      <div class="offset-grid offset-grid--60-40">
+        <div>
+          <ul class="texture-list">
+            <li>Married Annie Harpel in 2025 &mdash; courthouse ceremony with
+              a LOVE marquee sign, flower arch, and autumn leaves.</li>
+            <li>Cat dad to Oscar (7-year-old orange tabby, the real star of my
+              Instagram) and Iris (the newer addition).</li>
+            <li>Five languages: English, Hindi, Telugu, Urdu, Tamil &mdash;
+              bridging South Indian roots with a Jersey City life.</li>
+            <li>Watches Nate B Jones daily, binges KVizzing (Members-only),
+              and stress-watches Brooklyn Nine-Nine.</li>
+            <li>Currently on Naruto Shippuden S9 and caught up on
+              My Hero Academia.</li>
+            <li>Cycles around Jersey City, collects the OG Pokemon starters
+              as plushies, and has strong opinions about chicken stroganoff.</li>
+          </ul>
+        </div>
+        <div class="photo-accent--md">
+          {_photo_img(wedding_photo, alt="Ahmad and Annie wedding - LOVE sign")}
+        </div>
+      </div>
+    </section>
+    """
+
+    # Photo row with more personal photos
+    personal_photo_row = ""
+    personal_photos = [cycling_photo, pokemon_photo]
+    personal_photos = [p for p in personal_photos if p and p.get("url")]
+    if personal_photos:
+        tilts_personal = ["left", "right"]
+        imgs = ""
+        for i, item in enumerate(personal_photos):
+            tilt = tilts_personal[i % len(tilts_personal)]
+            imgs += (
+                f'<div class="photo-row__item photo-sticker '
+                f'photo-sticker--tilt-{tilt}">'
+                f'<img src="{_s(item["url"])}" '
+                f'alt="{_s(item.get("title", ""))}" loading="lazy" />'
+                f"</div>"
+            )
+        personal_photo_row = f"""
+        <section class="section container reveal">
+          <div class="photo-row">{imgs}</div>
+        </section>
+        """
+
+    # Beyond the Code interests chips
     interests_data = list(p.get("interests") or [])
     interest_chips_html = ""
     if interests_data:
@@ -737,20 +831,17 @@ async def public_about() -> HTMLResponse:
             f'<span class="interests-chip">{_s(item)}</span>'
             for item in interests_data[:8]
         )
-        interest_chips_html = (
-            f'<div class="interests-bar mt-2">{chips}</div>'
-        )
+        interest_chips_html = f"""
+        <section class="section--tight container reveal">
+          {_kicker("Interests")}
+          <div class="interests-bar">{chips}</div>
+        </section>
+        """
 
-    texture_html = f"""
-    <section class="section container reveal">
-      {_kicker("Beyond the Code")}
-      <h2 class="display-heading display-heading--sub">The rest of the picture.</h2>
-      <ul class="texture-list">{texture_items}</ul>
-      {interest_chips_html}
-    </section>
-    """
-
-    content = hero_html + acts_html + roles_html + photo_html + texture_html
+    content = (
+        hero_html + acts_html + roles_html + photo_html
+        + personal_html + personal_photo_row + interest_chips_html
+    )
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -1015,7 +1106,8 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     </section>
     """
 
-    content = hero_html + case_html + detail_html
+    video_html = _demo_video_html(slug)
+    content = hero_html + case_html + video_html + detail_html
     return HTMLResponse(
         render_public_shell(
             page_title=_s(project["title"]),
@@ -1106,7 +1198,9 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
 
     starter_prompts = [
         "What kind of engineer is Ahmad?",
+        "Why did he leave Amazon?",
         "Tell me about duSraBheja",
+        "What anime is he watching?",
         "Would he fit an AI infrastructure role?",
     ]
     starter_chips = "".join(
@@ -1304,24 +1398,26 @@ def _render_connect_fallback(p: dict, photos: dict) -> str:
     visitor_html = """
     <section class="section container reveal">
       <div class="visitor-cards">
-        <div class="visitor-card">
+        <div class="visitor-card" style="border-top:3px solid var(--accent);">
           <h3>Hiring?</h3>
-          <p>I bring 3+ years of Amazon-scale distributed systems,
-            AI agent production experience, and end-to-end ownership.
-            I ship, deploy, and maintain what I build.</p>
-          <a class="inline-link" href="mailto:ahmad.shaik.dev@gmail.com">Email me</a>
+          <p>If your product needs AI that actually works in production
+            &mdash; not just a demo &mdash; I'm your person.
+            Distributed systems at Amazon scale, 5 AI agents in production,
+            and I own everything I ship end to end.</p>
+          <a class="inline-link" href="mailto:ahmad2609.as@gmail.com">Email me</a>
         </div>
-        <div class="visitor-card">
+        <div class="visitor-card" style="border-top:3px solid var(--purple);">
           <h3>Need a site built?</h3>
-          <p>I take on select freelance projects. Full-stack delivery
-            from design through deployment &mdash; live client sites
-            running in production today.</p>
-          <a class="inline-link" href="/work">See past work</a>
+          <p>I build for real businesses &mdash; a barbershop with Stripe
+            payments and admin dashboards, a coffee shop with full
+            infrastructure. Not templates. Real products.</p>
+          <a class="inline-link" href="/work">See the work</a>
         </div>
-        <div class="visitor-card">
+        <div class="visitor-card" style="border-top:3px solid var(--gold);">
           <h3>Just curious?</h3>
-          <p>Ask my AI clone anything about my work, projects, or fit.
-            It's built from real evidence, not a prompt wrapper.</p>
+          <p>Ask my AI clone anything. It knows my projects, my career,
+            my stack opinions, and my cats' names. Built from real
+            evidence, not a prompt wrapper.</p>
           <a class="inline-link" href="/brain">Talk to the clone</a>
         </div>
       </div>
