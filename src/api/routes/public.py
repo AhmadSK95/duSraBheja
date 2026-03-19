@@ -691,13 +691,19 @@ async def public_about() -> HTMLResponse:
     roles = list(p.get("roles") or [])
     current_arc = p.get("current_arc") or {}
 
-    hero_html = """
-    <section class="hero-inner">
-      <div class="container" style="display:block;">
-        <div class="public-kicker">About</div>
-        <h1 class="display-heading display-heading--hero">The full picture.</h1>
-        <p style="max-width:54ch;color:var(--ink-light);font-size:1.08rem;line-height:1.72;">
-          From IIT Kharagpur to Amazon to building independently in New York.</p>
+    hero_photo = photos.get("personality")
+    hero_html = f"""
+    <section class="about-hero">
+      <div class="container">
+        <div class="about-hero__text">
+          <div class="public-kicker">About</div>
+          <h1 class="display-heading display-heading--hero">The full picture.</h1>
+          <p>From IIT Kharagpur to Amazon to building
+            independently in Jersey City.</p>
+        </div>
+        <div class="about-hero__photo">
+          {_photo_img(hero_photo, loading="eager", alt="Ahmad with Oscar at colorful art wall")}
+        </div>
       </div>
     </section>
     """
@@ -768,79 +774,85 @@ async def public_about() -> HTMLResponse:
         else ""
     )
 
-    # Personal life section with wedding photo
+    # Full-width photo gallery — the visual soul of the page
     wedding_photo = photos.get("wedding")
+    couple_photo = photos.get("couple")
     pokemon_photo = photos.get("pokemon")
     cycling_photo = photos.get("cycling")
+    home_photo = photos.get("home")
+    gallery_photos = [
+        (wedding_photo, "Ahmad and Annie — LOVE sign, autumn leaves"),
+        (couple_photo, "Waterfront kiss, dramatic sky"),
+        (cycling_photo, "Coming home from a ride — Oscar waiting"),
+        (pokemon_photo, "The OG starters collection"),
+    ]
+    gallery_imgs = ""
+    for photo, alt in gallery_photos:
+        url = _photo_url(photo)
+        if url:
+            gallery_imgs += (
+                f'<div class="life-gallery__item">'
+                f'<img src="{url}" alt="{_s(alt)}" loading="lazy" />'
+                f'</div>'
+            )
 
     personal_html = f"""
-    <section class="section container reveal">
-      {_kicker("Life Outside Code")}
-      <h2 class="display-heading display-heading--sub">The human behind the commits.</h2>
-      <div class="offset-grid offset-grid--60-40">
-        <div>
-          <ul class="texture-list">
-            <li>Married Annie Harpel in 2025 &mdash; courthouse ceremony with
-              a LOVE marquee sign, flower arch, and autumn leaves.</li>
-            <li>Cat dad to Oscar (7-year-old orange tabby, the real star of my
-              Instagram) and Iris (the newer addition).</li>
-            <li>Five languages: English, Hindi, Telugu, Urdu, Tamil &mdash;
-              bridging South Indian roots with a Jersey City life.</li>
-            <li>Watches Nate B Jones daily, binges KVizzing (Members-only),
-              and stress-watches Brooklyn Nine-Nine.</li>
-            <li>Currently on Naruto Shippuden S9 and caught up on
-              My Hero Academia.</li>
-            <li>Cycles around Jersey City, collects the OG Pokemon starters
-              as plushies, and has strong opinions about chicken stroganoff.</li>
-          </ul>
-        </div>
-        <div class="photo-accent--md">
-          {_photo_img(wedding_photo, alt="Ahmad and Annie wedding - LOVE sign")}
+    <section class="life-section reveal">
+      <div class="container">
+        <div class="public-kicker" style="color:var(--gold);">
+          Life Outside Code</div>
+        <h2 class="display-heading display-heading--section">
+          The human behind the commits.</h2>
+      </div>
+      <div class="life-gallery">{gallery_imgs}</div>
+      <div class="container">
+        <div class="life-details">
+          <div class="life-detail">
+            <strong>Married Annie</strong> in 2025 &mdash;
+            courthouse ceremony, LOVE marquee sign, autumn leaves.
+          </div>
+          <div class="life-detail">
+            <strong>Cat dad</strong> to Oscar (7-year orange tabby,
+            Instagram star) and Iris.
+          </div>
+          <div class="life-detail">
+            <strong>Five languages:</strong> English, Hindi, Telugu,
+            Urdu, Tamil.
+          </div>
+          <div class="life-detail">
+            <strong>Currently watching:</strong> Naruto Shippuden S9,
+            KVizzing (Members-only), Nate B Jones daily.
+          </div>
+          <div class="life-detail">
+            <strong>Cycles</strong> around Jersey City,
+            <strong>collects</strong> Pokemon plushies,
+            <strong>stress-watches</strong> Brooklyn Nine-Nine.
+          </div>
         </div>
       </div>
     </section>
     """
 
-    # Photo row with more personal photos
-    personal_photo_row = ""
-    personal_photos = [cycling_photo, pokemon_photo]
-    personal_photos = [p for p in personal_photos if p and p.get("url")]
-    if personal_photos:
-        tilts_personal = ["left", "right"]
-        imgs = ""
-        for i, item in enumerate(personal_photos):
-            tilt = tilts_personal[i % len(tilts_personal)]
-            imgs += (
-                f'<div class="photo-row__item photo-sticker '
-                f'photo-sticker--tilt-{tilt}">'
-                f'<img src="{_s(item["url"])}" '
-                f'alt="{_s(item.get("title", ""))}" loading="lazy" />'
-                f"</div>"
-            )
-        personal_photo_row = f"""
-        <section class="section container reveal">
-          <div class="photo-row">{imgs}</div>
-        </section>
-        """
-
-    # Beyond the Code interests chips
+    # Interests chips
+    texture = list(p.get("personal_texture") or [])
     interests_data = list(p.get("interests") or [])
+    chip_items = texture[:8] if texture else interests_data[:8]
     interest_chips_html = ""
-    if interests_data:
+    if chip_items:
         chips = "".join(
             f'<span class="interests-chip">{_s(item)}</span>'
-            for item in interests_data[:8]
+            for item in chip_items
         )
         interest_chips_html = f"""
-        <section class="section--tight container reveal">
-          {_kicker("Interests")}
+        <section class="section container reveal">
+          {_kicker("Beyond the Code")}
           <div class="interests-bar">{chips}</div>
         </section>
         """
 
     content = (
         hero_html + acts_html + roles_html + photo_html
-        + personal_html + personal_photo_row + interest_chips_html
+        + personal_html + interest_chips_html
     )
     return HTMLResponse(
         render_public_shell(

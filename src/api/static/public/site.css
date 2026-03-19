@@ -273,12 +273,13 @@ body.public-body {
 
 /* ===== Photo Sticker ===== */
 .hero-home__photo {
-  max-width: 320px;
-  max-height: 400px;
+  max-width: 380px;
+  max-height: 480px;
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow), 0 0 0 1px rgba(255, 255, 255, 0.06);
   justify-self: end;
+  transform: rotate(2deg);
   transition: transform 400ms ease;
 }
 
@@ -1229,8 +1230,8 @@ body.public-body {
 }
 
 .photo-row__item {
-  width: 200px;
-  height: 240px;
+  width: 260px;
+  height: 320px;
   border-radius: var(--radius-sm);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
@@ -1520,6 +1521,11 @@ body.public-body {
   .stat-band { grid-template-columns: repeat(2, 1fr); }
   .proof-grid { grid-template-columns: repeat(2, 1fr); }
 
+  .about-hero .container { grid-template-columns: 1fr; }
+  .about-hero__photo { justify-self: center; max-width: 300px; }
+
+  .life-gallery { grid-template-columns: repeat(2, 1fr); }
+
   .act-cards { grid-template-columns: 1fr; }
   .visitor-cards { grid-template-columns: 1fr; }
   .how-cards { grid-template-columns: 1fr; }
@@ -1543,6 +1549,112 @@ body.public-body {
   .timeline-panel { flex: 0 0 280px; }
 
   .photo-break { min-height: 280px; }
+}
+
+/* ===== About Hero (with large photo) ===== */
+.about-hero {
+  padding: 5rem 0 3rem;
+}
+
+.about-hero .container {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 3rem;
+  align-items: center;
+}
+
+.about-hero__text p {
+  max-width: 48ch;
+  color: var(--ink-light);
+  font-size: 1.1rem;
+  line-height: 1.7;
+  margin-top: 1rem;
+}
+
+.about-hero__photo {
+  max-width: 380px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  justify-self: end;
+  transform: rotate(2deg);
+  transition: transform 400ms ease;
+}
+
+.about-hero__photo:hover {
+  transform: rotate(0deg) scale(1.02);
+}
+
+.about-hero__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ===== Life Section (photo-dominant personal section) ===== */
+.life-section {
+  padding: 5rem 0 3rem;
+  background:
+    linear-gradient(180deg,
+      rgba(245, 197, 66, 0.04) 0%,
+      rgba(167, 139, 250, 0.03) 50%,
+      transparent 100%);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 2rem 0;
+}
+
+.life-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  padding: 2rem 1.5rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.life-gallery__item {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  aspect-ratio: 3 / 4;
+  transition: transform 300ms ease;
+}
+
+.life-gallery__item:nth-child(odd) { transform: rotate(-1.5deg); }
+.life-gallery__item:nth-child(even) { transform: rotate(1.5deg); }
+.life-gallery__item:hover {
+  transform: rotate(0deg) scale(1.04);
+  z-index: 2;
+}
+
+.life-gallery__item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.life-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  padding: 2rem 0 1rem;
+}
+
+.life-detail {
+  padding: 1.25rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--ink-light);
+}
+
+.life-detail strong {
+  color: var(--ink);
 }
 
 /* ===== Demo Video ===== */
