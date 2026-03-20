@@ -6,7 +6,6 @@ import uuid
 from src.agents.librarian import process_artifact
 from src.constants import MERGEABLE_CATEGORIES, normalize_category
 from src.database import async_session
-from src.lib.time import human_datetime_text
 from src.lib.store import (
     create_journal_entry,
     create_link,
@@ -17,7 +16,9 @@ from src.lib.store import (
     get_related,
     update_note,
 )
+from src.lib.time import human_datetime_text
 from src.models import Classification
+from src.services.library import promote_single_artifact
 from src.services.planner import build_planner_payload
 from src.services.reminders import store_reminder
 from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
@@ -95,6 +96,14 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     relation="derived_from",
                 )
 
+            # C3: Promote artifact to EvidenceRecord inline
+            try:
+                await promote_single_artifact(session, artifact)
+            except Exception:
+                log.warning(
+                    "Inline evidence promotion failed for artifact %s (non-fatal)", artifact_id
+                )
+
             capture_intent = getattr(classification, "capture_intent", "thought")
             reply_target_kind = (artifact.metadata_ or {}).get("reply_target_kind")
             project_note_id = note_id if classification.category == "project" else None
@@ -107,7 +116,9 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     if reply_target_kind and capture_intent in {"critique", "question"}
                     else "artifact_ingested"
                 ),
-                actor_type="human" if artifact.source in {"discord", "manual", "command"} else "agent",
+                actor_type="human"
+                if artifact.source in {"discord", "manual", "command"}
+                else "agent",
                 actor_name=artifact.source,
                 title=artifact.summary or note_title,
                 body_markdown=artifact.raw_text,
@@ -119,7 +130,9 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "note_id": str(note_id),
                     "capture_intent": capture_intent,
                     "reply_target_kind": reply_target_kind,
-                    "reply_target_message_id": (artifact.metadata_ or {}).get("reply_target_message_id"),
+                    "reply_target_message_id": (artifact.metadata_ or {}).get(
+                        "reply_target_message_id"
+                    ),
                 },
             )
 
@@ -142,7 +155,9 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     "reminder": (
                         {
                             "title": reminder.title,
-                            "next_fire_at": human_datetime_text(reminder.next_fire_at if reminder else None, fallback="unscheduled"),
+                            "next_fire_at": human_datetime_text(
+                                reminder.next_fire_at if reminder else None, fallback="unscheduled"
+                            ),
                         }
                         if reminder
                         else None
@@ -207,7 +222,9 @@ async def _upsert_planner_note(session, artifact_note, classification, planner_p
     return note_id, planner_payload["title"], planner_payload["content"]
 
 
-async def _upsert_canonical_note(session, classification, classification_data: dict, artifact_text: str, artifact_note):
+async def _upsert_canonical_note(
+    session, classification, classification_data: dict, artifact_text: str, artifact_note
+):
     existing_note = artifact_note
     existing_note_content = artifact_note.content if artifact_note else None
 
@@ -302,6 +319,8 @@ async def _upsert_reminder_note(session, artifact, artifact_note, classification
     metadata = dict(note.metadata_ or {})
     metadata["reminder_id"] = str(reminder.id)
     metadata["next_fire_at"] = human_datetime_text(reminder.next_fire_at, fallback="unscheduled")
-    metadata["next_fire_at_utc"] = reminder.next_fire_at.isoformat() if reminder.next_fire_at else None
+    metadata["next_fire_at_utc"] = (
+        reminder.next_fire_at.isoformat() if reminder.next_fire_at else None
+    )
     await update_note(session, note.id, metadata_=metadata, remind_at=reminder.next_fire_at)
     return note.id, note.title, note.content, reminder

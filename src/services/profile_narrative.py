@@ -186,7 +186,9 @@ def _kv_lines(value: str | None) -> dict[str, str]:
         stripped = raw.strip()
         if stripped.startswith("- "):
             stripped = stripped[2:].strip()
-        match = re.match(r"^\*\*(.+?):\*\*\s*(.+)$", stripped) or re.match(r"^\*\*(.+?)\*\*:\s*(.+)$", stripped)
+        match = re.match(r"^\*\*(.+?):\*\*\s*(.+)$", stripped) or re.match(
+            r"^\*\*(.+?)\*\*:\s*(.+)$", stripped
+        )
         if match:
             entries[_compact(match.group(1)).lower()] = _compact(match.group(2))
     return entries
@@ -320,7 +322,9 @@ def _photo_assets(seed_dir: Path, text: str) -> dict[str, PhotoAsset]:
             continue
         description = fields.get("description", "")
         vibe = fields.get("vibe", "")
-        best_for = [part.strip() for part in re.split(r",\s*", fields.get("best for", "")) if part.strip()]
+        best_for = [
+            part.strip() for part in re.split(r",\s*", fields.get("best for", "")) if part.strip()
+        ]
         assets[_slugify(title)] = PhotoAsset(
             key=_slugify(title),
             filename=filename,
@@ -350,13 +354,20 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
         "pokemon": pick("10_aug2025_pokemon_plushies.jpg"),
         "cycling": pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
         "photo_break": pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
+        "oscar_looking": pick("04_jan2026_oscar_looking_at_camera.jpg"),
+        "oscar_home": pick("08_jan2026_oscar_home.jpg"),
+        "skyline_2": pick("12_jul2025_skyline_2.jpg"),
         "mosaic": [
             pick("09_aug2025_holding_oscar_colorful_art_wall.jpg"),
             pick("13_nov2025_wedding_love_sign_flower_arch.jpg"),
             pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
             pick("10_aug2025_pokemon_plushies.jpg"),
+            pick("06_nov2025_couple_kiss_waterfront_dramatic_sky.jpg"),
+            pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
         ],
-        "gallery": [asset.as_dict() for asset in sorted(assets.values(), key=lambda item: item.filename)][:8],
+        "gallery": [
+            asset.as_dict() for asset in sorted(assets.values(), key=lambda item: item.filename)
+        ][:8],
     }
 
 
@@ -373,8 +384,13 @@ _KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
     "dusrabheja": {
         "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/duSraBheja"}],
         "stack": [
-            "Python", "FastAPI", "PostgreSQL", "pgvector",
-            "Claude API", "Discord.py", "Docker",
+            "Python",
+            "FastAPI",
+            "PostgreSQL",
+            "pgvector",
+            "Claude API",
+            "Discord.py",
+            "Docker",
         ],
     },
     "datagenie": {
@@ -384,28 +400,46 @@ _KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
 }
 
 
+_PHOTO_CAPTIONS: dict[str, str] = {
+    "wedding": "November 2025. Courthouse. The LOVE sign was her idea.",
+    "pokemon": "The OG starters. Non-negotiable.",
+    "cycling": "Oscar waits at the door every time.",
+    "personality": "The shirt says 繰り返す. Repeat.",
+    "home": "The workspace. Two monitors, two cats, one rug.",
+    "couple": "Jersey City waterfront. Dramatic sky optional.",
+    "hero": "Jersey City. North Face. Beanie season.",
+    "oscar_looking": "Oscar judging my architecture decisions.",
+    "oscar_home": "The real boss of the house.",
+    "skyline_2": "Jersey City skyline. Golden hour.",
+}
+
+
 def _clean_demonstrates(items: list[str]) -> list[str]:
     """Filter garbage entries from demonstrates lists."""
     return [
-        item for item in items
-        if item
-        and item.strip() not in {"---", "--", "-", ""}
-        and len(item.strip()) >= 10
+        item
+        for item in items
+        if item and item.strip() not in {"---", "--", "-", ""} and len(item.strip()) >= 10
     ]
 
 
 def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
-    sections = list(re.finditer(
-        r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)",
-        text, re.MULTILINE | re.DOTALL,
-    ))
+    sections = list(
+        re.finditer(
+            r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)",
+            text,
+            re.MULTILINE | re.DOTALL,
+        )
+    )
     summary_match = re.search(
         r"##\s+PROFESSIONAL SUMMARY.*?\n\n(?P<body>.*?)(?=\n##\s+KEY PROJECTS|\Z)",
-        text, re.DOTALL,
+        text,
+        re.DOTALL,
     )
     professional_summary = _excerpt(
         re.sub(
-            r"^\s*---\s*$", "",
+            r"^\s*---\s*$",
+            "",
             summary_match.group("body") if summary_match else "",
             flags=re.MULTILINE,
         ),
@@ -417,15 +451,18 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         body = match.group("body")
         slug = _slugify(title.split(" - ", 1)[0])
         resume_body = _extract_labeled_block(
-            body, "Resume",
+            body,
+            "Resume",
             stop_labels=["LinkedIn", "What this project demonstrates"],
         )
         linkedin_body = _extract_labeled_block(
-            body, "LinkedIn",
+            body,
+            "LinkedIn",
             stop_labels=["What this project demonstrates"],
         )
         demonstrates_body = _extract_labeled_block(
-            body, "What this project demonstrates",
+            body,
+            "What this project demonstrates",
         )
         resume_bullets = _bullet_lines(resume_body)
         demonstrates = _clean_demonstrates(_bullet_lines(demonstrates_body))
@@ -433,16 +470,8 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         stack: list[str] = []
         stack_match = re.search(r"Stack:\s*(?P<value>.+?)(?:\.|$)", body)
         if stack_match:
-            stack = [
-                item.strip()
-                for item in stack_match.group("value").split(",")
-                if item.strip()
-            ]
-        status = (
-            "Live client project"
-            if "live client project" in title.lower()
-            else "Active build"
-        )
+            stack = [item.strip() for item in stack_match.group("value").split(",") if item.strip()]
+        status = "Live client project" if "live client project" in title.lower() else "Active build"
         links: list[dict[str, str]] = []
         live_url = _find_url(body)
         if live_url:
@@ -461,11 +490,7 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
             ProjectCase(
                 slug=slug,
                 title=title,
-                tagline=(
-                    resume_bullets[0]
-                    if resume_bullets
-                    else _excerpt(full_body, limit=180)
-                ),
+                tagline=(resume_bullets[0] if resume_bullets else _excerpt(full_body, limit=180)),
                 summary=_excerpt(full_body, limit=340),
                 status=status,
                 stack=stack,
@@ -573,8 +598,13 @@ def _eras_from_personal_bible(personal_bible_text: str) -> list[LifeEra]:
             slug="iit-kharagpur",
             title="IIT Kharagpur",
             years="2013-2017",
-            summary=_excerpt(sections.get("iit kharagpur — b.tech, electrical engineering (2013–2017)"), limit=340),
-            highlights=_bullet_lines(sections.get("iit kharagpur — b.tech, electrical engineering (2013–2017)"))[:5],
+            summary=_excerpt(
+                sections.get("iit kharagpur — b.tech, electrical engineering (2013–2017)"),
+                limit=340,
+            ),
+            highlights=_bullet_lines(
+                sections.get("iit kharagpur — b.tech, electrical engineering (2013–2017)")
+            )[:5],
             institutions=["IIT Kharagpur"],
             roles=["Student", "Electrical Engineering"],
         ),
@@ -586,12 +616,19 @@ def _eras_from_personal_bible(personal_bible_text: str) -> list[LifeEra]:
                 " ".join(
                     [
                         sections.get("citicorp services — summer intern (summer 2016, pune)", ""),
-                        sections.get("loylty rewardz — management trainee → software engineer (july 2017 – april 2020, mumbai)", ""),
+                        sections.get(
+                            "loylty rewardz — management trainee → software engineer (july 2017 – april 2020, mumbai)",
+                            "",
+                        ),
                     ]
                 ),
                 limit=340,
             ),
-            highlights=_bullet_lines(sections.get("loylty rewardz — management trainee → software engineer (july 2017 – april 2020, mumbai)"))[:5],
+            highlights=_bullet_lines(
+                sections.get(
+                    "loylty rewardz — management trainee → software engineer (july 2017 – april 2020, mumbai)"
+                )
+            )[:5],
             institutions=["Citicorp Services", "Loylty Rewardz"],
             roles=["Intern", "Management Trainee", "Software Engineer"],
         ),
@@ -599,8 +636,17 @@ def _eras_from_personal_bible(personal_bible_text: str) -> list[LifeEra]:
             slug="nyu",
             title="NYU Tandon",
             years="2021-2022",
-            summary=_excerpt(sections.get("nyu tandon school of engineering — m.s., electrical engineering (2021–2022)"), limit=340),
-            highlights=_bullet_lines(sections.get("nyu tandon school of engineering — m.s., electrical engineering (2021–2022)"))[:5],
+            summary=_excerpt(
+                sections.get(
+                    "nyu tandon school of engineering — m.s., electrical engineering (2021–2022)"
+                ),
+                limit=340,
+            ),
+            highlights=_bullet_lines(
+                sections.get(
+                    "nyu tandon school of engineering — m.s., electrical engineering (2021–2022)"
+                )
+            )[:5],
             institutions=["NYU Tandon"],
             roles=["Graduate Student"],
         ),
@@ -608,8 +654,17 @@ def _eras_from_personal_bible(personal_bible_text: str) -> list[LifeEra]:
             slug="amazon",
             title="Amazon",
             years="2022-2025",
-            summary=_excerpt(sections.get("amazon — software development engineer (june 2022 – september 2025, nyc)"), limit=340),
-            highlights=_bullet_lines(sections.get("amazon — software development engineer (june 2022 – september 2025, nyc)"))[:5],
+            summary=_excerpt(
+                sections.get(
+                    "amazon — software development engineer (june 2022 – september 2025, nyc)"
+                ),
+                limit=340,
+            ),
+            highlights=_bullet_lines(
+                sections.get(
+                    "amazon — software development engineer (june 2022 – september 2025, nyc)"
+                )
+            )[:5],
             institutions=["Amazon"],
             roles=["Software Development Engineer"],
         ),
@@ -617,7 +672,9 @@ def _eras_from_personal_bible(personal_bible_text: str) -> list[LifeEra]:
             slug="builder-phase",
             title="Independent Builder Phase",
             years="2025-Present",
-            summary=_excerpt(sections.get("part 3: the builder phase (sep 2025 – present)"), limit=340),
+            summary=_excerpt(
+                sections.get("part 3: the builder phase (sep 2025 – present)"), limit=340
+            ),
             highlights=[
                 "Building AI-native products with real operational surfaces.",
                 "Shipping live freelance client sites and infrastructure.",
@@ -645,15 +702,14 @@ def _identity_stack(job_hunt_text: str, professional_summary: str) -> list[str]:
     return stack[:5]
 
 
-def _current_arc(personal_bible_text: str, brain_dump_text: str, projects: list[ProjectCase]) -> dict[str, Any]:
+def _current_arc(
+    personal_bible_text: str, brain_dump_text: str, projects: list[ProjectCase]
+) -> dict[str, Any]:
     bible_sections = _section_map(personal_bible_text)
     dump_sections = _section_map(brain_dump_text)
 
     # Parse Part 8 into structured acts instead of raw dump
-    part8_body = (
-        bible_sections.get("part 8: the narrative arc (for the website)")
-        or ""
-    )
+    part8_body = bible_sections.get("part 8: the narrative arc (for the website)") or ""
     acts: list[dict[str, str]] = []
     act_pattern = re.compile(
         r"\*\*Act\s*\d+\s*[-—–]\s*(?P<label>[^(]+?)\s*\((?P<period>[^)]+)\)\s*:?\s*\*\*"
@@ -661,11 +717,13 @@ def _current_arc(personal_bible_text: str, brain_dump_text: str, projects: list[
         re.DOTALL | re.IGNORECASE,
     )
     for m in act_pattern.finditer(part8_body):
-        acts.append({
-            "label": _compact(m.group("label")),
-            "period": _compact(m.group("period")),
-            "body": _compact(m.group("body")),
-        })
+        acts.append(
+            {
+                "label": _compact(m.group("label")),
+                "period": _compact(m.group("period")),
+                "body": _compact(m.group("body")),
+            }
+        )
 
     throughline_match = re.search(
         r"\*\*(?:The\s+)?Throughline\s*:?\s*\*\*\s*(?P<body>.*?)$",
@@ -677,8 +735,7 @@ def _current_arc(personal_bible_text: str, brain_dump_text: str, projects: list[
     # Use Act 3 body as summary, or fall back to dump/excerpt
     act3_body = next((a["body"] for a in acts if "builder" in a.get("label", "").lower()), "")
     summary = act3_body or _excerpt(
-        dump_sections.get("why i want to join narrative")
-        or part8_body,
+        dump_sections.get("why i want to join narrative") or part8_body,
         limit=420,
     )
 
@@ -697,7 +754,9 @@ def _current_arc(personal_bible_text: str, brain_dump_text: str, projects: list[
 
 
 def _proof_points(personal_bible_text: str) -> list[dict[str, str]]:
-    website_signals = _extract_markdown_sections(_section_body(personal_bible_text, "Part 9: Website Content Signals"))
+    website_signals = _extract_markdown_sections(
+        _section_body(personal_bible_text, "Part 9: Website Content Signals")
+    )
     proofs: list[dict[str, str]] = []
     for _level, title, body in website_signals:
         bullets = _bullet_lines(body)
@@ -726,8 +785,12 @@ def _contact_modes(personal_bible_text: str) -> list[ContactMode]:
         ContactMode(
             key="linkedin",
             label="LinkedIn",
-            value=(settings.public_contact_linkedin_url or person.get("linkedin", "")).replace("https://", ""),
-            href=_normalize_public_href(settings.public_contact_linkedin_url or person.get("linkedin", "")),
+            value=(settings.public_contact_linkedin_url or person.get("linkedin", "")).replace(
+                "https://", ""
+            ),
+            href=_normalize_public_href(
+                settings.public_contact_linkedin_url or person.get("linkedin", "")
+            ),
             note="Professional context, work history, and lightweight outreach.",
         ),
         ContactMode(
@@ -740,8 +803,12 @@ def _contact_modes(personal_bible_text: str) -> list[ContactMode]:
         ContactMode(
             key="instagram",
             label="Instagram",
-            value=(settings.public_contact_instagram_url or person.get("instagram", "")).replace("https://", ""),
-            href=_normalize_public_href(settings.public_contact_instagram_url or person.get("instagram", "")),
+            value=(settings.public_contact_instagram_url or person.get("instagram", "")).replace(
+                "https://", ""
+            ),
+            href=_normalize_public_href(
+                settings.public_contact_instagram_url or person.get("instagram", "")
+            ),
             note="Human context, life moments, and Oscar content.",
         ),
     ]
@@ -775,6 +842,276 @@ def _personal_texture(personal_bible_text: str) -> list[str]:
     return deduped[:10]
 
 
+def _currently_feed(seed_dir: Path) -> dict[str, Any]:
+    """Parse Ahmad_Profile_Signal.md for the 'Currently' living feed."""
+    signal_path = seed_dir / "Ahmad_Profile_Signal.md"
+    text = _read_text(signal_path)
+    if not text:
+        return {}
+
+    # Extract latest anime from Crunchyroll section
+    watching = "Naruto Shippuden"
+    watching_detail = "S9 E188"
+    crunchyroll_section = _section_body(text, "CRUNCHYROLL ANIME HISTORY")
+    if crunchyroll_section:
+        for line in crunchyroll_section.splitlines():
+            m = re.match(r"\|\s*(.+?)\s+S(\d+)\s+E(\d+).*?\|.*?Watched", line)
+            if m:
+                watching = m.group(1).strip()
+                watching_detail = f"S{m.group(2)} E{m.group(3)}"
+                break
+
+    # Extract music from YouTube section
+    listening = "Chaar Diwaari"
+    listening_detail = "Parvana EP · Def Jam"
+    for line in text.splitlines():
+        if "Def Jam" in line or "Parvana" in line:
+            listening = "Chaar Diwaari"
+            listening_detail = "Parvana EP · Def Jam India"
+            break
+
+    # Laughing at — KVizzing
+    laughing_at = "KVizzing SF4"
+    laughing_detail = "Members-only"
+
+    # Stress watch from Netflix section
+    stress_watch = "Brooklyn Nine-Nine"
+    stress_detail = "S8"
+    netflix_section = _section_body(text, "NETFLIX VIEWING HISTORY")
+    if netflix_section:
+        for line in netflix_section.splitlines():
+            m = re.match(r".*Brooklyn Nine-Nine.*Season\s*(\d+)", line)
+            if m:
+                stress_watch = "Brooklyn Nine-Nine"
+                stress_detail = f"S{m.group(1)}"
+                break
+
+    # Life moments from pattern analysis
+    life_moments = []
+    events_section = _section_body(text, "Life Events Reflected in Search")
+    if events_section:
+        for line in events_section.splitlines():
+            m = re.match(r"[-*]\s*\*\*(.+?)\*\*:\s*(.+)", line.strip())
+            if m:
+                life_moments.append({"date": m.group(1).strip(), "event": _compact(m.group(2))})
+
+    return {
+        "watching": watching,
+        "watching_detail": watching_detail,
+        "listening": listening,
+        "listening_detail": listening_detail,
+        "laughing_at": laughing_at,
+        "laughing_detail": laughing_detail,
+        "stress_watch": stress_watch,
+        "stress_detail": stress_detail,
+        "life_moments": life_moments[:6],
+    }
+
+
+def _parse_repo_histories(seed_dir: Path) -> dict[str, dict[str, Any]]:
+    """Parse repo_history_*.md files into structured case study data."""
+    histories: dict[str, dict[str, Any]] = {}
+
+    # Slug mapping: filename stem → project slug
+    slug_map = {
+        "repo_history_duSraBheja": "dusrabheja",
+        "repo_history_barbershop": "balkan-barbershop-website",
+    }
+
+    for path in sorted(seed_dir.glob("repo_history_*.md")):
+        text = _read_text(path)
+        if not text:
+            continue
+        stem = path.stem
+
+        if stem == "repo_history_other_projects":
+            # Multi-project file: split on ## N. headings
+            project_blocks = re.split(r"\n##\s+\d+\.\s+", text)
+            for block in project_blocks[1:]:
+                title_line = block.split("\n", 1)[0].strip()
+                project_slug = _slugify(title_line.split("(")[0].split("—")[0].strip())
+                parsed = _parse_single_repo_history(block, title_line)
+                if parsed:
+                    histories[project_slug] = parsed
+        else:
+            project_slug = slug_map.get(stem, _slugify(stem.replace("repo_history_", "")))
+            parsed = _parse_single_repo_history(text, stem)
+            if parsed:
+                histories[project_slug] = parsed
+
+    return histories
+
+
+def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any] | None:
+    """Parse a single repo history block into structured data."""
+    sections = _section_map(text)
+
+    # Executive summary
+    exec_summary = ""
+    for key in ("executive summary", "project overview", "overview"):
+        if key in sections:
+            exec_summary = _compact(sections[key])
+            break
+    if not exec_summary:
+        # Try first paragraph of text
+        paragraphs = _split_paragraphs(text[:2000])
+        if paragraphs:
+            exec_summary = paragraphs[0]
+
+    # Phases
+    phases: list[dict[str, Any]] = []
+    phase_pattern = re.compile(
+        r"###\s+Phase\s+\d+[:.]\s*(?P<title>.+?)(?:\s*\((?P<dates>[^)]+)\))?\s*\n(?P<body>.*?)(?=###\s+Phase\s+\d+|##\s+|$)",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in phase_pattern.finditer(text):
+        title = _compact(m.group("title"))
+        dates = _compact(m.group("dates") or "")
+        body = m.group("body")
+        theme_match = re.search(r"\*\*Theme[:/]?\*\*\s*(.+?)(?:\n|$)", body)
+        theme = _compact(theme_match.group(1)) if theme_match else ""
+        narrative_parts = _split_paragraphs(body[:1500])
+        narrative = " ".join(narrative_parts[:3]) if narrative_parts else ""
+        components = _bullet_lines(body)[:6]
+        pivot_match = re.search(r"\*\*Pivot[:/]?\*\*\s*(.+?)(?:\n\n|$)", body, re.DOTALL)
+        pivot = _compact(pivot_match.group(1)) if pivot_match else ""
+        phases.append(
+            {
+                "title": title,
+                "date_range": dates,
+                "theme": theme,
+                "narrative": narrative,
+                "key_components": components,
+                "pivot": pivot,
+            }
+        )
+
+    # Architecture diagrams
+    architecture_diagrams: list[dict[str, str]] = []
+    arch_pattern = re.compile(
+        r"###\s+(?P<title>.*?[Aa]rchitect.*?)\s*\n(?P<body>.*?)(?=###\s+|##\s+|$)",
+        re.DOTALL,
+    )
+    for m in arch_pattern.finditer(text):
+        title = _compact(m.group("title"))
+        body = m.group("body")
+        diagram_match = re.search(r"```[^\n]*\n(.*?)```", body, re.DOTALL)
+        diagram = diagram_match.group(1).strip() if diagram_match else ""
+        explanation = _compact(re.sub(r"```[^\n]*\n.*?```", "", body, flags=re.DOTALL))
+        if diagram or explanation:
+            architecture_diagrams.append(
+                {
+                    "title": title,
+                    "diagram": diagram,
+                    "explanation": explanation,
+                }
+            )
+
+    # Architectural decisions
+    architectural_decisions: list[dict[str, str]] = []
+    decisions_body = ""
+    for key in ("architectural decisions", "key decisions", "decisions"):
+        if key in sections:
+            decisions_body = sections[key]
+            break
+    if decisions_body:
+        for item in re.finditer(
+            r"\*\*(?P<title>.+?)\*\*[:\s]*(?P<body>.*?)(?=\*\*[A-Z]|\Z)",
+            decisions_body,
+            re.DOTALL,
+        ):
+            title = _compact(item.group("title"))
+            body = _compact(item.group("body"))
+            architectural_decisions.append(
+                {
+                    "title": title,
+                    "rationale": body,
+                    "tradeoff": "",
+                }
+            )
+
+    # Challenges
+    challenges: list[dict[str, str]] = []
+    challenges_body = ""
+    for key in ("challenges", "struggles", "pain points"):
+        if key in sections:
+            challenges_body = sections[key]
+            break
+    if challenges_body:
+        for bullet in _bullet_lines(challenges_body)[:6]:
+            parts = bullet.split("→") if "→" in bullet else bullet.split(" - ", 1)
+            if len(parts) >= 2:
+                challenges.append(
+                    {
+                        "title": _compact(parts[0]),
+                        "problem": _compact(parts[0]),
+                        "solution": _compact(parts[1]),
+                    }
+                )
+            else:
+                challenges.append(
+                    {
+                        "title": _compact(bullet[:80]),
+                        "problem": _compact(bullet),
+                        "solution": "",
+                    }
+                )
+
+    # Tech oscillations
+    tech_oscillations: list[dict[str, str]] = []
+    oscillation_body = ""
+    for key in ("tech oscillations", "technology changes", "stack evolution"):
+        if key in sections:
+            oscillation_body = sections[key]
+            break
+    if oscillation_body:
+        for line in _bullet_lines(oscillation_body)[:6]:
+            arrow_match = re.match(r"(.+?)\s*→\s*(.+?)(?:\s*\((.+?)\))?$", line)
+            if arrow_match:
+                tech_oscillations.append(
+                    {
+                        "original": _compact(arrow_match.group(1)),
+                        "replacement": _compact(arrow_match.group(2)),
+                        "problem": "",
+                        "context": _compact(arrow_match.group(3) or ""),
+                    }
+                )
+
+    # Timeline ASCII
+    timeline_ascii = ""
+    for key in ("timeline", "commit timeline", "ascii timeline"):
+        if key in sections:
+            code_match = re.search(r"```[^\n]*\n(.*?)```", sections[key], re.DOTALL)
+            if code_match:
+                timeline_ascii = code_match.group(1).strip()
+            break
+
+    # Code metrics
+    code_metrics: dict[str, str] = {}
+    for key in ("code metrics", "statistics", "metrics"):
+        if key in sections:
+            for line in _bullet_lines(sections[key]):
+                kv = re.match(r"(.+?):\s*(.+)", line)
+                if kv:
+                    code_metrics[_compact(kv.group(1)).lower()] = _compact(kv.group(2))
+            break
+
+    # Only return if we have meaningful content
+    if not exec_summary and not phases:
+        return None
+
+    return {
+        "executive_summary": exec_summary,
+        "phases": phases,
+        "architecture_diagrams": architecture_diagrams,
+        "architectural_decisions": architectural_decisions[:6],
+        "challenges": challenges[:6],
+        "tech_oscillations": tech_oscillations[:6],
+        "timeline_ascii": timeline_ascii,
+        "code_metrics": code_metrics,
+    }
+
+
 def _thought_garden(job_hunt_text: str, personal_bible_text: str) -> list[dict[str, str]]:
     sections = _section_map(job_hunt_text)
     interests = _bullet_lines(sections.get("my interests (for company matching)"))
@@ -784,7 +1121,10 @@ def _thought_garden(job_hunt_text: str, personal_bible_text: str) -> list[dict[s
     return [
         {
             "title": topic,
-            "summary": _excerpt(f"This theme shows up repeatedly in Ahmad's current work, job search, and long-term product interests: {topic}.", limit=180),
+            "summary": _excerpt(
+                f"This theme shows up repeatedly in Ahmad's current work, job search, and long-term product interests: {topic}.",
+                limit=180,
+            ),
         }
         for topic in topics[:6]
     ]
@@ -804,10 +1144,18 @@ def _project_match_score(project: dict[str, Any], overlay: dict[str, Any]) -> in
     if project_title and overlay_title and project_title.lower() == overlay_title.lower():
         return 10
     score = 0
-    if project_slug and overlay_slug and (project_slug in overlay_slug or overlay_slug in project_slug):
+    if (
+        project_slug
+        and overlay_slug
+        and (project_slug in overlay_slug or overlay_slug in project_slug)
+    ):
         score += 5
-    project_tokens = {token for token in re.findall(r"[a-z0-9]{4,}", f"{project_title} {project_slug}".lower())}
-    overlay_tokens = {token for token in re.findall(r"[a-z0-9]{4,}", f"{overlay_title} {overlay_slug}".lower())}
+    project_tokens = {
+        token for token in re.findall(r"[a-z0-9]{4,}", f"{project_title} {project_slug}".lower())
+    }
+    overlay_tokens = {
+        token for token in re.findall(r"[a-z0-9]{4,}", f"{overlay_title} {overlay_slug}".lower())
+    }
     score += len(project_tokens & overlay_tokens)
     return score
 
@@ -827,10 +1175,19 @@ async def _load_live_project_overlay(session: AsyncSession) -> list[dict[str, An
     overlay_items: list[dict[str, Any]] = []
     for note in project_notes:
         snapshot = await store.get_project_state_snapshot(session, note.id)
-        recent_activity = await store.list_recent_activity(session, project_note_id=note.id, limit=8)
+        recent_activity = await store.list_recent_activity(
+            session, project_note_id=note.id, limit=8
+        )
         if not snapshot and not recent_activity:
             continue
-        latest_closeout = next((item for item in recent_activity if getattr(item, "entry_type", "") == "session_closeout"), None)
+        latest_closeout = next(
+            (
+                item
+                for item in recent_activity
+                if getattr(item, "entry_type", "") == "session_closeout"
+            ),
+            None,
+        )
         recent_updates: list[str] = []
         recent_titles: list[str] = []
         for entry in recent_activity:
@@ -852,13 +1209,17 @@ async def _load_live_project_overlay(session: AsyncSession) -> list[dict[str, An
                 "slug": _slugify(note.title),
                 "title": note.title,
                 "status": snapshot.status if snapshot else note.status,
-                "active_score": round(float(snapshot.active_score), 3) if snapshot and snapshot.active_score is not None else None,
+                "active_score": round(float(snapshot.active_score), 3)
+                if snapshot and snapshot.active_score is not None
+                else None,
                 "implemented": _excerpt(snapshot.implemented, limit=220) if snapshot else "",
                 "remaining": _excerpt(snapshot.remaining, limit=220) if snapshot else "",
                 "what_changed": _excerpt(snapshot.what_changed, limit=220) if snapshot else "",
                 "holes": list((snapshot.holes or [])[:4]) if snapshot else [],
                 "blockers": list((snapshot.blockers or [])[:4]) if snapshot else [],
-                "last_signal_at": format_display_datetime(snapshot.last_signal_at) if snapshot else "",
+                "last_signal_at": format_display_datetime(snapshot.last_signal_at)
+                if snapshot
+                else "",
                 "latest_closeout": _excerpt(
                     getattr(latest_closeout, "summary", None)
                     or getattr(latest_closeout, "title", None)
@@ -868,7 +1229,11 @@ async def _load_live_project_overlay(session: AsyncSession) -> list[dict[str, An
                 )
                 if latest_closeout
                 else "",
-                "latest_closeout_at": format_display_datetime(getattr(latest_closeout, "happened_at", None)) if latest_closeout else "",
+                "latest_closeout_at": format_display_datetime(
+                    getattr(latest_closeout, "happened_at", None)
+                )
+                if latest_closeout
+                else "",
                 "recent_updates": recent_updates[:4],
                 "recent_titles": recent_titles[:4],
             }
@@ -884,7 +1249,9 @@ async def _load_live_project_overlay(session: AsyncSession) -> list[dict[str, An
     return overlay_items
 
 
-def _merge_live_project_overlay(read_models: dict[str, dict[str, Any]], live_overlay: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _merge_live_project_overlay(
+    read_models: dict[str, dict[str, Any]], live_overlay: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     if not live_overlay:
         return read_models
 
@@ -958,7 +1325,9 @@ def _merge_live_project_overlay(read_models: dict[str, dict[str, Any]], live_ove
     ]
 
     if live_focus:
-        current_arc["focus"] = _dedupe_strings(list(current_arc.get("focus") or []) + live_focus)[:6]
+        current_arc["focus"] = _dedupe_strings(list(current_arc.get("focus") or []) + live_focus)[
+            :6
+        ]
     current_arc["live_projects"] = live_project_cards[:4]
 
     overview["current_arc"] = current_arc
@@ -1012,6 +1381,8 @@ def build_profile_narrative() -> dict[str, Any]:
     contact_modes = _contact_modes(personal_bible_text)
     personal_texture = _personal_texture(personal_bible_text)
     thought_garden = _thought_garden(job_hunt_text, personal_bible_text)
+    currently = _currently_feed(seed_dir)
+    repo_histories = _parse_repo_histories(seed_dir)
 
     faq = [
         {
@@ -1020,7 +1391,9 @@ def build_profile_narrative() -> dict[str, Any]:
         },
         {
             "question": "What is duSraBheja?",
-            "answer": next((project.summary for project in projects if project.slug == "dusrabheja"), ""),
+            "answer": next(
+                (project.summary for project in projects if project.slug == "dusrabheja"), ""
+            ),
         },
         {
             "question": "Why is the site structured like a life story instead of a normal portfolio?",
@@ -1048,6 +1421,8 @@ def build_profile_narrative() -> dict[str, Any]:
         "thought_garden": thought_garden,
         "photos": photos,
         "faq": faq,
+        "currently": currently,
+        "repo_histories": repo_histories,
         "source_pack": {
             "seed_dir": str(seed_dir),
             "files": [
@@ -1251,7 +1626,15 @@ async def build_profile_read_models(session: AsyncSession) -> dict[str, dict[str
     }
     library = {
         "principle": "The library should explain the person, not just list machine-derived objects.",
-        "read_surfaces": ["Overview", "Timeline", "Expertise", "Projects", "Sources", "Coverage", "Library"],
+        "read_surfaces": [
+            "Overview",
+            "Timeline",
+            "Expertise",
+            "Projects",
+            "Sources",
+            "Coverage",
+            "Library",
+        ],
         "summary": "The current system has strong raw storage primitives. The missing layer is curated meaning: eras, expertise books, institutions, and proof-backed chapters.",
     }
     read_models = {
@@ -1268,7 +1651,9 @@ async def build_profile_read_models(session: AsyncSession) -> dict[str, dict[str
     return _merge_live_project_overlay(read_models, live_project_overlay)
 
 
-async def materialize_profile_read_models(session: AsyncSession, *, force: bool = False) -> dict[str, dict[str, Any]]:
+async def materialize_profile_read_models(
+    session: AsyncSession, *, force: bool = False
+) -> dict[str, dict[str, Any]]:
     existing = {
         record.capability_key: record
         for record in await store.list_capability_records(session, limit=100)
@@ -1276,7 +1661,9 @@ async def materialize_profile_read_models(session: AsyncSession, *, force: bool 
     }
     stale = force or not existing
     if not stale:
-        newest = max((record.updated_at for record in existing.values() if record.updated_at), default=None)
+        newest = max(
+            (record.updated_at for record in existing.values() if record.updated_at), default=None
+        )
         stale = newest is None or newest < (_utcnow() - PUBLIC_MODEL_TTL)
     if stale:
         payloads = await build_profile_read_models(session)

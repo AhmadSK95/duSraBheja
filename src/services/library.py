@@ -31,7 +31,7 @@ def _excerpt(value: str | None, *, limit: int = 320) -> str | None:
     cleaned = (value or "").strip()
     if not cleaned:
         return None
-    return cleaned if len(cleaned) <= limit else f"{cleaned[:limit - 1].rstrip()}…"
+    return cleaned if len(cleaned) <= limit else f"{cleaned[: limit - 1].rstrip()}…"
 
 
 def _normalize_name(value: str | None) -> str:
@@ -65,7 +65,12 @@ async def _promote_notes(session: AsyncSession) -> dict[str, list[str]]:
     for note in projects:
         aliases = [note.title]
         if note.category == "project":
-            aliases.extend(alias.alias for alias in await store.list_project_aliases(session, project_note_id=note.id, limit=50))
+            aliases.extend(
+                alias.alias
+                for alias in await store.list_project_aliases(
+                    session, project_note_id=note.id, limit=50
+                )
+            )
         thread = await store.upsert_thread_record(
             session,
             source_kind="note",
@@ -131,6 +136,37 @@ async def _promote_artifacts(session: AsyncSession) -> None:
         )
 
 
+async def promote_single_artifact(session: AsyncSession, artifact: Artifact) -> None:
+    """Promote a single artifact to an EvidenceRecord immediately after librarian processing."""
+    interpretation = {"category": artifact.content_type, "capture_intent": "thought"}
+    await store.upsert_evidence_record(
+        session,
+        source_kind="artifact",
+        source_ref=str(artifact.id),
+        artifact_id=artifact.id,
+        title=artifact.summary or artifact.content_type.title(),
+        summary=_excerpt(
+            interpretation.get("category") or artifact.summary or artifact.content_type
+        ),
+        excerpt=_excerpt(artifact.raw_text),
+        content_kind=artifact.content_type,
+        source_type=artifact.source,
+        provenance_kind=signal_kind_for_artifact(
+            source=artifact.source,
+            capture_context=(artifact.metadata_ or {}).get("capture_context"),
+        ),
+        retention_class="warm",
+        content_hash=artifact.blob_hash,
+        is_sensitive=bool((artifact.metadata_ or {}).get("sensitive")),
+        metadata_={
+            "capture_intent": interpretation.get("capture_intent"),
+            "category": interpretation.get("category"),
+            "promoted_inline": True,
+        },
+        event_time=artifact.created_at,
+    )
+
+
 async def _promote_source_items(session: AsyncSession) -> None:
     result = await session.execute(
         select(SourceItem).order_by(SourceItem.created_at.desc()).limit(250)
@@ -145,7 +181,13 @@ async def _promote_source_items(session: AsyncSession) -> None:
             project_note_id=source_item.project_note_id,
             title=source_item.title,
             summary=_excerpt(source_item.summary),
-            excerpt=_excerpt(str((source_item.payload or {}).get("body_markdown") or (source_item.payload or {}).get("summary") or "")),
+            excerpt=_excerpt(
+                str(
+                    (source_item.payload or {}).get("body_markdown")
+                    or (source_item.payload or {}).get("summary")
+                    or ""
+                )
+            ),
             content_kind=str((source_item.payload or {}).get("entry_type") or "text"),
             source_type=str((source_item.payload or {}).get("source_type") or "source_item"),
             provenance_kind="direct_sync",
@@ -157,18 +199,26 @@ async def _promote_source_items(session: AsyncSession) -> None:
         )
 
 
-async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project: dict[str, list[str]]) -> None:
+async def _promote_journal_entries(
+    session: AsyncSession, thread_ids_by_project: dict[str, list[str]]
+) -> None:
     entries = await store.list_recent_activity(session, limit=300)
     for entry in entries:
         if entry.entry_type in LOW_SIGNAL_ENTRY_TYPES:
             continue
-        project_refs = thread_ids_by_project.get(str(entry.project_note_id), []) if entry.project_note_id else []
+        project_refs = (
+            thread_ids_by_project.get(str(entry.project_note_id), [])
+            if entry.project_note_id
+            else []
+        )
         title = entry.title
         summary = _excerpt(entry.summary or entry.body_markdown)
         body = _excerpt(entry.body_markdown, limit=2000)
         base_values = {
             "project_note_id": entry.project_note_id,
-            "provenance_kind": signal_kind_for_event(entry_type=entry.entry_type, actor_type=entry.actor_type),
+            "provenance_kind": signal_kind_for_event(
+                entry_type=entry.entry_type, actor_type=entry.actor_type
+            ),
             "thread_ids": project_refs[:1],
             "entity_ids": project_refs[1:2],
             "metadata_": {
@@ -197,7 +247,9 @@ async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project:
                 **base_values,
             )
             continue
-        observation_type = "decision" if entry.decision else "question" if entry.open_question else "fact"
+        observation_type = (
+            "decision" if entry.decision else "question" if entry.open_question else "fact"
+        )
         await store.upsert_observation_record(
             session,
             source_kind="journal_entry",
@@ -209,17 +261,25 @@ async def _promote_journal_entries(session: AsyncSession, thread_ids_by_project:
             certainty=0.92 if entry.actor_type in {"human", "agent"} else 0.78,
             actor=entry.actor_name,
             evidence_ids=list(entry.evidence_refs or []),
-            retention_class="hot" if entry.entry_type in {"progress_update", "session_closeout", "decision"} else "warm",
+            retention_class="hot"
+            if entry.entry_type in {"progress_update", "session_closeout", "decision"}
+            else "warm",
             **base_values,
         )
 
 
-async def _promote_conversation_sessions(session: AsyncSession, thread_ids_by_project: dict[str, list[str]]) -> None:
+async def _promote_conversation_sessions(
+    session: AsyncSession, thread_ids_by_project: dict[str, list[str]]
+) -> None:
     result = await session.execute(
         select(ConversationSession).order_by(ConversationSession.updated_at.desc()).limit(200)
     )
     for conversation in result.scalars().all():
-        thread_refs = thread_ids_by_project.get(str(conversation.project_note_id), []) if conversation.project_note_id else []
+        thread_refs = (
+            thread_ids_by_project.get(str(conversation.project_note_id), [])
+            if conversation.project_note_id
+            else []
+        )
         await store.upsert_episode_record(
             session,
             source_kind="conversation_session",
@@ -246,10 +306,10 @@ async def _promote_conversation_sessions(session: AsyncSession, thread_ids_by_pr
         )
 
 
-async def _promote_boards(session: AsyncSession, thread_ids_by_project: dict[str, list[str]]) -> None:
-    result = await session.execute(
-        select(Board).order_by(Board.created_at.desc()).limit(60)
-    )
+async def _promote_boards(
+    session: AsyncSession, thread_ids_by_project: dict[str, list[str]]
+) -> None:
+    result = await session.execute(select(Board).order_by(Board.created_at.desc()).limit(60))
     for board in result.scalars().all():
         await store.upsert_synthesis_record(
             session,
@@ -258,7 +318,11 @@ async def _promote_boards(session: AsyncSession, thread_ids_by_project: dict[str
             project_note_id=None,
             synthesis_type=f"{board.board_type}_board",
             title=f"{board.board_type.title()} board for {board.generated_for_date.isoformat()}",
-            summary=_excerpt(str((board.payload or {}).get("story") or (board.payload or {}).get("summary") or "")),
+            summary=_excerpt(
+                str(
+                    (board.payload or {}).get("story") or (board.payload or {}).get("summary") or ""
+                )
+            ),
             body=_excerpt(str(board.payload), limit=4000),
             certainty_class="grounded_observation",
             provenance_kind="derived_system",
@@ -342,7 +406,11 @@ async def build_library_catalog(
                     provenance_kind=record.provenance_kind,
                     event_time=record.last_event_at or record.updated_at,
                     source_type=record.source_kind,
-                    metadata={"status": record.status, "subject_ref": record.subject_ref, "aliases": record.aliases or []},
+                    metadata={
+                        "status": record.status,
+                        "subject_ref": record.subject_ref,
+                        "aliases": record.aliases or [],
+                    },
                 )
             )
     if record_kind in (None, "", "episode"):
@@ -357,7 +425,10 @@ async def build_library_catalog(
                     provenance_kind=record.provenance_kind,
                     event_time=record.coverage_end or record.coverage_start or record.updated_at,
                     source_type=record.source_kind,
-                    metadata={"participants": record.participants or [], "thread_ids": record.thread_ids or []},
+                    metadata={
+                        "participants": record.participants or [],
+                        "thread_ids": record.thread_ids or [],
+                    },
                 )
             )
     if record_kind in (None, "", "observation"):
@@ -387,7 +458,10 @@ async def build_library_catalog(
                     provenance_kind="direct_sync",
                     event_time=record.last_seen_at or record.updated_at,
                     source_type=record.source_kind,
-                    metadata={"aliases": record.aliases or [], "thread_ids": record.thread_ids or []},
+                    metadata={
+                        "aliases": record.aliases or [],
+                        "thread_ids": record.thread_ids or [],
+                    },
                 )
             )
     if record_kind in (None, "", "synthesis"):
@@ -402,7 +476,10 @@ async def build_library_catalog(
                     provenance_kind=record.provenance_kind,
                     event_time=record.event_time or record.updated_at,
                     source_type=record.source_kind,
-                    metadata={"certainty_class": record.certainty_class, "thread_ids": record.thread_ids or []},
+                    metadata={
+                        "certainty_class": record.certainty_class,
+                        "thread_ids": record.thread_ids or [],
+                    },
                 )
             )
     if record_kind in (None, "", "evidence"):
@@ -417,7 +494,10 @@ async def build_library_catalog(
                     provenance_kind=record.provenance_kind,
                     event_time=record.event_time or record.updated_at,
                     source_type=record.source_type,
-                    metadata={"retention_class": record.retention_class, "is_sensitive": record.is_sensitive},
+                    metadata={
+                        "retention_class": record.retention_class,
+                        "is_sensitive": record.is_sensitive,
+                    },
                 )
             )
     if facet:

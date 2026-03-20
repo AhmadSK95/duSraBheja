@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from src.database import async_session
 from src.lib import store
 from src.services.cognition import run_continuous_cognition
+from src.services.library import sync_canonical_library
 from src.services.project_state import generate_case_study
 
 log = logging.getLogger("brain.cognition-task")
@@ -18,6 +19,13 @@ CASE_STUDY_STALENESS_DAYS = 7
 
 async def run_continuous_cognition_task(ctx) -> dict:
     async with async_session() as session:
+        # C4: Sync canonical library before cognition so it operates on promoted evidence
+        try:
+            await sync_canonical_library(session)
+            await session.commit()
+        except Exception:
+            log.warning("Library sync before cognition failed (non-fatal)")
+
         result = await run_continuous_cognition(session)
 
         # Refresh case studies for active projects if stale

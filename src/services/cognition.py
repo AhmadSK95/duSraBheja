@@ -25,6 +25,9 @@ Return ONLY valid JSON with this exact shape:
   ],
   "research_threads": [
     {"title": "research thread", "body": "what to learn next", "project_ref": "project or null"}
+  ],
+  "patterns": [
+    {"title": "pattern name", "body": "cross-cutting theme or repeated approach", "source_refs": ["project"]}
   ]
 }
 
@@ -66,7 +69,7 @@ async def run_continuous_cognition(
         )
     context_text = "\n".join(context_lines).strip()
 
-    synthesized = {"synapses": [], "blind_spots": [], "research_threads": []}
+    synthesized = {"synapses": [], "blind_spots": [], "research_threads": [], "patterns": []}
     try:
         result = await agent_call(
             session,
@@ -165,10 +168,24 @@ async def run_continuous_cognition(
         )
         created += 1
 
+    for pattern in synthesized.get("patterns") or []:
+        await store.upsert_synthesis_record(
+            session,
+            source_kind="cognition",
+            source_ref=f"pattern:{pattern.get('title', 'unknown')}",
+            project_note_id=None,
+            synthesis_type="pattern",
+            title=pattern.get("title") or "Cross-cutting pattern",
+            summary=(pattern.get("body") or "")[:500],
+            body=pattern.get("body") or "",
+            certainty_class="plausible_inference",
+            provenance_kind="derived_system",
+            metadata_={"source_refs": list(pattern.get("source_refs") or [])},
+        )
+        created += 1
+
     # Phase 10: Expertise model synthesis
-    expertise_created = await _synthesize_expertise_models(
-        session, projects, trace_id=trace_id
-    )
+    expertise_created = await _synthesize_expertise_models(session, projects, trace_id=trace_id)
     created += expertise_created
 
     return {"status": "completed", "items_imported": created}
@@ -255,8 +272,11 @@ async def _synthesize_expertise_models(
             synthesis_type="expertise_model",
             title=f"Expertise: {expertise.get('domain', project.title)}",
             summary=expertise.get("approach", "")[:500],
-            body=(expertise.get("approach", "") + "\n\n"
-                  + "\n".join(f"- {p}" for p in expertise.get("patterns", []))),
+            body=(
+                expertise.get("approach", "")
+                + "\n\n"
+                + "\n".join(f"- {p}" for p in expertise.get("patterns", []))
+            ),
             certainty_class="grounded_observation",
             metadata_=expertise,
         )

@@ -50,6 +50,10 @@ Output rules:
 - Cite sources as [1], [2], etc. only when they are actually grounded in the evidence.
 - If the evidence is mixed or weak, say so plainly instead of sounding certain.
 - Do not include irrelevant sources just because they were retrieved.
+- If overall evidence quality < 0.45, lead with "Based on limited evidence..." or equivalent hedging.
+- If contradiction_risk > 0.3, explicitly flag conflicting signals to the user.
+- If freshness < 0.3, note that evidence may be dated.
+- Never sound certain when evidence is weak — calibrate confidence to evidence strength.
 """
 
 EXACT_FACT_SYSTEM_PROMPT = """You answer exact personal or project fact questions from grounded evidence only.
@@ -62,6 +66,9 @@ Output rules:
 - Add a brief evidence note after the answer when useful.
 - Cite only grounded sources as [1], [2], etc.
 - Do not generalize from partial matches.
+- If overall evidence quality < 0.45, preface with "Based on limited evidence..." or similar.
+- If contradiction_risk > 0.3, flag conflicting values explicitly.
+- If freshness < 0.3, note the evidence age.
 """
 
 TIMELINE_ANSWER_SYSTEM_PROMPT = """You build a grounded timeline or review answer from the supplied evidence.
@@ -74,6 +81,9 @@ Output rules:
 - Keep names, dates, and causal links precise.
 - If the story is incomplete, say where the gaps are.
 - Cite grounded sources as [1], [2], etc.
+- If overall evidence quality < 0.45, lead with "Based on limited evidence..." or equivalent.
+- If contradiction_risk > 0.3, flag conflicting timeline points.
+- If freshness < 0.3, note the age of evidence.
 """
 
 BOARD_NARRATIVE_SYSTEM_PROMPT = """You turn a closed time window of grounded evidence into a readable board narrative.

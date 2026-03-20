@@ -27,7 +27,11 @@ from src.lib.provenance import (
 from src.lib.time import coerce_datetime, describe_event_time, format_display_datetime
 from src.services.brain_atlas import build_brain_atlas_snapshot
 from src.services.brain_os import build_brain_self_description
-from src.services.identity import infer_project_from_text, is_low_signal_project_name, resolve_project
+from src.services.identity import (
+    infer_project_from_text,
+    is_low_signal_project_name,
+    resolve_project,
+)
 from src.services.openai_web import answer_question_with_web
 from src.services.persona import build_persona_packet, render_persona_context
 from src.services.profile_narrative import materialize_profile_read_models
@@ -112,7 +116,13 @@ EXACT_FACT_HINTS = (
     "account",
     "port",
 )
-PROJECT_FOCUSED_INTENTS = {"project_latest", "project_status", "project_review", "timeline_review", "latest_status"}
+PROJECT_FOCUSED_INTENTS = {
+    "project_latest",
+    "project_status",
+    "project_review",
+    "timeline_review",
+    "latest_status",
+}
 LOW_SIGNAL_PROJECT_ENTRY_TYPES = {
     "context_dump",
     "context_signal_dump",
@@ -289,10 +299,22 @@ def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
         return "active_projects"
     if any(
         phrase in lowered
-        for phrase in ("best approach", "what's missing", "what is missing", "holes", "review project", "review this project", "is this the best")
+        for phrase in (
+            "best approach",
+            "what's missing",
+            "what is missing",
+            "holes",
+            "review project",
+            "review this project",
+            "is this the best",
+        )
     ):
         return "project_review"
-    if "show sources" in lowered or lowered.startswith("sources") or lowered.startswith("show me sources"):
+    if (
+        "show sources" in lowered
+        or lowered.startswith("sources")
+        or lowered.startswith("show me sources")
+    ):
         return "sources"
     if "timeline" in lowered or "story of" in lowered or "walk me through" in lowered:
         return "timeline"
@@ -300,7 +322,12 @@ def detect_query_mode(question: str, requested_mode: str | None = None) -> str:
         return "changed_since"
     if any(phrase in lowered for phrase in REBOOT_QUERY_HINTS):
         return "latest"
-    if "latest" in lowered or "recent" in lowered or "status" in lowered or "what's the latest" in lowered:
+    if (
+        "latest" in lowered
+        or "recent" in lowered
+        or "status" in lowered
+        or "what's the latest" in lowered
+    ):
         return "latest"
     return "answer"
 
@@ -334,11 +361,19 @@ def should_use_web_enrichment(
     if profile_query:
         return False
     lowered = (question or "").strip().lower()
-    if project_payload and resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"}:
+    if project_payload and resolved_intent in {
+        "project_latest",
+        "project_status",
+        "project_review",
+        "timeline_review",
+    }:
         return any(hint in lowered for hint in EXTERNAL_WEB_HINTS)
     if project_payload and any(hint in lowered for hint in PERSONAL_QUERY_HINTS):
         return False
-    if resolved_intent in {"project_latest", "project_status"} and float((evidence_quality or {}).get("overall", 0.0)) >= 0.55:
+    if (
+        resolved_intent in {"project_latest", "project_status"}
+        and float((evidence_quality or {}).get("overall", 0.0)) >= 0.55
+    ):
         return False
     return True
 
@@ -413,7 +448,10 @@ def _low_signal_text_penalty(value: str | None) -> float:
 
 def _allows_operational_noise(intent: str, question: str | None = None) -> bool:
     lowered = (question or "").lower()
-    if any(token in lowered for token in ("todo", "to-do", "plan", "checklist", "sync", "collector", "dashboard health")):
+    if any(
+        token in lowered
+        for token in ("todo", "to-do", "plan", "checklist", "sync", "collector", "dashboard health")
+    ):
         return True
     return intent in {"sources", "timeline_review"}
 
@@ -519,7 +557,9 @@ def _project_alias_terms(project_payload: dict | None) -> list[str]:
             repo.get("name"),
             repo.get("url"),
             repo.get("local_path"),
-            f"{repo.get('owner')}/{repo.get('name')}" if repo.get("owner") and repo.get("name") else None,
+            f"{repo.get('owner')}/{repo.get('name')}"
+            if repo.get("owner") and repo.get("name")
+            else None,
         ):
             cleaned = str(value or "").strip()
             if cleaned:
@@ -547,8 +587,13 @@ def _project_match_strength(text: str | None, project_payload: dict | None) -> f
         if not normalized_candidate:
             continue
         compact_candidate = normalized_candidate.replace(" ", "")
-        if normalized_candidate in normalized_haystack or (compact_candidate and compact_candidate in compact_haystack):
-            best = max(best, 1.0 if candidate == (project_payload.get("project") or {}).get("title") else 0.92)
+        if normalized_candidate in normalized_haystack or (
+            compact_candidate and compact_candidate in compact_haystack
+        ):
+            best = max(
+                best,
+                1.0 if candidate == (project_payload.get("project") or {}).get("title") else 0.92,
+            )
             continue
         tokens = [token for token in normalized_candidate.split() if len(token) >= 3]
         if tokens and all(token in normalized_haystack for token in tokens):
@@ -560,9 +605,11 @@ def _workspace_signal_adjustment(text: str | None, project_payload: dict | None)
     haystack = (text or "").lower()
     if not haystack or not project_payload:
         return 0.0
-    has_current_workspace = any(
-        hint in haystack for hint in CURRENT_WORKSPACE_HINTS
-    ) or any(str(repo.get("local_path") or "").lower() in haystack for repo in (project_payload.get("repos") or []) if repo.get("local_path"))
+    has_current_workspace = any(hint in haystack for hint in CURRENT_WORKSPACE_HINTS) or any(
+        str(repo.get("local_path") or "").lower() in haystack
+        for repo in (project_payload.get("repos") or [])
+        if repo.get("local_path")
+    )
     project_has_current_workspace = any(
         any(hint in str(repo.get("local_path") or "").lower() for hint in CURRENT_WORKSPACE_HINTS)
         for repo in (project_payload.get("repos") or [])
@@ -600,7 +647,9 @@ def _source_merge_score(item: dict) -> float:
     if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
         score -= 0.14
     if item.get("event_time_utc"):
-        score += min(0.08, _recency_score(item.get("event_time_utc"), now=datetime.now(timezone.utc)) * 0.08)
+        score += min(
+            0.08, _recency_score(item.get("event_time_utc"), now=datetime.now(timezone.utc)) * 0.08
+        )
     return round(score, 3)
 
 
@@ -704,7 +753,10 @@ def _profile_model_source_text(capability_key: str, payload: dict[str, Any]) -> 
         return (
             "Life Timeline",
             "\n".join(
-                [f"{item.get('years')}: {item.get('title')} | {item.get('summary')}" for item in eras[:5]]
+                [
+                    f"{item.get('years')}: {item.get('title')} | {item.get('summary')}"
+                    for item in eras[:5]
+                ]
                 + [f"{item.get('year')}: {item.get('event')}" for item in events[:8]]
             ),
         )
@@ -768,13 +820,22 @@ async def _collect_profile_sources(
         overlap = len(question_terms & content_terms)
         intent_bonus = 0.0
         lowered = question.lower()
-        if capability_key == "profile:timeline" and any(token in lowered for token in ("journey", "timeline", "study", "education", "iit", "nyu", "amazon")):
+        if capability_key == "profile:timeline" and any(
+            token in lowered
+            for token in ("journey", "timeline", "study", "education", "iit", "nyu", "amazon")
+        ):
             intent_bonus = 0.18
-        elif capability_key == "profile:expertise" and any(token in lowered for token in ("expertise", "know", "skills", "engineer")):
+        elif capability_key == "profile:expertise" and any(
+            token in lowered for token in ("expertise", "know", "skills", "engineer")
+        ):
             intent_bonus = 0.18
-        elif capability_key == "profile:projects" and any(token in lowered for token in ("projects", "built", "work")):
+        elif capability_key == "profile:projects" and any(
+            token in lowered for token in ("projects", "built", "work")
+        ):
             intent_bonus = 0.18
-        elif capability_key == "profile:coverage" and any(token in lowered for token in ("missing", "ingest", "data", "coverage")):
+        elif capability_key == "profile:coverage" and any(
+            token in lowered for token in ("missing", "ingest", "data", "coverage")
+        ):
             intent_bonus = 0.18
         similarity = min(0.95, 0.48 + min(overlap, 6) * 0.07 + intent_bonus)
         items.append(
@@ -795,8 +856,14 @@ async def _collect_profile_sources(
     return items[:limit]
 
 
-def _coerce_source_item(candidate: dict, *, retrieval_kind: str, fallback_signal_kind: str = "direct_sync") -> dict:
-    if "signal_kind" in candidate and "retrieval_kind" in candidate and "event_time_local" in candidate:
+def _coerce_source_item(
+    candidate: dict, *, retrieval_kind: str, fallback_signal_kind: str = "direct_sync"
+) -> dict:
+    if (
+        "signal_kind" in candidate
+        and "retrieval_kind" in candidate
+        and "event_time_local" in candidate
+    ):
         return candidate
     event_time = candidate.get("event_time") or candidate.get("created_at")
     if isinstance(event_time, str):
@@ -829,7 +896,11 @@ def _facet_source_is_salient(
 ) -> bool:
     facet_type = str(facet.get("facet_type") or "")
     signal_kind = str(facet.get("signal_kind") or "")
-    if _low_signal_text_penalty(facet.get("title")) + _low_signal_text_penalty(facet.get("summary")) >= 0.3:
+    if (
+        _low_signal_text_penalty(facet.get("title"))
+        + _low_signal_text_penalty(facet.get("summary"))
+        >= 0.3
+    ):
         return False
     if facet_type in {"thoughts", "ideas"} and signal_kind == "direct_sync":
         return False
@@ -920,7 +991,9 @@ async def _collect_facet_sources(
                     facet_type="stories",
                     signal_kind=event.get("signal_kind") or "direct_sync",
                     happened_at=event.get("happened_at_utc"),
-                    similarity=min(0.92, 0.68 + _recency_score(event.get("happened_at_utc"), now=now) * 0.22),
+                    similarity=min(
+                        0.92, 0.68 + _recency_score(event.get("happened_at_utc"), now=now) * 0.22
+                    ),
                     retrieval_kind="facet_story_river",
                     metadata={"event_type": event.get("event_type")},
                 )
@@ -1044,6 +1117,43 @@ def _collect_temporal_project_sources(
     return matching[:limit]
 
 
+async def _collect_cognition_sources(
+    session: AsyncSession,
+    question: str,
+    project_title: str | None = None,
+) -> list[dict]:
+    """Fetch expertise models, synapses, blind spots, and patterns from SynthesisRecords."""
+    sources: list[dict] = []
+    types = ["expertise_model", "synapse", "blind_spot", "pattern"]
+    for synth_type in types:
+        records = await store.list_synthesis_records(
+            session, synthesis_type=synth_type, q=project_title, limit=3
+        )
+        for record in records:
+            metadata = dict(record.metadata_ or {})
+            content_parts = [record.summary or ""]
+            if synth_type == "expertise_model":
+                content_parts.extend(f"- {p}" for p in (metadata.get("patterns") or [])[:4])
+                content_parts.extend(
+                    f"- heuristic: {h}" for h in (metadata.get("heuristics") or [])[:3]
+                )
+            sources.append(
+                {
+                    "title": record.title or synth_type,
+                    "content": "\n".join(content_parts),
+                    "category": synth_type,
+                    "retrieval_kind": f"cognition_{synth_type}",
+                    "signal_kind": "derived_system",
+                    "similarity": 0.7,
+                    "event_time_utc": (record.event_time or record.updated_at or "").isoformat()
+                    if hasattr(record.event_time or record.updated_at, "isoformat")
+                    else "",
+                    "event_time_local": "",
+                }
+            )
+    return sources[:8]
+
+
 def format_story_context(
     *,
     mode: str,
@@ -1071,6 +1181,11 @@ def format_story_context(
                 f"- contradiction_risk={evidence_quality.get('contradiction_risk', 0.0):.2f}",
             ]
         )
+        overall = evidence_quality.get("overall", 0.0)
+        quality_label = "strong" if overall >= 0.65 else "moderate" if overall >= 0.4 else "thin"
+        sections.append(f"- quality_label={quality_label}")
+        if evidence_quality.get("contradiction_risk", 0.0) > 0.3:
+            sections.append("- WARNING: Conflicting signals detected across sources.")
 
     if project_payload:
         project = project_payload["project"]
@@ -1111,6 +1226,12 @@ def format_story_context(
                 f"[{index}] {item['category']}: {item['title']} | kind={item['retrieval_kind']} | "
                 f"signal={item['signal_kind']} | when={item.get('event_time_local') or 'unknown'} :: {item['content']}"
             )
+
+    cognition_items = [s for s in sources if s.get("retrieval_kind", "").startswith("cognition_")]
+    if cognition_items:
+        sections.extend(["", "Cognition Insights:"])
+        for item in cognition_items:
+            sections.append(f"- [{item['category']}] {item['title']}: {item['content'][:300]}")
 
     return "\n".join(sections).strip()
 
@@ -1207,11 +1328,22 @@ def _curate_vector_sources(
             adjusted -= _low_signal_text_penalty(combined_text) * 0.35
             if candidate.get("event_time_utc"):
                 adjusted += _recency_score(candidate.get("event_time_utc"), now=now) * 0.06
-            if project_payload and project_match <= 0 and candidate.get("signal_kind") == "derived_system":
+            if (
+                project_payload
+                and project_match <= 0
+                and candidate.get("signal_kind") == "derived_system"
+            ):
                 adjusted -= 0.15
-            if _contains_legacy_workspace(combined_text) and project_payload and workspace_adjustment < 0:
+            if (
+                _contains_legacy_workspace(combined_text)
+                and project_payload
+                and workspace_adjustment < 0
+            ):
                 adjusted -= 0.08
-            if not _allows_operational_noise(intent) and _low_signal_text_penalty(combined_text) >= 0.3:
+            if (
+                not _allows_operational_noise(intent)
+                and _low_signal_text_penalty(combined_text) >= 0.3
+            ):
                 adjusted -= 0.18
         candidate["similarity"] = round(max(0.0, min(0.99, adjusted)), 3)
         candidate["metadata"] = {
@@ -1222,7 +1354,9 @@ def _curate_vector_sources(
         if project_focused and candidate["similarity"] < 0.34:
             continue
         curated.append(candidate)
-    curated.sort(key=lambda item: (_source_merge_score(item), item.get("event_time_utc") or ""), reverse=True)
+    curated.sort(
+        key=lambda item: (_source_merge_score(item), item.get("event_time_utc") or ""), reverse=True
+    )
     return curated[:8]
 
 
@@ -1269,7 +1403,7 @@ async def _collect_exact_sources(
                 + project_match * 0.16
                 + _recency_score(artifact.created_at, now=now) * 0.1
                 + _directness_similarity_bonus(signal_kind),
-                + _workspace_signal_adjustment(content, project_payload),
+                +_workspace_signal_adjustment(content, project_payload),
             )
             exact_sources.append(
                 _build_source_item(
@@ -1293,7 +1427,12 @@ async def _collect_exact_sources(
         note_hits = await store.search_notes_text(session, phrases, limit=limit)
         for hit in note_hits:
             note = hit["note"]
-            if not _allows_operational_noise(intent, question) and _low_signal_text_penalty(note.title) + _low_signal_text_penalty(note.content or "") >= 0.3:
+            if (
+                not _allows_operational_noise(intent, question)
+                and _low_signal_text_penalty(note.title)
+                + _low_signal_text_penalty(note.content or "")
+                >= 0.3
+            ):
                 continue
             source_id = f"note:{note.id}"
             if source_id in seen:
@@ -1322,7 +1461,8 @@ async def _collect_exact_sources(
                     retrieval_kind="exact_note",
                     signal_kind="direct_sync",
                     source_name="note",
-                    event_time=getattr(note, "updated_at", None) or getattr(note, "created_at", None),
+                    event_time=getattr(note, "updated_at", None)
+                    or getattr(note, "created_at", None),
                     matched_phrases=hit.get("matched_phrases"),
                     metadata={"project_match": project_match},
                 )
@@ -1332,7 +1472,11 @@ async def _collect_exact_sources(
         for source_item in source_item_hits:
             payload = dict(source_item.payload or {})
             entry_type = str(payload.get("entry_type") or "")
-            content = "\n".join(part for part in (source_item.title, source_item.summary, source_item.external_url) if part)
+            content = "\n".join(
+                part
+                for part in (source_item.title, source_item.summary, source_item.external_url)
+                if part
+            )
             if not _allows_operational_noise(intent, question):
                 if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
                     continue
@@ -1367,7 +1511,9 @@ async def _collect_exact_sources(
                 )
             )
 
-        exact_sources.sort(key=lambda item: (item["similarity"], item.get("event_time_utc") or ""), reverse=True)
+        exact_sources.sort(
+            key=lambda item: (item["similarity"], item.get("event_time_utc") or ""), reverse=True
+        )
         return exact_sources[:limit]
     except Exception:
         return []
@@ -1414,14 +1560,18 @@ def _build_snapshot_source(project_payload: dict, *, now: datetime) -> dict | No
 
 
 def _project_activity_score(entry: dict, *, now: datetime) -> float:
-    signal_kind = signal_kind_for_event(entry_type=entry.get("entry_type"), actor_type=entry.get("actor_type"))
+    signal_kind = signal_kind_for_event(
+        entry_type=entry.get("entry_type"), actor_type=entry.get("actor_type")
+    )
     direct_bonus = 0.2 if signal_kind in {"direct_human", "direct_agent"} else 0.05
     recency = _recency_score(entry.get("happened_at"), now=now)
     state_bonus = 0.12 if (entry.get("entry_type") or "") in DIRECT_AGENT_ENTRY_TYPES else 0.0
     return min(0.95, 0.48 + direct_bonus + state_bonus + recency * 0.2)
 
 
-def _collect_project_sources(project_payload: dict | None, *, now: datetime, limit: int = 8) -> list[dict]:
+def _collect_project_sources(
+    project_payload: dict | None, *, now: datetime, limit: int = 8
+) -> list[dict]:
     if not project_payload:
         return []
     sources: list[dict] = []
@@ -1433,7 +1583,9 @@ def _collect_project_sources(project_payload: dict | None, *, now: datetime, lim
         entry_type = str(entry.get("entry_type") or "")
         if entry_type in LOW_SIGNAL_PROJECT_ENTRY_TYPES:
             continue
-        signal_kind = signal_kind_for_event(entry_type=entry.get("entry_type"), actor_type=entry.get("actor_type"))
+        signal_kind = signal_kind_for_event(
+            entry_type=entry.get("entry_type"), actor_type=entry.get("actor_type")
+        )
         combined_text = " ".join(
             filter(
                 None,
@@ -1445,25 +1597,35 @@ def _collect_project_sources(project_payload: dict | None, *, now: datetime, lim
                 ],
             )
         )
-        if _contains_legacy_workspace(combined_text) and _workspace_signal_adjustment(combined_text, project_payload) < 0:
+        if (
+            _contains_legacy_workspace(combined_text)
+            and _workspace_signal_adjustment(combined_text, project_payload) < 0
+        ):
             continue
         sources.append(
             _build_source_item(
                 source_id=f"event:{entry['id']}",
                 title=entry.get("title") or "project event",
                 category="story_event",
-                content=entry.get("summary") or entry.get("outcome") or entry.get("title") or "project event",
+                content=entry.get("summary")
+                or entry.get("outcome")
+                or entry.get("title")
+                or "project event",
                 similarity=_project_activity_score(entry, now=now),
                 retrieval_kind="project_event",
                 signal_kind=signal_kind,
                 source_name="story_event",
-                event_time=datetime.fromisoformat(entry["happened_at"]) if entry.get("happened_at") else None,
+                event_time=datetime.fromisoformat(entry["happened_at"])
+                if entry.get("happened_at")
+                else None,
                 metadata={"entry_type": entry.get("entry_type")},
             )
         )
 
     for item in (project_payload.get("sources") or [])[:4]:
-        happened_at = datetime.fromisoformat(item["happened_at"]) if item.get("happened_at") else None
+        happened_at = (
+            datetime.fromisoformat(item["happened_at"]) if item.get("happened_at") else None
+        )
         sources.append(
             _build_source_item(
                 source_id=f"project-source:{item['id']}",
@@ -1500,7 +1662,13 @@ def _merge_sources(
 ) -> list[dict]:
     if intent == "exact_fact":
         ordered_groups = [(0, exact_sources), (1, project_sources), (2, vector_sources)]
-    elif intent in {"project_latest", "project_status", "project_review", "timeline_review", "latest_status"}:
+    elif intent in {
+        "project_latest",
+        "project_status",
+        "project_review",
+        "timeline_review",
+        "latest_status",
+    }:
         ordered_groups = [(0, project_sources), (1, exact_sources), (2, vector_sources)]
     else:
         ordered_groups = [(0, exact_sources), (1, project_sources), (2, vector_sources)]
@@ -1556,8 +1724,13 @@ def _build_exact_answer(question: str, sources: list[dict]) -> str | None:
 
     if fact_kind == "ip" and values_by_kind["ip"]:
         answer = f"Your droplet IP is `{values_by_kind['ip'][0]}`."
-        if any(token in question.lower() for token in ("account", "user", "username")) and values_by_kind["username"]:
-            answer += f" The same evidence lists the user account as `{values_by_kind['username'][0]}`."
+        if (
+            any(token in question.lower() for token in ("account", "user", "username"))
+            and values_by_kind["username"]
+        ):
+            answer += (
+                f" The same evidence lists the user account as `{values_by_kind['username'][0]}`."
+            )
         if len(values_by_kind["ip"]) > 1:
             answer += " I also found additional IP-like values, so double-check the grounded evidence before treating that as final."
         return answer
@@ -1566,7 +1739,9 @@ def _build_exact_answer(question: str, sources: list[dict]) -> str | None:
     if fact_kind == "url" and values_by_kind["url"]:
         return f"The strongest matching URL in the evidence is {values_by_kind['url'][0]}."
     if fact_kind == "username" and values_by_kind["username"]:
-        return f"The strongest matching username in the evidence is `{values_by_kind['username'][0]}`."
+        return (
+            f"The strongest matching username in the evidence is `{values_by_kind['username'][0]}`."
+        )
     if fact_kind == "numeric_identifier" and values_by_kind["numeric_identifier"]:
         return f"The strongest matching identifier in the evidence is `{values_by_kind['numeric_identifier'][0]}`."
     return None
@@ -1589,26 +1764,37 @@ def _build_evidence_quality(
             "contradiction_risk": 0.0,
         }
 
-    freshness = max((_recency_score(item.get("event_time_utc"), now=now) for item in sources), default=0.2)
+    freshness = max(
+        (_recency_score(item.get("event_time_utc"), now=now) for item in sources), default=0.2
+    )
     directness_weights = {
         "direct_human": 1.0,
         "direct_agent": 0.95,
         "direct_sync": 0.72,
         "derived_system": 0.3,
     }
-    directness = sum(directness_weights.get(item["signal_kind"], 0.45) for item in sources[:5]) / max(1, min(len(sources), 5))
+    directness = sum(
+        directness_weights.get(item["signal_kind"], 0.45) for item in sources[:5]
+    ) / max(1, min(len(sources), 5))
     project_title = (project_payload or {}).get("project", {}).get("title")
     project_alignment = 1.0 if project_payload else 0.0
     if project_title and sources:
         project_alignment = max(
             0.35,
-            sum(_project_match_strength(item["title"] + " " + item["content"], project_payload) for item in sources[:5])
+            sum(
+                _project_match_strength(item["title"] + " " + item["content"], project_payload)
+                for item in sources[:5]
+            )
             / max(1, min(len(sources), 5)),
         )
     elif any(item.get("retrieval_kind") == "profile_read_model" for item in sources):
         project_alignment = 0.7
     exactness = 1.0 if any(item["retrieval_kind"].startswith("exact_") for item in sources) else 0.0
     contradiction_risk = 0.05
+    # C6: Detect temporal contradictions across all query types
+    contradiction_descriptions = _detect_source_contradictions(sources)
+    if contradiction_descriptions:
+        contradiction_risk = min(0.7, 0.15 * len(contradiction_descriptions))
     if intent == "exact_fact":
         extracted_values = []
         fact_kind = _extract_exact_fact_kind("")
@@ -1638,6 +1824,33 @@ def _build_evidence_quality(
     }
 
 
+def _detect_source_contradictions(sources: list[dict]) -> list[str]:
+    """Detect temporal contradictions across sources on the same topic."""
+    contradictions: list[str] = []
+    if len(sources) < 2:
+        return contradictions
+    # Group sources by category/topic
+    by_category: dict[str, list[dict]] = {}
+    for item in sources[:8]:
+        cat = item.get("category", "unknown")
+        by_category.setdefault(cat, []).append(item)
+    for cat, items in by_category.items():
+        if len(items) < 2:
+            continue
+        times = [item.get("event_time_utc", "") for item in items]
+        contents = [item.get("content", "")[:200] for item in items]
+        # Simple heuristic: if same category, different time periods, and short content similarity
+        if times[0] and times[-1] and times[0] != times[-1]:
+            first_words = set(contents[0].lower().split()[:20])
+            last_words = set(contents[-1].lower().split()[:20])
+            overlap = len(first_words & last_words) / max(len(first_words | last_words), 1)
+            if overlap > 0.3:
+                contradictions.append(
+                    f"Sources in '{cat}' from different time periods may conflict"
+                )
+    return contradictions
+
+
 def _project_events_for_mode(events: list, *, intent: str) -> list:
     if intent not in {"project_latest", "project_status", "latest_status"}:
         return events
@@ -1645,7 +1858,10 @@ def _project_events_for_mode(events: list, *, intent: str) -> list:
         event
         for event in events
         if (getattr(event, "entry_type", "") or "") in DIRECT_AGENT_ENTRY_TYPES
-        or signal_kind_for_event(entry_type=getattr(event, "entry_type", None), actor_type=getattr(event, "actor_type", None))
+        or signal_kind_for_event(
+            entry_type=getattr(event, "entry_type", None),
+            actor_type=getattr(event, "actor_type", None),
+        )
         in {"direct_human", "direct_agent"}
     ]
     if direct:
@@ -1654,14 +1870,7 @@ def _project_events_for_mode(events: list, *, intent: str) -> list:
 
 
 def _sanitize_sources(items: list[dict]) -> list[dict]:
-    return [
-        {
-            key: value
-            for key, value in item.items()
-            if key not in {"content"}
-        }
-        for item in items
-    ]
+    return [{key: value for key, value in item.items() if key not in {"content"}} for item in items]
 
 
 async def _persist_trace(
@@ -1748,12 +1957,19 @@ async def build_active_projects_overview(session: AsyncSession, *, limit: int = 
         project = await store.get_note(session, snapshot.project_note_id)
         if not project:
             continue
-        if snapshot.status not in {"active", "warming_up", "blocked"} and snapshot.manual_state != "pinned":
+        if (
+            snapshot.status not in {"active", "warming_up", "blocked"}
+            and snapshot.manual_state != "pinned"
+        ):
             continue
         if snapshot.active_score < 0.24 and snapshot.manual_state != "pinned":
             continue
         feature_scores = dict(snapshot.feature_scores or {})
-        if is_low_signal_project_name(project.title) and feature_scores.get("git", 0) < 0.25 and feature_scores.get("planning", 0) < 0.2:
+        if (
+            is_low_signal_project_name(project.title)
+            and feature_scores.get("git", 0) < 0.25
+            and feature_scores.get("planning", 0) < 0.2
+        ):
             continue
         metadata = dict(snapshot.metadata_ or {})
         rows.append(
@@ -1943,7 +2159,12 @@ async def query_brain(
                 used_project_snapshot=True,
                 used_vector_search=False,
                 used_web=False,
-                payload={**trace_payload, "projects": projects, "selected_evidence": project_sources, "answer": narration["text"]},
+                payload={
+                    **trace_payload,
+                    "projects": projects,
+                    "selected_evidence": project_sources,
+                    "answer": narration["text"],
+                },
             )
             return result
 
@@ -1998,11 +2219,17 @@ async def query_brain(
 
         project_payload = await resolve_project_payload(session, question)
         profile_query = _is_profile_query(question, project_payload=project_payload)
-        resolved_intent = _detect_query_intent(question, resolved_mode=resolved_mode, project_payload=project_payload)
+        resolved_intent = _detect_query_intent(
+            question, resolved_mode=resolved_mode, project_payload=project_payload
+        )
         trace_payload["resolved_project"] = (project_payload or {}).get("project", {}).get("title")
         trace_payload["profile_query"] = profile_query
 
-        since_boundary = parse_since_boundary(question, current_time) if resolved_mode == "changed_since" else None
+        since_boundary = (
+            parse_since_boundary(question, current_time)
+            if resolved_mode == "changed_since"
+            else None
+        )
 
         if project_payload:
             project_uuid = uuid.UUID(project_payload["project"]["id"])
@@ -2017,7 +2244,11 @@ async def query_brain(
                 atlas_snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
             except Exception:
                 atlas_snapshot = None
-        subject_ref = project_payload["project"]["title"] if project_payload else await resolve_subject_ref(session, question)
+        subject_ref = (
+            project_payload["project"]["title"]
+            if project_payload
+            else await resolve_subject_ref(session, question)
+        )
         project_note_id = uuid.UUID(project_payload["project"]["id"]) if project_payload else None
 
         event_limit = settings.story_max_events
@@ -2074,10 +2305,13 @@ async def query_brain(
                 intent=resolved_intent,
                 project_payload=project_payload,
                 now=current_time,
-                strict_project_match=resolved_intent in {"project_latest", "project_status", "project_review", "timeline_review"},
+                strict_project_match=resolved_intent
+                in {"project_latest", "project_status", "project_review", "timeline_review"},
                 limit=8,
             )
-            exact_sources = [_coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources]
+            exact_sources = [
+                _coerce_source_item(item, retrieval_kind="exact_artifact") for item in exact_sources
+            ]
         profile_sources = []
         if profile_query:
             profile_sources = await _collect_profile_sources(
@@ -2087,7 +2321,9 @@ async def query_brain(
                 limit=6,
             )
         if facet_sources:
-            project_sources = [_coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources]
+            project_sources = [
+                _coerce_source_item(item, retrieval_kind="facet_snapshot") for item in facet_sources
+            ]
         else:
             temporal_project_sources = [
                 _coerce_source_item(item, retrieval_kind="temporal_path")
@@ -2130,13 +2366,18 @@ async def query_brain(
             intent=resolved_intent,
             now=current_time,
         )
-        used_exact_match = any(item["retrieval_kind"].startswith("exact_") for item in selected_sources)
+        used_exact_match = any(
+            item["retrieval_kind"].startswith("exact_") for item in selected_sources
+        )
         used_project_snapshot = any(
-            item["retrieval_kind"] in {"project_snapshot", "facet_snapshot", "facet_story_river", "temporal_path"}
+            item["retrieval_kind"]
+            in {"project_snapshot", "facet_snapshot", "facet_story_river", "temporal_path"}
             for item in selected_sources
         )
         used_vector_search = any(item["retrieval_kind"] == "vector" for item in selected_sources)
-        used_profile_read_model = any(item["retrieval_kind"] == "profile_read_model" for item in selected_sources)
+        used_profile_read_model = any(
+            item["retrieval_kind"] == "profile_read_model" for item in selected_sources
+        )
 
         trace_payload["candidate_lists"] = {
             "exact": _sanitize_sources(exact_sources),
@@ -2231,11 +2472,19 @@ async def query_brain(
                 used_project_snapshot=used_project_snapshot,
                 used_vector_search=used_vector_search,
                 used_web=False,
-                payload={**trace_payload, "selected_evidence": [], "used_profile_read_model": used_profile_read_model},
+                payload={
+                    **trace_payload,
+                    "selected_evidence": [],
+                    "used_profile_read_model": used_profile_read_model,
+                },
             )
             return result
 
-        exact_answer = _build_exact_answer(question, selected_sources) if resolved_intent == "exact_fact" else None
+        exact_answer = (
+            _build_exact_answer(question, selected_sources)
+            if resolved_intent == "exact_fact"
+            else None
+        )
         context_text = format_story_context(
             mode=resolved_mode,
             intent=resolved_intent,
@@ -2317,12 +2566,7 @@ async def query_brain(
             else "low"
         )
         if web_answer:
-            final_answer = (
-                "From your brain:\n"
-                f"{final_answer}\n\n"
-                "From the web:\n"
-                f"{web_answer}"
-            )
+            final_answer = f"From your brain:\n{final_answer}\n\nFrom the web:\n{web_answer}"
 
         result = {
             "ok": True,

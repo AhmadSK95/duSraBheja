@@ -17,7 +17,7 @@ You have two ways to make changes:
 
 1. CONTENT changes (instant): Create/update/delete WebsiteSection records in the database.
    Section types: hero, text_block, stat_band, card_grid, interests_bar, project_grid,
-   case_study, photo_row, chat_shell, custom_html.
+   case_study, photo_row, chat_shell, custom_html, photo_break, story_block.
 
 2. CODE changes (requires deploy): Modify CSS (site.css), page handlers (public.py),
    JavaScript (site.js), or templates.
@@ -48,6 +48,8 @@ Section type content schemas:
 - photo_row: {photo_keys: [str], sticker_tilts: [str]}
 - chat_shell: {heading, intro_text, starter_prompts: [str]}
 - custom_html: {html}
+- photo_break: {photo_key, caption}
+- story_block: {kicker, heading, body, photo_key, reverse}
 
 Write in Ahmad's voice: direct, confident, opinionated. Make design decisions.
 You have access to the current site state and Ahmad's taste profile.

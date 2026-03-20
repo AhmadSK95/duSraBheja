@@ -14,6 +14,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
+from src.lib import store
 from src.lib.claude import call_claude, call_claude_conversation
 from src.lib.time import format_display_datetime
 from src.models import (
@@ -126,7 +127,7 @@ def _excerpt(value: str | None, *, limit: int = 320) -> str:
     cleaned = " ".join((value or "").split())
     if len(cleaned) <= limit:
         return cleaned
-    return f"{cleaned[:limit - 1].rstrip()}…"
+    return f"{cleaned[: limit - 1].rstrip()}…"
 
 
 def _extract_markdown_sections(text: str) -> list[tuple[int, str, str]]:
@@ -275,7 +276,9 @@ async def _upsert_public_fact(
     sort_order: int = 0,
     metadata_: dict[str, Any] | None = None,
 ) -> PublicFactRecord:
-    result = await session.execute(select(PublicFactRecord).where(PublicFactRecord.fact_key == fact_key))
+    result = await session.execute(
+        select(PublicFactRecord).where(PublicFactRecord.fact_key == fact_key)
+    )
     record = result.scalar_one_or_none()
     values = {
         "title": title,
@@ -326,14 +329,18 @@ async def list_public_facts(
         query = query.where(PublicFactRecord.facet == facet)
     if project_slug:
         query = query.where(PublicFactRecord.project_slug == project_slug)
-    query = query.order_by(PublicFactRecord.sort_order.asc(), PublicFactRecord.updated_at.desc()).limit(limit)
+    query = query.order_by(
+        PublicFactRecord.sort_order.asc(), PublicFactRecord.updated_at.desc()
+    ).limit(limit)
     result = await session.execute(query)
     return list(result.scalars().all())
 
 
 async def update_public_fact(session: AsyncSession, fact_id, **values) -> PublicFactRecord | None:
     values.setdefault("updated_at", _utcnow())
-    await session.execute(update(PublicFactRecord).where(PublicFactRecord.id == fact_id).values(**values))
+    await session.execute(
+        update(PublicFactRecord).where(PublicFactRecord.id == fact_id).values(**values)
+    )
     await session.commit()
     return await session.get(PublicFactRecord, fact_id)
 
@@ -347,7 +354,9 @@ async def _upsert_public_profile_snapshot(
     payload: dict[str, Any],
     source_refs: list[str],
 ) -> PublicProfileSnapshot:
-    result = await session.execute(select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == snapshot_key))
+    result = await session.execute(
+        select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == snapshot_key)
+    )
     record = result.scalar_one_or_none()
     values = {
         "title": title,
@@ -363,7 +372,9 @@ async def _upsert_public_profile_snapshot(
         await session.commit()
         await session.refresh(record)
         return record
-    record = PublicProfileSnapshot(snapshot_key=snapshot_key, created_at=_utcnow(), metadata_={}, **values)
+    record = PublicProfileSnapshot(
+        snapshot_key=snapshot_key, created_at=_utcnow(), metadata_={}, **values
+    )
     session.add(record)
     await session.commit()
     await session.refresh(record)
@@ -379,7 +390,9 @@ async def _upsert_public_project_snapshot(
     payload: dict[str, Any],
     source_refs: list[str],
 ) -> PublicProjectSnapshot:
-    result = await session.execute(select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug))
+    result = await session.execute(
+        select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug)
+    )
     record = result.scalar_one_or_none()
     values = {
         "title": title,
@@ -410,7 +423,9 @@ async def _upsert_public_faq_snapshot(
     answer: str,
     source_refs: list[str],
 ) -> PublicFAQSnapshot:
-    result = await session.execute(select(PublicFAQSnapshot).where(PublicFAQSnapshot.question_key == question_key))
+    result = await session.execute(
+        select(PublicFAQSnapshot).where(PublicFAQSnapshot.question_key == question_key)
+    )
     record = result.scalar_one_or_none()
     values = {
         "question": question,
@@ -425,7 +440,9 @@ async def _upsert_public_faq_snapshot(
         await session.commit()
         await session.refresh(record)
         return record
-    record = PublicFAQSnapshot(question_key=question_key, created_at=_utcnow(), metadata_={}, **values)
+    record = PublicFAQSnapshot(
+        question_key=question_key, created_at=_utcnow(), metadata_={}, **values
+    )
     session.add(record)
     await session.commit()
     await session.refresh(record)
@@ -443,7 +460,9 @@ async def _upsert_public_answer_policy(
     instructions: str,
     payload: dict[str, Any],
 ) -> PublicAnswerPolicy:
-    result = await session.execute(select(PublicAnswerPolicy).where(PublicAnswerPolicy.policy_key == policy_key))
+    result = await session.execute(
+        select(PublicAnswerPolicy).where(PublicAnswerPolicy.policy_key == policy_key)
+    )
     record = result.scalar_one_or_none()
     values = {
         "title": title,
@@ -487,7 +506,9 @@ def _seed_project_facts_from_doc(path: Path, text: str) -> list[dict[str, Any]]:
             continue
         if title.startswith("### "):
             continue
-    for match in re.finditer(r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)", text, re.MULTILINE | re.DOTALL):
+    for match in re.finditer(
+        r"^###\s+(?P<title>.+?)\n(?P<body>.*?)(?=^###\s+|\Z)", text, re.MULTILINE | re.DOTALL
+    ):
         project_title = match.group("title").strip()
         body = match.group("body").strip()
         slug = _slugify(project_title.split(" - ", 1)[0])
@@ -502,7 +523,10 @@ def _seed_project_facts_from_doc(path: Path, text: str) -> list[dict[str, Any]]:
                 "source_kind": "interview_prep_file",
                 "source_ref": str(path),
                 "tags": ["project", "case-study"],
-                "metadata_": {"allow_live_status": slug in {"datagenie", "dusrabheja", "duSraBheja", "du-sra-bheja"}},
+                "metadata_": {
+                    "allow_live_status": slug
+                    in {"datagenie", "dusrabheja", "duSraBheja", "du-sra-bheja"}
+                },
             }
         )
     return facts
@@ -616,7 +640,9 @@ def _derive_public_facts_from_markdown(path: Path, text: str) -> list[dict[str, 
     sections = {title.lower(): body for _, title, body in _extract_markdown_sections(text)}
     filename = path.name.lower()
     facts: list[dict[str, Any]] = []
-    if "### " in text and any(keyword in filename for keyword in {"project", "description", "case", "portfolio"}):
+    if "### " in text and any(
+        keyword in filename for keyword in {"project", "description", "case", "portfolio"}
+    ):
         facts.extend(_seed_project_facts_from_doc(path, text))
     if {"who i am", "professional background", "technical skills"} & set(sections):
         facts.extend(_seed_profile_facts_from_job_hunt(path, text))
@@ -657,7 +683,9 @@ async def seed_public_facts_from_interview_prep(
 
 
 async def _refresh_live_project_public_facts(session: AsyncSession) -> int:
-    approved_project_facts = await list_public_facts(session, approved=True, facet="projects", limit=200)
+    approved_project_facts = await list_public_facts(
+        session, approved=True, facet="projects", limit=200
+    )
     approved_slugs = {
         fact.project_slug: fact
         for fact in approved_project_facts
@@ -712,11 +740,18 @@ async def _refresh_live_project_public_facts(session: AsyncSession) -> int:
 
 
 async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, Any]:
-    result = await session.execute(select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main"))
+    result = await session.execute(
+        select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main")
+    )
     snapshot = result.scalar_one_or_none()
     if snapshot and _public_snapshot_incomplete(snapshot.payload or {}):
         return await refresh_public_snapshots(session, force=True)
-    if snapshot and snapshot.refreshed_at and snapshot.refreshed_at >= _utcnow() - timedelta(minutes=settings.public_snapshot_refresh_minutes):
+    if (
+        snapshot
+        and snapshot.refreshed_at
+        and snapshot.refreshed_at
+        >= _utcnow() - timedelta(minutes=settings.public_snapshot_refresh_minutes)
+    ):
         return {"status": "fresh", "refreshed_at": snapshot.refreshed_at.isoformat()}
     return await refresh_public_snapshots(session, force=False)
 
@@ -739,14 +774,22 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     for fact in approved_facts:
         facts_by_facet[fact.facet].append(fact)
 
-    profile_facts = facts_by_facet.get("about", []) + facts_by_facet.get("skills", []) + facts_by_facet.get("interests", [])
+    profile_facts = (
+        facts_by_facet.get("about", [])
+        + facts_by_facet.get("skills", [])
+        + facts_by_facet.get("interests", [])
+    )
     project_facts = facts_by_facet.get("projects", [])
     contact_facts = facts_by_facet.get("contact", [])
     source_refs = [fact.fact_key for fact in approved_facts]
     source_refs.extend(str(path) for path in (narrative.get("source_pack") or {}).get("files", []))
 
-    hero_summary = narrative.get("hero_summary") or next((fact.body for fact in profile_facts if fact.fact_key == "profile:professional-summary"), "")
-    identity = (narrative.get("identity_stack") or [""])[0] or next((fact.body for fact in profile_facts if fact.fact_key == "profile:identity"), "")
+    hero_summary = narrative.get("hero_summary") or next(
+        (fact.body for fact in profile_facts if fact.fact_key == "profile:professional-summary"), ""
+    )
+    identity = (narrative.get("identity_stack") or [""])[0] or next(
+        (fact.body for fact in profile_facts if fact.fact_key == "profile:identity"), ""
+    )
     skills = [fact.body for fact in profile_facts if fact.facet == "skills"]
     interests = [fact.body for fact in profile_facts if fact.facet == "interests"]
     narrative_contacts = list(narrative.get("contact_modes") or [])
@@ -788,7 +831,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "interests": interests,
         "experience": [fact.body for fact in profile_facts if fact.fact_type == "experience"],
         "education": [fact.body for fact in profile_facts if fact.fact_type == "education"],
-        "current_focus": [fact.body for fact in profile_facts if fact.fact_type in {"narrative", "decisions"}],
+        "current_focus": [
+            fact.body for fact in profile_facts if fact.fact_type in {"narrative", "decisions"}
+        ],
         "contact": list(deduped_contacts.values()),
         "selected_projects": [
             {
@@ -810,6 +855,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "personal_texture": narrative.get("personal_texture") or [],
         "thought_garden": narrative.get("thought_garden") or [],
         "contact_modes": narrative_contacts,
+        "currently": narrative.get("currently") or {},
     }
     profile_snapshot = await _upsert_public_profile_snapshot(
         session,
@@ -837,28 +883,19 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     _repo_links: dict[str, list[dict[str, str]]] = {}
     _note_slug_map: dict[str, list[str]] = {}  # brain slug → [variants]
     try:
-        note_rows = await session.execute(
-            select(Note).where(Note.category == "project")
-        )
+        note_rows = await session.execute(select(Note).where(Note.category == "project"))
         for note in note_rows.scalars().all():
             nslug = re.sub(r"[^a-z0-9]+", "-", note.title.lower()).strip("-")
             snap_row = await session.execute(
-                select(ProjectStateSnapshot).where(
-                    ProjectStateSnapshot.project_note_id == note.id
-                )
+                select(ProjectStateSnapshot).where(ProjectStateSnapshot.project_note_id == note.id)
             )
             snap = snap_row.scalar_one_or_none()
             cs = (snap.metadata_ or {}).get("case_study") if snap else None
             repo_rows = await session.execute(
-                select(ProjectRepo).where(
-                    ProjectRepo.project_note_id == note.id
-                )
+                select(ProjectRepo).where(ProjectRepo.project_note_id == note.id)
             )
             repos = repo_rows.scalars().all()
-            rlinks = [
-                {"label": "GitHub", "href": r.repo_url}
-                for r in repos if r.repo_url
-            ]
+            rlinks = [{"label": "GitHub", "href": r.repo_url} for r in repos if r.repo_url]
             # Store under all slug variants for fuzzy matching
             # e.g. "barbershop" matches "balkan-barbershop-website"
             variants = [nslug]
@@ -894,21 +931,31 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     project_snapshots: list[PublicProjectSnapshot] = []
     all_slugs = sorted(set(project_groups) | set(narrative_projects))
     for slug in all_slugs:
-        facts = sorted(project_groups.get(slug, []), key=lambda item: (item.sort_order, item.updated_at), reverse=False)
-        primary = next((fact for fact in facts if fact.fact_type == "project_case_study"), facts[0]) if facts else None
+        facts = sorted(
+            project_groups.get(slug, []),
+            key=lambda item: (item.sort_order, item.updated_at),
+            reverse=False,
+        )
+        primary = (
+            next((fact for fact in facts if fact.fact_type == "project_case_study"), facts[0])
+            if facts
+            else None
+        )
         narrative_project = narrative_projects.get(slug) or {}
         highlights = [_excerpt(fact.body, limit=320) for fact in facts]
         narrative_highlights = list(narrative_project.get("resume_bullets") or [])[:4]
         payload = {
             "slug": slug,
             "title": narrative_project.get("title") or (primary.title if primary else slug),
-            "summary": narrative_project.get("summary") or _excerpt(primary.body if primary else "", limit=500),
+            "summary": narrative_project.get("summary")
+            or _excerpt(primary.body if primary else "", limit=500),
             "tagline": narrative_project.get("tagline") or "",
             "status": narrative_project.get("status") or "",
             "stack": narrative_project.get("stack") or [],
             "resume_bullets": narrative_project.get("resume_bullets") or [],
             "demonstrates": [
-                d for d in (narrative_project.get("demonstrates") or [])
+                d
+                for d in (narrative_project.get("demonstrates") or [])
                 if d and d.strip() not in {"---", "--", "-", ""} and len(d.strip()) >= 10
             ],
             "links": narrative_project.get("links") or [],
@@ -928,6 +975,16 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         cs = _find_case_study(slug)
         if cs:
             payload["case_study"] = cs
+        # B3: Merge repo history for rich narrative case studies
+        repo_histories = narrative.get("repo_histories") or {}
+        repo_hist = repo_histories.get(slug)
+        if not repo_hist:
+            for rh_slug, rh_data in repo_histories.items():
+                if rh_slug in slug or slug in rh_slug:
+                    repo_hist = rh_data
+                    break
+        if repo_hist:
+            payload["repo_history"] = repo_hist
         # Merge GitHub repo links (fuzzy slug match)
         for rl in _find_repo_links(slug):
             if rl["href"] not in {lk.get("href") for lk in payload["links"]}:
@@ -938,9 +995,12 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 session,
                 slug=slug,
                 title=str(narrative_project.get("title") or (primary.title if primary else slug)),
-                summary=_excerpt(narrative_project.get("summary") or (primary.body if primary else ""), limit=220),
+                summary=_excerpt(
+                    narrative_project.get("summary") or (primary.body if primary else ""), limit=220
+                ),
                 payload=payload,
-                source_refs=[fact.fact_key for fact in facts] + [str(path) for path in (narrative.get("source_pack") or {}).get("files", [])],
+                source_refs=[fact.fact_key for fact in facts]
+                + [str(path) for path in (narrative.get("source_pack") or {}).get("files", [])],
             )
         )
 
@@ -951,7 +1011,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     if not faq_seed:
         faq_seed = [{"question": question, "answer": ""} for _key, question in PUBLIC_FAQ_SEED]
     for index, item in enumerate(faq_seed, start=1):
-        answer = item.get("answer") or _excerpt(" ".join(profile_payload.get("interests") or []) or identity, limit=360)
+        answer = item.get("answer") or _excerpt(
+            " ".join(profile_payload.get("interests") or []) or identity, limit=360
+        )
         source_keys = list((narrative.get("source_pack") or {}).get("files") or [])[:3]
         faq_snapshots.append(
             await _upsert_public_faq_snapshot(
@@ -1002,7 +1064,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
 
 async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
     await refresh_public_snapshots_if_stale(session)
-    result = await session.execute(select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main"))
+    result = await session.execute(
+        select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main")
+    )
     record = result.scalar_one_or_none()
     if not record:
         narrative = build_profile_narrative()
@@ -1024,7 +1088,9 @@ async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
 
 async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
     await refresh_public_snapshots_if_stale(session)
-    result = await session.execute(select(PublicProjectSnapshot).order_by(PublicProjectSnapshot.title.asc()))
+    result = await session.execute(
+        select(PublicProjectSnapshot).order_by(PublicProjectSnapshot.title.asc())
+    )
     items = [
         {
             "slug": record.slug,
@@ -1053,7 +1119,9 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
 async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any] | None:
     await refresh_public_snapshots_if_stale(session)
     # Exact match first
-    result = await session.execute(select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug))
+    result = await session.execute(
+        select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug)
+    )
     record = result.scalar_one_or_none()
     # Fuzzy match if exact fails — check substring both ways
     if not record:
@@ -1072,7 +1140,7 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
         }
     # Fall back to narrative projects with same fuzzy matching
     narrative = build_profile_narrative()
-    for item in (narrative.get("projects") or []):
+    for item in narrative.get("projects") or []:
         item_slug = item.get("slug") or ""
         if item_slug == slug or item_slug in slug or slug in item_slug:
             return {
@@ -1087,7 +1155,9 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
 
 async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
     await refresh_public_snapshots_if_stale(session)
-    result = await session.execute(select(PublicFAQSnapshot).order_by(PublicFAQSnapshot.question.asc()))
+    result = await session.execute(
+        select(PublicFAQSnapshot).order_by(PublicFAQSnapshot.question.asc())
+    )
     items = [
         {
             "question": record.question,
@@ -1111,7 +1181,9 @@ async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
 
 async def get_public_answer_policy(session: AsyncSession) -> dict[str, Any]:
     await refresh_public_snapshots_if_stale(session)
-    result = await session.execute(select(PublicAnswerPolicy).where(PublicAnswerPolicy.is_active == True))
+    result = await session.execute(
+        select(PublicAnswerPolicy).where(PublicAnswerPolicy.is_active == True)
+    )
     record = result.scalar_one_or_none()
     if not record:
         return {"allowed_topics": [], "disallowed_topics": []}
@@ -1196,12 +1268,21 @@ async def answer_public_question(
 ) -> dict[str, Any]:
     verification = await verify_turnstile_token(token=turnstile_token, remote_ip=remote_ip)
     if not verification["ok"]:
-        return {"ok": False, "status_code": 403, "detail": "Captcha verification failed.", "reason": verification["detail"]}
+        return {
+            "ok": False,
+            "status_code": 403,
+            "detail": "Captcha verification failed.",
+            "reason": verification["detail"],
+        }
 
     client_key = f"{remote_ip or 'unknown'}::{(user_agent or 'unknown')[:80]}"
     allowed, remaining = _check_public_chat_rate_limit(client_key)
     if not allowed:
-        return {"ok": False, "status_code": 429, "detail": "Public chat is rate limited for this session."}
+        return {
+            "ok": False,
+            "status_code": 429,
+            "detail": "Public chat is rate limited for this session.",
+        }
     if not _public_chat_topic_allowed(question):
         return {
             "ok": False,
@@ -1331,13 +1412,42 @@ def _detect_intent(question: str, turn_count: int) -> str:
     lowered = (question or "").lower()
     if turn_count > 0:
         return "follow_up"
-    role_fit_signals = ("fit", "hire", "role", "team", "candidate", "interview", "strengths", "weaknesses", "gaps")
+    role_fit_signals = (
+        "fit",
+        "hire",
+        "role",
+        "team",
+        "candidate",
+        "interview",
+        "strengths",
+        "weaknesses",
+        "gaps",
+    )
     if any(signal in lowered for signal in role_fit_signals):
         return "role_fit_evaluation"
-    project_signals = ("project", "dusrabheja", "datagenie", "kaffa", "barbershop", "built", "architecture")
+    project_signals = (
+        "project",
+        "dusrabheja",
+        "datagenie",
+        "kaffa",
+        "barbershop",
+        "built",
+        "architecture",
+    )
     if any(signal in lowered for signal in project_signals):
         return "project_deep_dive"
-    tech_signals = ("stack", "python", "react", "docker", "redis", "postgres", "llm", "agent", "rag", "vector")
+    tech_signals = (
+        "stack",
+        "python",
+        "react",
+        "docker",
+        "redis",
+        "postgres",
+        "llm",
+        "agent",
+        "rag",
+        "vector",
+    )
     if any(signal in lowered for signal in tech_signals):
         return "technical_discussion"
     return "general_about"
@@ -1376,10 +1486,12 @@ def _build_context_block(
         "Identity stack:",
     ]
     lines.extend(f"- {item}" for item in identity_stack[:6])
-    lines.extend([
-        "Current arc:",
-        f"- {current_arc.get('summary') or ''}",
-    ])
+    lines.extend(
+        [
+            "Current arc:",
+            f"- {current_arc.get('summary') or ''}",
+        ]
+    )
     lines.extend(f"- Focus: {item}" for item in list(current_arc.get("focus") or [])[:5])
     lines.append("Life timeline:")
     lines.extend(
@@ -1408,6 +1520,58 @@ def _build_context_block(
     return "\n".join(lines)
 
 
+async def _build_context_block_with_cognition(
+    session: AsyncSession,
+    profile: dict[str, Any],
+    projects: list[dict[str, Any]],
+    faq: list[dict[str, Any]],
+    relevant_facts: list,
+    intent: str,
+) -> str:
+    """Enhanced context block with cognition outputs."""
+    base = _build_context_block(profile, projects, faq, relevant_facts)
+    lines = [base]
+
+    # Fetch expertise models
+    try:
+        expertise_records = await store.list_synthesis_records(
+            session, synthesis_type="expertise_model", limit=4
+        )
+        if expertise_records:
+            lines.append("\nExpertise models:")
+            for record in expertise_records:
+                metadata = dict(record.metadata_ or {})
+                approach = metadata.get("approach", record.summary or "")
+                patterns = metadata.get("patterns", [])[:3]
+                heuristics = metadata.get("heuristics", [])[:2]
+                lines.append(f"- {record.title}: {_excerpt(approach, limit=200)}")
+                for p in patterns:
+                    lines.append(f"  - pattern: {p}")
+                for h in heuristics:
+                    lines.append(f"  - heuristic: {h}")
+
+        # For deep-dive intents, also fetch synapses and patterns
+        if intent in {"project_deep_dive", "technical_discussion"}:
+            synapses = await store.list_synthesis_records(
+                session, synthesis_type="synapse", limit=3
+            )
+            patterns = await store.list_synthesis_records(
+                session, synthesis_type="pattern", limit=3
+            )
+            if synapses:
+                lines.append("\nCross-project synapses:")
+                for s in synapses:
+                    lines.append(f"- {s.title}: {_excerpt(s.summary, limit=200)}")
+            if patterns:
+                lines.append("\nCross-cutting patterns:")
+                for p in patterns:
+                    lines.append(f"- {p.title}: {_excerpt(p.summary, limit=200)}")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 async def answer_public_chat(
     session: AsyncSession,
     *,
@@ -1424,7 +1588,11 @@ async def answer_public_chat(
     client_key = f"{remote_ip or 'unknown'}::{(user_agent or 'unknown')[:80]}"
     allowed, remaining = _check_public_chat_rate_limit(client_key)
     if not allowed:
-        return {"ok": False, "status_code": 429, "detail": "Public chat is rate limited for this session."}
+        return {
+            "ok": False,
+            "status_code": 429,
+            "detail": "Public chat is rate limited for this session.",
+        }
 
     reject_reason = _hard_reject(question)
     if reject_reason:
@@ -1479,7 +1647,9 @@ async def answer_public_chat(
     faq = await list_public_faq(session)
     relevant_facts = await select_relevant_public_facts(session, question=question, limit=10)
 
-    context_block = _build_context_block(profile, projects, faq, relevant_facts)
+    context_block = await _build_context_block_with_cognition(
+        session, profile, projects, faq, relevant_facts, intent
+    )
 
     persona_context = ""
     try:
@@ -1496,7 +1666,7 @@ async def answer_public_chat(
     )
 
     messages: list[dict[str, str]] = []
-    for turn in prior_turns[-(MAX_CONVERSATION_TURNS * 2):]:
+    for turn in prior_turns[-(MAX_CONVERSATION_TURNS * 2) :]:
         messages.append({"role": turn.role, "content": turn.content})
     messages.append({"role": "user", "content": question})
 
@@ -1557,5 +1727,9 @@ async def answer_public_chat(
 
 
 def render_public_intro(profile_payload: dict[str, Any]) -> str:
-    summary = html.escape(profile_payload.get("payload", {}).get("hero_summary") or profile_payload.get("summary") or "")
+    summary = html.escape(
+        profile_payload.get("payload", {}).get("hero_summary")
+        or profile_payload.get("summary")
+        or ""
+    )
     return summary
