@@ -1130,7 +1130,11 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
     if items:
         items.sort(
             key=lambda item: (
-                int((item.get("payload") or {}).get("display_order") or 999),
+                (
+                    int((item.get("payload") or {})["display_order"])
+                    if (item.get("payload") or {}).get("display_order") is not None
+                    else 999
+                ),
                 str(item.get("title") or "").lower(),
             )
         )
