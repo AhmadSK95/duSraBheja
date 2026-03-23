@@ -11,15 +11,43 @@ from fastapi.responses import HTMLResponse
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 SHELL_TEMPLATE = Template((TEMPLATE_DIR / "dashboard_shell.html").read_text(encoding="utf-8"))
 
-NAV_ITEMS = [
-    ("overview", "Overview", "/dashboard/overview"),
-    ("timeline", "Timeline", "/dashboard/timeline"),
-    ("expertise", "Expertise", "/dashboard/expertise"),
-    ("projects", "Projects", "/dashboard/projects"),
-    ("public-surface", "Public Surface", "/dashboard/public-surface"),
-    ("sources", "Sources", "/dashboard/sources"),
-    ("coverage", "Coverage", "/dashboard/coverage"),
-    ("library", "Library", "/dashboard/library"),
+NAV_GROUPS = [
+    (
+        "Command Center",
+        [
+            ("overview", "Overview", "/dashboard/overview"),
+            ("public-surface", "Public Surface", "/dashboard/public-surface"),
+            ("health", "Health", "/dashboard/health"),
+            ("review", "Review Queue", "/dashboard/review"),
+            ("boards", "Boards", "/dashboard/boards"),
+        ],
+    ),
+    (
+        "Brain Views",
+        [
+            ("library", "Library", "/dashboard/library"),
+            ("cognitive-map", "Cognitive Map", "/dashboard/cognitive-map"),
+            ("story-river", "Story River", "/dashboard/story-river"),
+            ("timeline", "Timeline", "/dashboard/timeline"),
+            ("projects", "Projects", "/dashboard/projects"),
+            ("expertise", "Expertise", "/dashboard/expertise"),
+            ("sources", "Sources", "/dashboard/sources"),
+            ("coverage", "Coverage", "/dashboard/coverage"),
+        ],
+    ),
+    (
+        "Deep Ops",
+        [
+            ("artifacts", "Artifacts", "/dashboard/artifacts"),
+            ("notes", "Notes", "/dashboard/notes"),
+            ("chrome-signals", "Chrome Signals", "/dashboard/chrome-signals"),
+            ("query-traces", "Query Traces", "/dashboard/query-traces"),
+            ("evals", "Evals", "/dashboard/evals"),
+            ("sync-health", "Sync Health", "/dashboard/sync-health"),
+            ("brain-os", "Brain OS", "/dashboard/brain-os"),
+            ("public-facts", "Public Facts", "/dashboard/public-facts"),
+        ],
+    ),
 ]
 
 
@@ -43,12 +71,21 @@ def render_dashboard_shell(
     page_data_json: str = "null",
     page_script: str = "",
     logout_html: str = "",
+    utility_html: str = "",
 ) -> HTMLResponse:
-    nav_html = []
-    for slug, label, path in NAV_ITEMS:
-        is_active = "is-active" if slug == active_page else ""
+    nav_html: list[str] = []
+    for section_label, items in NAV_GROUPS:
+        links = []
+        for slug, label, path in items:
+            is_active = "is-active" if slug == active_page else ""
+            links.append(
+                f'<a class="atlas-nav-link {is_active}" href="{dashboard_url(path, token)}">{html.escape(label)}</a>'
+            )
         nav_html.append(
-            f'<a class="atlas-nav-link {is_active}" href="{dashboard_url(path, token)}">{html.escape(label)}</a>'
+            '<section class="atlas-nav-section">'
+            f'<div class="atlas-nav-section__label">{html.escape(section_label)}</div>'
+            f"{''.join(links)}"
+            "</section>"
         )
     if not logout_html:
         logout_html = (
@@ -66,5 +103,6 @@ def render_dashboard_shell(
         page_data_json=page_data_json,
         page_script=page_script,
         logout_html=logout_html,
+        utility_html=utility_html,
     )
     return HTMLResponse(body)

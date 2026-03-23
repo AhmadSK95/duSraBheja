@@ -165,6 +165,7 @@ def client(monkeypatch) -> AsyncIterator[TestClient]:
         ("/about", "The resume, with the actual person still intact."),
         ("/work", "Flagship case studies first. Smaller proof after that."),
         ("/brain", "Ask the public-safe version of my brain."),
+        ("/connect", "Start with the right lane."),
     ],
 )
 def test_public_overhaul_pages_render(client: TestClient, path: str, heading: str) -> None:
@@ -175,6 +176,9 @@ def test_public_overhaul_pages_render(client: TestClient, path: str, heading: st
     if path == "/brain":
         assert "What this surface is actually good at." in response.text
         assert "What the brain keeps warm" in response.text
+    if path == "/connect":
+        assert "Choose the lane that matches the conversation." in response.text
+        assert "What helps" in response.text
 
 
 @pytest.mark.parametrize(

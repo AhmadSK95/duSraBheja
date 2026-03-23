@@ -1961,10 +1961,17 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
 async def public_connect() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
+        ops = await get_public_surface_ops_status(session)
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-    content = _render_connect_fallback(p, photos)
+    content = _render_connect_fallback(
+        p,
+        photos,
+        ops=ops,
+        chat_live=public_chat_enabled(),
+        captcha_enabled=public_chat_captcha_enabled(),
+    )
 
     return HTMLResponse(
         render_public_shell(
@@ -1986,20 +1993,60 @@ async def public_contact() -> HTMLResponse:
     return RedirectResponse(url="/connect", status_code=301)
 
 
-def _render_connect_fallback(p: dict, photos: dict) -> str:
+def _render_connect_fallback(
+    p: dict,
+    photos: dict,
+    *,
+    ops: dict,
+    chat_live: bool,
+    captcha_enabled: bool,
+) -> str:
     contact_items = list(p.get("contact") or p.get("contact_modes") or [])
+    current_arc = dict(p.get("current_arc") or {})
+    focus_points = list(current_arc.get("focus") or [])[:4]
+    identity_stack = list(p.get("identity_stack") or [])[:3]
+    refresh_label = str(ops.get("last_public_refresh_at") or "n/a")
+    hero_photo = photos.get("contact") or photos.get("personality") or photos.get("work")
+    side_photo = photos.get("photo_break") or photos.get("couple") or photos.get("home")
+    intro = (
+        p.get("professional_summary")
+        or p.get("hero_summary")
+        or "The best conversations usually start with product conviction, technical depth, and enough context to make the intro actually useful."
+    )
 
     hero_html = f"""
-    <section class="hero-inner">
+    <section class="hero-inner connect-stage">
       <div class="container">
-        <div>
+        <div class="connect-stage__copy">
           <div class="public-kicker">Connect</div>
-          <h1 class="display-heading display-heading--hero">Let's talk.</h1>
-          <p>Looking for engineering roles where technical depth
-            meets product conviction. Also take freelance projects.</p>
+          <h1 class="display-heading display-heading--hero">Start with the right lane.</h1>
+          <p>{_s(intro)}</p>
+          <div class="connect-status-grid">
+            <div class="connect-status-card">
+              <div class="public-kicker">Location</div>
+              <strong>{_s(p.get("location") or settings.public_profile_location)}</strong>
+              <p>Open to conversations where product taste and systems depth both matter.</p>
+            </div>
+            <div class="connect-status-card">
+              <div class="public-kicker">Open Brain</div>
+              <strong>{_s("Live" if chat_live else "Offline")}</strong>
+              <p>{_s("No-captcha mode is on right now." if chat_live and not captcha_enabled else "Use it first if you want project or fit context before reaching out.")}</p>
+            </div>
+            <div class="connect-status-card">
+              <div class="public-kicker">Freshness</div>
+              <strong>{_s(refresh_label)}</strong>
+              <p>The public surface is now brain-curated and refreshed from approved signals instead of static portfolio copy.</p>
+            </div>
+          </div>
+          {_section_chip_row(["AI systems", "Backend + product", "Freelance builds", "Case-study first conversations"], cls="connect-chip-row")}
         </div>
-        <div class="photo-accent--lg">
-          {_photo_img(photos.get("contact"), alt="Ahmad with Oscar")}
+        <div class="connect-stage__media">
+          <div class="connect-stage__photo connect-stage__photo--primary">
+            {_photo_img(hero_photo, alt="Ahmad portrait")}
+          </div>
+          <div class="connect-stage__photo connect-stage__photo--secondary">
+            {_photo_img(side_photo, alt="Ahmad in Jersey City")}
+          </div>
         </div>
       </div>
     </section>
@@ -2011,64 +2058,96 @@ def _render_connect_fallback(p: dict, photos: dict) -> str:
         if not href:
             continue
         rows_html += f"""
-        <div class="contact-row">
-          <span class="contact-row__label">{_s(item.get("label") or "Contact")}</span>
-          <span class="contact-row__value">{_s(item.get("value") or item.get("label"))}</span>
-          <span class="contact-row__action">
-            <a href="{_s(href)}" target="_blank" rel="noreferrer">Open</a>
-          </span>
-        </div>
+        <article class="connect-method-card">
+          <div class="public-kicker">{_s(item.get("label") or "Contact")}</div>
+          <h3>{_s(item.get("value") or item.get("label"))}</h3>
+          <p>{_s("Use this lane if you already know the conversation you want to have." if (item.get("label") or "").lower() != "email" else "Best for serious role, build, or collaboration conversations.")}</p>
+          <a class="inline-link" href="{_s(href)}" target="_blank" rel="noreferrer">Open</a>
+        </article>
         """
 
-    location = p.get("location") or settings.public_profile_location
     contact_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Channels</div>
-      <div class="contact-rows">{rows_html}</div>
-      <p class="mt-4" style="font-size:1.25rem;font-weight:600;">{_s(location)}</p>
+      <div class="public-kicker">Best paths in</div>
+      <div class="about-section-heading">
+        <h2 class="display-heading display-heading--section">Choose the lane that matches the conversation.</h2>
+        <p>Email for serious work conversations, LinkedIn for professional context, Instagram if the connection is more social or warm-intro adjacent.</p>
+      </div>
+      <div class="connect-method-grid">{rows_html}</div>
     </section>
     """
 
-    visitor_html = """
+    path_html = """
     <section class="section container reveal">
-      <div class="visitor-cards">
-        <div class="visitor-card" style="border-top:3px solid var(--accent);">
-          <h3>Hiring?</h3>
-          <p>If your product needs AI that actually works in production
-            &mdash; not just a demo &mdash; I'm your person.
-            Distributed systems at Amazon scale, 5 AI agents in production,
-            and I own everything I ship end to end.</p>
+      <div class="public-kicker">Start here</div>
+      <div class="connect-path-grid">
+        <article class="connect-path-card connect-path-card--accent">
+          <h3>Hiring or team-fit conversation</h3>
+          <p>If the question is about senior backend, AI systems, platform work, or product-minded engineering leadership, start with email and include the role, product context, and why the fit feels non-generic.</p>
           <a class="inline-link" href="mailto:ahmad2609.as@gmail.com">Email me</a>
-        </div>
-        <div class="visitor-card" style="border-top:3px solid var(--purple);">
-          <h3>Need a site built?</h3>
-          <p>I build for real businesses &mdash; a barbershop with Stripe
-            payments and admin dashboards, a coffee shop with full
-            infrastructure. Not templates. Real products.</p>
+        </article>
+        <article class="connect-path-card">
+          <h3>Freelance or product build</h3>
+          <p>If you need a real product instead of a template, point me to the business, constraints, timeline, and where the operational pain actually lives.</p>
           <a class="inline-link" href="/work">See the work</a>
-        </div>
-        <div class="visitor-card" style="border-top:3px solid var(--gold);">
-          <h3>Just curious?</h3>
-          <p>Ask my AI clone anything. It knows my projects, my career,
-            my stack opinions, and my cats' names. Built from real
-            evidence, not a prompt wrapper.</p>
-          <a class="inline-link" href="/brain">Talk to the clone</a>
-        </div>
+        </article>
+        <article class="connect-path-card">
+          <h3>Need context first?</h3>
+          <p>The fastest filter is usually the public brain. Ask about the projects, strengths, work style, or what kinds of products I actually care about before you write.</p>
+          <a class="inline-link" href="/brain">Talk to the brain</a>
+        </article>
       </div>
     </section>
     """
 
-    # Photo row before visitor cards
-    photo_row_html = f"""
+    brief_html = f"""
     <section class="section container reveal">
-      <div class="captioned-photo-pair">
-        {_captioned_photo(photos, "couple")}
-        {_captioned_photo(photos, "photo_break", caption="Jersey City skyline. Golden hour.")}
+      <div class="connect-brief-grid">
+        <div class="connect-brief-card">
+          <div class="public-kicker">What helps</div>
+          <h3>Make the intro easy to reply to.</h3>
+          {_bullet_list(focus_points or identity_stack or [
+            "What the role or project is actually trying to solve.",
+            "Why you think I fit it specifically.",
+            "What stage the product or team is in.",
+            "What kind of ownership you want from me.",
+          ])}
+        </div>
+        <div class="connect-brief-card connect-brief-card--soft">
+          <div class="public-kicker">Best use of the page</div>
+          <h3>This page is a router.</h3>
+          <p>It should help you decide whether to reach out directly, inspect the work first, or use the public brain to get sharper context before sending anything.</p>
+          <div class="connect-inline-actions">
+            <a class="connect-inline-link" href="/brain">Open Brain</a>
+            <a class="connect-inline-link" href="/about">About</a>
+            <a class="connect-inline-link" href="/work">Case Studies</a>
+          </div>
+        </div>
       </div>
     </section>
     """
 
-    return hero_html + contact_html + photo_row_html + visitor_html
+    story_html = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Outside the email</div>
+      <div class="about-photo-story about-photo-story--connect">
+        {_photo_story_card(
+            photos.get("couple") or photos.get("photo_break"),
+            eyebrow="Life context",
+            title="The work is better when the life around it feels real.",
+            caption="New York, Annie, Oscar, and the actual day-to-day are part of why the products feel more human now.",
+        )}
+        {_photo_story_card(
+            photos.get("home") or photos.get("personality"),
+            eyebrow="Working style",
+            title="Builder energy, but with systems discipline.",
+            caption="The best collaborations are usually the ones where technical depth, product instinct, and operational details all matter at once.",
+        )}
+      </div>
+    </section>
+    """
+
+    return hero_html + contact_html + path_html + brief_html + story_html
 
 
 # ──────────────────────────────────────────────

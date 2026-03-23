@@ -178,3 +178,54 @@ def test_digest_and_board_embeds_fit_discord_field_limits() -> None:
     for embed in [board_embed, *digest_embeds]:
         for embed_field in embed.fields:
             assert len(embed_field.value) <= 1024
+
+
+def test_daily_digest_review_queue_filters_internal_cycle_reviews(monkeypatch) -> None:
+    async def fake_get_latest_board(session, *, board_type, generated_for_date=None):
+        return FakeBoard(payload={"story": "Fresh board", "carry_forward": [], "project_signals": []})
+
+    async def fake_recompute_project_states(session):
+        return []
+
+    async def fake_list_project_state_snapshots(session, limit=20):
+        return []
+
+    async def fake_list_reminders(session, status="active", limit=50):
+        return []
+
+    async def fake_list_notes(session, category=None, limit=12, status="active"):
+        return []
+
+    class Review:
+        def __init__(self, subject_type: str, subject_slug: str, diff_summary: str):
+            self.subject_type = subject_type
+            self.subject_slug = subject_slug
+            self.diff_summary = diff_summary
+
+    async def fake_list_public_surface_reviews(session, status=None, limit=20):
+        return [
+            Review("project", "dusrabheja", "Refresh the flagship update window."),
+            Review("campaign-wave", "wave-3", "Wave approval should stay out of Discord review."),
+            Review("internal-cycle", "cycle-7", "Internal cycle record should stay hidden."),
+        ]
+
+    async def fake_list_improvement_opportunities(session, limit=20):
+        return []
+
+    monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
+    monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
+    monkeypatch.setattr(digest_service.store, "list_reminders", fake_list_reminders)
+    monkeypatch.setattr(digest_service.store, "list_notes", fake_list_notes)
+    monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
+    monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
+
+    payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
+
+    assert payload["review_queue"] == [
+        {
+            "subject": "dusrabheja",
+            "subject_type": "project",
+            "summary": "Refresh the flagship update window.",
+        }
+    ]

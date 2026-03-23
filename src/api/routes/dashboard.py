@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import uuid
 from datetime import date, timedelta
 
@@ -26,7 +27,7 @@ from src.services.boards import daily_board_window, generate_or_refresh_board, w
 from src.services.brain_atlas import build_brain_atlas_snapshot
 from src.services.brain_os import build_brain_self_description
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
-from src.services.digest import generate_or_refresh_digest
+from src.services.digest import build_daily_digest_payload, generate_or_refresh_digest
 from src.services.evaluation import run_query_eval
 from src.services.library import build_final_stored_data, build_library_catalog
 from src.services.library_cleanup import build_library_cleanup_preview
@@ -115,6 +116,79 @@ def _serialize_json(payload: object) -> str:
     return json.dumps(payload, default=str).replace("</", "<\\/")
 
 
+def _strip_tags(value: str) -> str:
+    return " ".join(re.sub(r"<[^>]+>", " ", value).split()).strip()
+
+
+_DASHBOARD_PAGE_META: dict[str, dict[str, str]] = {
+    "Public Surface": {
+        "active_page": "public-surface",
+        "hero_kicker": "Autonomous Surface",
+    },
+    "Artifacts": {
+        "active_page": "artifacts",
+        "hero_kicker": "Raw Intake",
+    },
+    "Artifact Detail": {
+        "active_page": "artifacts",
+        "hero_kicker": "Raw Intake",
+    },
+    "Review Queue": {
+        "active_page": "review",
+        "hero_kicker": "Moderation Lane",
+    },
+    "Notes": {
+        "active_page": "notes",
+        "hero_kicker": "Durable Memory",
+    },
+    "Chrome Signals": {
+        "active_page": "chrome-signals",
+        "hero_kicker": "Browser Signals",
+    },
+    "Boards": {
+        "active_page": "boards",
+        "hero_kicker": "Operating Boards",
+    },
+    "Board Detail": {
+        "active_page": "boards",
+        "hero_kicker": "Operating Boards",
+    },
+    "Query Traces": {
+        "active_page": "query-traces",
+        "hero_kicker": "Retrieval Traces",
+    },
+    "Query Trace Detail": {
+        "active_page": "query-traces",
+        "hero_kicker": "Retrieval Traces",
+    },
+    "Eval Runs": {
+        "active_page": "evals",
+        "hero_kicker": "Regression Harness",
+    },
+    "Eval Detail": {
+        "active_page": "evals",
+        "hero_kicker": "Regression Harness",
+    },
+    "Sync Health": {
+        "active_page": "sync-health",
+        "hero_kicker": "Connector Health",
+    },
+}
+
+
+def _extract_leading_subtitle(body: str) -> tuple[str, str]:
+    subtitle = ""
+    cleaned = body
+    h1_match = re.search(r"^\s*<h1[^>]*>.*?</h1>\s*", cleaned, re.DOTALL | re.IGNORECASE)
+    if h1_match:
+        cleaned = cleaned[h1_match.end() :]
+    p_match = re.search(r"^\s*<p[^>]*>(.*?)</p>\s*", cleaned, re.DOTALL | re.IGNORECASE)
+    if p_match:
+        subtitle = _strip_tags(p_match.group(1))
+        cleaned = cleaned[p_match.end() :]
+    return subtitle, cleaned.strip()
+
+
 async def _public_fact_payloads(session) -> list[dict]:
     facts = await list_public_facts(session, limit=300)
     return [
@@ -132,7 +206,14 @@ async def _public_fact_payloads(session) -> list[dict]:
     ]
 
 
-def _render_overview_page(payload: dict, *, token: str) -> HTMLResponse:
+def _render_overview_page(
+    payload: dict,
+    *,
+    token: str,
+    ops: dict,
+    digest: dict,
+    health: dict,
+) -> HTMLResponse:
     identity = list(payload.get("identity_stack") or [])
     metrics = list(payload.get("key_metrics") or [])
     projects = list(payload.get("flagship_projects") or [])
@@ -145,27 +226,101 @@ def _render_overview_page(payload: dict, *, token: str) -> HTMLResponse:
         )
         for item in projects
     ) or '<div class="atlas-empty">No curated projects in the overview model yet.</div>'
+    focus_html = "".join(
+        _list_item("Focus", item, meta=[])
+        for item in list(current_arc.get("focus") or [])[:4]
+    ) or '<div class="atlas-empty">No current focus items yet.</div>'
+    priority_html = "".join(
+        _list_item(
+            item.get("title") or "Priority",
+            item.get("why") or "",
+            meta=[item.get("lane") or "brain"],
+        )
+        for item in list(digest.get("priority_moves") or [])[:5]
+    ) or '<div class="atlas-empty">No priority moves surfaced yet.</div>'
+    review_html = "".join(
+        _list_item(
+            item.get("subject") or "Proposal",
+            item.get("summary") or "",
+            meta=[item.get("subject_type") or "public-content"],
+        )
+        for item in list(digest.get("review_queue") or [])[:4]
+    ) or '<div class="atlas-empty">No public-content review items waiting right now.</div>'
+    watch_html = "".join(
+        _list_item(
+            item.get("title") or "Watch item",
+            item.get("summary") or "",
+            meta=[item.get("severity") or ""],
+        )
+        for item in list(digest.get("improvement_watchlist") or [])[:4]
+    ) or '<div class="atlas-empty">No open product watch items right now.</div>'
+    utility_html = "".join(
+        [
+            f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/public-surface", token)}"><span>Public Surface Ops</span></a>',
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/review", token)}"><span>Review Queue</span></a>',
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/boards", token)}"><span>Boards</span></a>',
+        ]
+    )
     content_html = f"""
     <div class="atlas-grid">
       <section class="atlas-card atlas-card--span-12">
         <div class="atlas-stat-row">
           {''.join(_metric(item.get('label') or 'Metric', str(item.get('value') or '0')) for item in metrics)}
+          {_metric('Pending Review', str(health.get('pending_review_count', 0)))}
+          {_metric('Public Refresh', str(ops.get('latest_public_run_status') or 'unknown'))}
+          {_metric('Last Refresh', str(ops.get('last_public_refresh_at') or 'n/a'))}
+          {_metric('Wave', str((ops.get('campaign') or {}).get('latest_wave') or 0))}
         </div>
       </section>
       <section class="atlas-card atlas-card--span-7">
-        <h2>Identity Stack</h2>
-        <div class="atlas-list">{''.join(_list_item(f'Layer {index}', line, meta=[]) for index, line in enumerate(identity, start=1))}</div>
-      </section>
-      <section class="atlas-card atlas-card--span-5">
-        <h2>Current Arc</h2>
-        <p>{html.escape(current_arc.get('summary') or payload.get('summary') or '')}</p>
-        <div class="atlas-list">
-          {''.join(_list_item('Focus', item, meta=[]) for item in list(current_arc.get('focus') or []))}
+        <div class="atlas-split-panel">
+          <div class="atlas-stack">
+            <div class="atlas-note-card">
+              <h3>Current arc</h3>
+              <p>{html.escape(current_arc.get('summary') or payload.get('summary') or '')}</p>
+            </div>
+            <div class="atlas-note-card">
+              <h3>Identity stack</h3>
+              <div class="atlas-list">{''.join(_list_item(f'Layer {index}', line, meta=[]) for index, line in enumerate(identity, start=1))}</div>
+            </div>
+          </div>
+          <div class="atlas-stack">
+            <div class="atlas-note-card">
+              <h3>Where the brain is leaning</h3>
+              <div class="atlas-list">{focus_html}</div>
+            </div>
+            <div class="atlas-callout">
+              <h3>Command view</h3>
+              <p>The overview is now an operating surface, not just a biography card. It combines current narrative, active priorities, review pressure, and public-surface freshness in one place.</p>
+            </div>
+          </div>
         </div>
       </section>
       <section class="atlas-card atlas-card--span-12">
         <h2>Flagship Projects</h2>
         <div class="atlas-list">{cards_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Action memo</h2>
+        <p>{html.escape(str(digest.get('summary') or ''))}</p>
+        <div class="atlas-list">{priority_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Review pressure</h2>
+        <p>Only actual public-content proposals should land here. Wave approvals stay in the main product loop.</p>
+        <div class="atlas-list">{review_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Product watchlist</h2>
+        <div class="atlas-list">{watch_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Public surface state</h2>
+        <div class="atlas-list">
+          {_list_item('Latest refresh', str(ops.get('latest_public_refresh_summary') or 'No public refresh summary yet.'), meta=[str(ops.get('last_public_refresh_at') or 'n/a')])}
+          {_list_item('Latest cycle', str((ops.get('latest_cycle') or {}).get('summary') or 'No product cycle has run yet.'), meta=[f"cycle {(ops.get('latest_cycle') or {}).get('cycle_number') or 'n/a'}"])}
+          {_list_item('Wave gate', 'Wave approvals stay in chat. Discord review is reserved for actual content proposals.', meta=['policy'])}
+        </div>
       </section>
     </div>
     """
@@ -174,9 +329,10 @@ def _render_overview_page(payload: dict, *, token: str) -> HTMLResponse:
         token=token,
         active_page="overview",
         hero_kicker="Narrative View",
-        hero_title="Profile Overview",
-        hero_subtitle=payload.get("headline") or "A curated overview of identity, current arc, and flagship work.",
+        hero_title="Command Center",
+        hero_subtitle=payload.get("headline") or "A private command view that combines identity, active priorities, review pressure, and public-surface state.",
         content_html=content_html,
+        utility_html=utility_html,
     )
 
 
@@ -384,44 +540,33 @@ def _render_coverage_page(payload: dict, *, token: str) -> HTMLResponse:
 
 
 def _page(title: str, body: str, *, token: str) -> HTMLResponse:
-    return HTMLResponse(
-        f"""<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>{html.escape(title)}</title>
-    <style>
-      body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px; background: #f7f5ef; color: #1f2937; }}
-      a {{ color: #0f766e; text-decoration: none; }}
-      table {{ width: 100%; border-collapse: collapse; margin-top: 16px; background: white; }}
-      th, td {{ border: 1px solid #d6d3d1; padding: 10px; vertical-align: top; text-align: left; }}
-      th {{ background: #f1f5f9; }}
-      .nav a {{ margin-right: 16px; font-weight: 600; }}
-      .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e2e8f0; margin-right: 6px; font-size: 12px; }}
-      pre {{ white-space: pre-wrap; background: #111827; color: #f9fafb; padding: 12px; border-radius: 8px; }}
-    </style>
-  </head>
-  <body>
-    <div class="nav">
-      <a href="{dashboard_url('/dashboard/atlas', token)}">Atlas</a>
-      <a href="{dashboard_url('/dashboard/story-river', token)}">Story River</a>
-      <a href="{dashboard_url('/dashboard/library', token)}">Library</a>
-      <a href="{dashboard_url('/dashboard/projects', token)}">Projects</a>
-      <a href="{dashboard_url('/dashboard/media', token)}">Media</a>
-      <a href="{dashboard_url('/dashboard/subconscious', token)}">Subconscious</a>
-      <a href="{dashboard_url('/dashboard/health', token)}">Health</a>
-      <a href="{dashboard_url('/dashboard/artifacts', token)}">Artifacts</a>
-      <a href="{dashboard_url('/dashboard/notes', token)}">Notes</a>
-      <a href="{dashboard_url('/dashboard/chrome-signals', token)}">Chrome Signals</a>
-      <a href="{dashboard_url('/dashboard/review', token)}">Review</a>
-      <a href="{dashboard_url('/dashboard/boards', token)}">Boards</a>
-      <a href="{dashboard_url('/dashboard/query-traces', token)}">Query Traces</a>
-      <a href="{dashboard_url('/dashboard/evals', token)}">Evals</a>
-      <a href="{dashboard_url('/dashboard/sync-health', token)}">Sync Health</a>
-    </div>
-    {body}
-  </body>
-</html>"""
+    meta = dict(_DASHBOARD_PAGE_META.get(title) or {})
+    subtitle, cleaned_body = _extract_leading_subtitle(body)
+    utility_bits = [
+        f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/overview", token)}"><span>Command Center</span></a>',
+    ]
+    active_page = meta.get("active_page") or "overview"
+    if active_page != "public-surface":
+        utility_bits.append(
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/public-surface", token)}"><span>Public Surface Ops</span></a>'
+        )
+    if active_page != "health":
+        utility_bits.append(
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/health", token)}"><span>Health</span></a>'
+        )
+    if active_page != "review":
+        utility_bits.append(
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/review", token)}"><span>Review Queue</span></a>'
+        )
+    return render_dashboard_shell(
+        title=title,
+        token=token,
+        active_page=active_page,
+        hero_kicker=meta.get("hero_kicker") or "Private Surface",
+        hero_title=title,
+        hero_subtitle=subtitle or "A private operating view into the brain, its evidence, and its current work lanes.",
+        content_html=f'<section class="atlas-card atlas-card--span-12"><div class="atlas-legacy-body">{cleaned_body}</div></section>',
+        utility_html="".join(utility_bits),
     )
 
 
@@ -1043,8 +1188,19 @@ async def _profile_models() -> dict[str, dict]:
 
 @router.get("/dashboard/overview", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_overview(token: str = Query(default="")) -> HTMLResponse:
-    payload = (await _profile_models()).get("profile:overview", {})
-    return _render_overview_page(payload, token=token)
+    async with async_session() as session:
+        models = await materialize_profile_read_models(session)
+        ops = await get_public_surface_ops_status(session)
+        digest = await build_daily_digest_payload(session, digest_date=date.today(), trigger="dashboard-overview")
+        atlas = (await build_brain_atlas_snapshot(session, include_web=False)).as_dict()
+    payload = models.get("profile:overview", {})
+    return _render_overview_page(
+        payload,
+        token=token,
+        ops=ops,
+        digest=digest,
+        health=dict(atlas.get("health") or {}),
+    )
 
 
 @router.get("/dashboard/timeline", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
@@ -1164,17 +1320,18 @@ async def dashboard_public_surface(token: str = Query(default="")) -> HTMLRespon
         f"<td>{html.escape(str(item.get('created_at') or ''))}</td>"
         "</tr>"
         for item in reviews
-    ) or "<tr><td colspan='4'>No staged reviews yet.</td></tr>"
+    ) or "<tr><td colspan='4'>No staged content proposals yet.</td></tr>"
     cycle = ops.get("latest_cycle") or {}
     campaign = ops.get("campaign") or {}
     report = cycle.get("report") or {}
     report_items = "".join(
-        "<li>"
-        f"<strong>{html.escape(str(item.get('title') or 'Update'))}</strong>: "
-        f"{html.escape(str(item.get('why') or ''))}"
-        "</li>"
+        _list_item(
+            str(item.get("title") or "Update"),
+            str(item.get("why") or ""),
+            meta=[],
+        )
         for item in list(report.get("improvements") or [])[:4]
-    ) or "<li>No cycle report yet.</li>"
+    ) or '<div class="atlas-empty">No cycle report yet.</div>'
     stage_rows = "".join(
         "<tr>"
         f"<td>{html.escape(str(item.get('stage') or ''))}</td>"
@@ -1183,41 +1340,87 @@ async def dashboard_public_surface(token: str = Query(default="")) -> HTMLRespon
         "</tr>"
         for item in list(report.get("stages") or [])
     ) or "<tr><td colspan='3'>No stage data yet.</td></tr>"
-    body = f"""
-    <h1>Public Surface Ops</h1>
-    <p>Morning refreshes, staged content proposals, and the autonomous campaign all land here. Discord review visibility is reserved for real public-content proposals, while the 5-cycle wave approval gate stays inline with the main product loop.</p>
-    <div class="atlas-panel-grid">
-      <section class="atlas-panel-card">
-        <h2>Latest Refresh</h2>
-        <p>Status: {html.escape(str(ops.get("latest_public_run_status") or "never-run"))}</p>
-        <p>Refreshed: {html.escape(str(ops.get("last_public_refresh_at") or "n/a"))}</p>
-        <p>{html.escape(str(ops.get("latest_public_refresh_summary") or ""))}</p>
+    next_candidates = "".join(
+        _list_item(
+            str(item.get("title") or "Next"),
+            str(item.get("summary") or ""),
+            meta=[],
+        )
+        for item in list(report.get("next_cycle_candidates") or [])[:4]
+    ) or '<div class="atlas-empty">No next-cycle candidates yet.</div>'
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {_metric('Refresh Status', str(ops.get('latest_public_run_status') or 'never-run'))}
+          {_metric('Last Refresh', str(ops.get('last_public_refresh_at') or 'n/a'))}
+          {_metric('Staged Proposals', str(len(reviews)))}
+          {_metric('Wave', str(campaign.get('latest_wave') or 0))}
+          {_metric('Cycles', f"{campaign.get('completed_cycles') or 0}/{campaign.get('target_cycles') or 0}")}
+          {_metric('Approval Gate', 'Waiting' if campaign.get('awaiting_approval') else 'Clear')}
+        </div>
       </section>
-      <section class="atlas-panel-card">
-        <h2>Campaign</h2>
-        <p>{html.escape(str(campaign.get("campaign_key") or "missing"))}</p>
-        <p>Status: {html.escape(str(campaign.get("status") or ""))}</p>
-        <p>Cycles: {campaign.get("completed_cycles")}/{campaign.get("target_cycles")}</p>
-        <p>Latest wave: {campaign.get("latest_wave")}</p>
-        <p>Approval gate: {"waiting for approval" if campaign.get("awaiting_approval") else "not blocking"}</p>
+      <section class="atlas-card atlas-card--span-7">
+        <h2>Refresh and review contract</h2>
+        <div class="atlas-list">
+          {_list_item('Latest refresh', str(ops.get('latest_public_refresh_summary') or 'No summary recorded yet.'), meta=[str(ops.get('last_public_refresh_at') or 'n/a')])}
+          {_list_item('Review rule', 'Discord review visibility is only for real public-content proposals generated by the brain. Wave approvals stay in the main product loop here.', meta=['policy'])}
+          {_list_item('Publish model', 'Daily refreshes can stage content proposals for Home and project update windows, while major rewrites stay visible in the dashboard and the main loop.', meta=['hybrid publish'])}
+        </div>
       </section>
-      <section class="atlas-panel-card">
-        <h2>Latest Cycle</h2>
-        <p>Cycle: {html.escape(str(cycle.get("cycle_number") or ""))}</p>
-        <p>Status: {html.escape(str(cycle.get("status") or ""))}</p>
-        <p>{html.escape(str(cycle.get("summary") or ""))}</p>
-        <p>Approval required: {html.escape(str(cycle.get("approval_required") or False))}</p>
+      <section class="atlas-card atlas-card--span-5">
+        <h2>Latest cycle</h2>
+        <div class="atlas-list">
+          {_list_item('Cycle summary', str(cycle.get('summary') or 'No product cycle has completed yet.'), meta=[f"cycle {cycle.get('cycle_number') or 'n/a'}", str(cycle.get('status') or '')])}
+          {_list_item('Design brief', str((report.get('design_brief') or {}).get('focus_summary') or 'No design brief captured yet.'), meta=[str((report.get('design_brief') or {}).get('primary_problem') or 'n/a')])}
+          {_list_item('Quality gates', f"QA {((report.get('qa_summary') or {}).get('passed') or 0)}/{((report.get('qa_summary') or {}).get('total') or 0)} · UAT {((report.get('uat_summary') or {}).get('passed') or 0)}/{((report.get('uat_summary') or {}).get('total') or 0)}", meta=['current loop'])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>What improved</h2>
+        <div class="atlas-list">{report_items}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Next cycle candidates</h2>
+        <div class="atlas-list">{next_candidates}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Stage breakdown</h2>
+        <div class="atlas-table-wrap">
+          <table class="atlas-table">
+            <thead><tr><th>Stage</th><th>Status</th><th>Summary</th></tr></thead>
+            <tbody>{stage_rows}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Staged content proposals</h2>
+        <div class="atlas-table-wrap">
+          <table class="atlas-table">
+            <thead><tr><th>Subject</th><th>Status</th><th>Summary</th><th>Created</th></tr></thead>
+            <tbody>{review_rows}</tbody>
+          </table>
+        </div>
       </section>
     </div>
-    <h2>Latest Cycle Report</h2>
-    <p>{html.escape(str(report.get("overview") or "No cycle report yet."))}</p>
-    <ul>{report_items}</ul>
-    <h2>Stage Breakdown</h2>
-    <table><thead><tr><th>Stage</th><th>Status</th><th>Summary</th></tr></thead><tbody>{stage_rows}</tbody></table>
-    <h2>Staged Reviews</h2>
-    <table><thead><tr><th>Subject</th><th>Status</th><th>Summary</th><th>Created</th></tr></thead><tbody>{review_rows}</tbody></table>
     """
-    return _page("Public Surface", body, token=token)
+    utility_html = "".join(
+        [
+            f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/overview", token)}"><span>Command Center</span></a>',
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/review", token)}"><span>Review Queue</span></a>',
+            '<a class="atlas-utility-chip" href="/brain"><span>Open Brain</span></a>',
+        ]
+    )
+    return render_dashboard_shell(
+        title="Public Surface",
+        token=token,
+        active_page="public-surface",
+        hero_kicker="Autonomous Public Layer",
+        hero_title="Public Surface Ops",
+        hero_subtitle="Morning refreshes, staged content proposals, and the current product loop all meet here before anything public changes shape.",
+        content_html=content_html,
+        utility_html=utility_html,
+    )
 
 
 @router.get("/dashboard/health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
