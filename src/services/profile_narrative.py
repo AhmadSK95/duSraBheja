@@ -1052,7 +1052,9 @@ def _taste_modules(seed_dir: Path) -> list[dict[str, Any]]:
     specs = [
         ("top5_youtubers", "Top YouTubers", "Rabbit holes I keep returning to"),
         ("top5_anime", "Top Anime", "Story structure and taste signals"),
-        ("top5_shows", "Top Shows", "Comfort rewatches and precision obsessions"),
+        ("top5_sports_anime", "Sports Anime", "Competitive obsession, motion, and momentum"),
+        ("top5_investigative_procedurals", "Investigative Procedurals", "The detective comfort-watch stack"),
+        ("top5_tv_all_time", "TV Shows All Time", "The broader all-time ranking"),
         ("top5_artists", "Top Artists", "What is in rotation"),
     ]
     modules: list[dict[str, Any]] = []

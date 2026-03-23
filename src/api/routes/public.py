@@ -238,6 +238,8 @@ def _load_interests() -> dict:
 _INTERESTS_COLORS = {
     "youtubers": "var(--accent)",
     "anime": "var(--purple)",
+    "sports-anime": "var(--accent)",
+    "procedurals": "var(--gold)",
     "shows": "var(--gold)",
     "artists": "var(--accent)",
 }
@@ -249,7 +251,9 @@ def _render_interests_posters() -> str:
     categories = [
         ("top5_youtubers", "Top YouTubers", "youtubers"),
         ("top5_anime", "Top Anime", "anime"),
-        ("top5_shows", "Top Shows", "shows"),
+        ("top5_sports_anime", "Sports Anime", "sports-anime"),
+        ("top5_investigative_procedurals", "Investigative Procedurals", "procedurals"),
+        ("top5_tv_all_time", "TV Shows All Time", "shows"),
         ("top5_artists", "Top Artists", "artists"),
     ]
     sections: list[str] = []
@@ -335,7 +339,7 @@ def _render_taste_modules(p: dict) -> str:
     if not modules:
         return ""
     rows = []
-    for module in modules[:4]:
+    for module in modules:
         cards = "".join(
             f'<a class="taste-card" href="{_s(item.get("link") or "#")}"'
             f' {"target=\"_blank\" rel=\"noreferrer\"" if item.get("link") else ""}>'

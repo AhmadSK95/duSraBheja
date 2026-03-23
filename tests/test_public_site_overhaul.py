@@ -68,6 +68,24 @@ def test_build_profile_narrative_exposes_overhaul_fields() -> None:
     assert narrative["taste_modules"]
     assert narrative["daily_update_window"]["items"]
     assert narrative["personal_signals"]["family"] == ["Annie", "Oscar", "Iris"]
+    assert [module["title"] for module in narrative["taste_modules"][:5]] == [
+        "Top YouTubers",
+        "Top Anime",
+        "Sports Anime",
+        "Investigative Procedurals",
+        "TV Shows All Time",
+    ]
+
+
+def test_taste_modules_reflect_latest_ranked_preferences() -> None:
+    narrative = build_profile_narrative()
+    modules = {module["title"]: module for module in narrative["taste_modules"]}
+
+    assert modules["Top Anime"]["items"][0]["name"] == "One Piece"
+    assert modules["Top Anime"]["items"][1]["name"] == "Hunter x Hunter"
+    assert modules["Sports Anime"]["items"][0]["name"] == "Haikyuu!!"
+    assert modules["Investigative Procedurals"]["items"][0]["name"] == "Person of Interest"
+    assert modules["TV Shows All Time"]["items"][0]["name"] == "Prison Break"
 
 
 def test_flagship_projects_expose_curated_case_study_payloads() -> None:

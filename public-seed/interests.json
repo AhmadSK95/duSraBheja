@@ -9,14 +9,31 @@
     {"name": "Patrick Cc:", "subtitle": "Celebrity deep dives — 13 videos", "link": "https://www.youtube.com/@PatrickCc"}
   ],
   "top5_anime": [
-    {"name": "Naruto Shippuden", "subtitle": "Currently on S9", "link": "https://www.crunchyroll.com/series/GYQ4MW246/naruto-shippuden"},
-    {"name": "My Hero Academia", "subtitle": "S1 binged in one sitting", "link": "https://www.crunchyroll.com/series/G6NQ5DWZ6/my-hero-academia"},
-    {"name": "Skeleton Knight in Another World", "subtitle": "Completed", "link": "https://www.crunchyroll.com/series/G24H1NPPG/skeleton-knight-in-another-world"},
-    {"name": "Trapped in a Dating Sim", "subtitle": "Completed", "link": "https://www.crunchyroll.com/series/GJ0H7QN90/trapped-in-a-dating-sim"}
+    {"name": "One Piece", "subtitle": "The long-form peak", "link": "https://www.crunchyroll.com/series/GRMG8ZQZR/one-piece"},
+    {"name": "Hunter x Hunter", "subtitle": "Nen system and payoff", "link": "https://www.crunchyroll.com/series/GY3VKX1MR/hunter-x-hunter"},
+    {"name": "Naruto Shippuden", "subtitle": "Emotional scale and loyalty", "link": "https://www.crunchyroll.com/series/GYQ4MW246/naruto-shippuden"},
+    {"name": "Code Geass", "subtitle": "Strategy, sacrifice, theatre", "link": "https://www.crunchyroll.com/series/GY2P9ED0Y/code-geass"},
+    {"name": "Black Clover", "subtitle": "Pure underdog momentum", "link": "https://www.crunchyroll.com/series/GRE50KV36/black-clover"}
   ],
-  "top5_shows": [
-    {"name": "Brooklyn Nine-Nine", "subtitle": "Stress-watch comfort show", "link": "https://www.netflix.com/title/70281562"},
-    {"name": "Orange Is the New Black", "subtitle": "Recently started", "link": "https://www.netflix.com/title/70242311"}
+  "top5_sports_anime": [
+    {"name": "Haikyuu!!", "subtitle": "Best team-sports energy", "link": "https://www.crunchyroll.com/series/GY8VM8MWY/haikyu"},
+    {"name": "Kuroko's Basketball", "subtitle": "Style and clutch drama", "link": "https://www.netflix.com/title/80063153"},
+    {"name": "Yowamushi Pedal", "subtitle": "Cycling obsession core", "link": "https://www.crunchyroll.com/series/GR79P9N2R/yowamushi-pedal"},
+    {"name": "Blue Lock", "subtitle": "Ego and striker chaos", "link": "https://www.crunchyroll.com/series/G4PH0WEKE/blue-lock"}
+  ],
+  "top5_investigative_procedurals": [
+    {"name": "Person of Interest", "subtitle": "Machine, surveillance, and trust", "link": "https://www.imdb.com/title/tt1839578/"},
+    {"name": "Elementary", "subtitle": "Precision comfort watch", "link": "https://www.imdb.com/title/tt2191671/"},
+    {"name": "Castle", "subtitle": "Charm, banter, and procedural rhythm", "link": "https://www.imdb.com/title/tt1219024/"},
+    {"name": "Brooklyn Nine-Nine", "subtitle": "Comedy comfort with detective energy", "link": "https://www.imdb.com/title/tt2467372/"},
+    {"name": "Bones", "subtitle": "Lab logic and character comfort", "link": "https://www.imdb.com/title/tt0460627/"}
+  ],
+  "top5_tv_all_time": [
+    {"name": "Prison Break", "subtitle": "The original binge obsession", "link": "https://www.imdb.com/title/tt0455275/"},
+    {"name": "Legends of Tomorrow", "subtitle": "Chaotic team energy done right", "link": "https://www.imdb.com/title/tt4532368/"},
+    {"name": "The Vampire Diaries", "subtitle": "Peak melodrama and momentum", "link": "https://www.imdb.com/title/tt1405406/"},
+    {"name": "Elementary", "subtitle": "Still one of the cleanest rewatches", "link": "https://www.imdb.com/title/tt2191671/"},
+    {"name": "The Big Bang Theory", "subtitle": "Comfort rewatch territory", "link": "https://www.imdb.com/title/tt0898266/"}
   ],
   "top5_artists": [
     {"name": "Seedhe Maut", "subtitle": "18 tracks in Top Songs 2025", "link": "https://open.spotify.com/artist/4JEoKXmDv5ILIZBghmsz5l"},
