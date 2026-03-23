@@ -951,11 +951,6 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         for slug in ordered_public_project_slugs()
         if slug in narrative_projects or slug in project_groups
     ]
-    all_slugs.extend(
-        slug
-        for slug in sorted(set(project_groups) | set(narrative_projects))
-        if slug not in all_slugs
-    )
     for slug in all_slugs:
         facts = sorted(
             project_groups.get(slug, []),

@@ -916,7 +916,11 @@ def _curate_public_projects(
                 project.case_study_sections or registry.get("case_study_sections") or _CASE_STUDY_SECTION_ORDER
             ),
             demo_asset=str(registry.get("demo_asset") or project.demo_asset),
-            display_order=int(registry.get("order") or project.display_order),
+            display_order=(
+                int(registry["order"])
+                if registry.get("order") is not None
+                else int(project.display_order)
+            ),
         )
     curated: list[ProjectCase] = []
     for slug in ordered_public_project_slugs():
