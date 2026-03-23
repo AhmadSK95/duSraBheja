@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import re
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -25,14 +24,22 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def resolve_public_seed_path() -> Path:
+def _public_seed_candidates() -> list[Path]:
     configured = Path(settings.public_profile_seed_path).expanduser()
-    if configured.exists():
-        return configured
     mounted = Path("/public-seed")
-    if mounted.exists():
-        return mounted
-    return configured
+    repo_local = Path(__file__).resolve().parents[2] / "public-seed"
+    candidates: list[Path] = []
+    for candidate in (configured, mounted, repo_local):
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def resolve_public_seed_path() -> Path:
+    for candidate in _public_seed_candidates():
+        if candidate.exists():
+            return candidate
+    return _public_seed_candidates()[0]
 
 
 def _slugify(value: str | None) -> str:
@@ -45,10 +52,13 @@ def public_asset_path(filename: str) -> Path | None:
     if not safe_name or safe_name != filename:
         return None
     # Check website_photos first, then demo_videos
-    for subdir in ("website_photos", "demo_videos"):
-        candidate = resolve_public_seed_path() / subdir / safe_name
-        if candidate.exists():
-            return candidate
+    for seed_dir in _public_seed_candidates():
+        if not seed_dir.exists():
+            continue
+        for subdir in ("website_photos", "demo_videos"):
+            candidate = seed_dir / subdir / safe_name
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -114,6 +124,20 @@ def _section_map(text: str) -> dict[str, str]:
     for _level, title, body in _extract_markdown_sections(text):
         mapping[title.strip().lower()] = body.strip()
     return mapping
+
+
+def _find_section_text(sections: dict[str, str], *needles: str) -> str:
+    normalized = [_compact(item).lower() for item in needles if _compact(item)]
+    if not normalized:
+        return ""
+    for needle in normalized:
+        if needle in sections:
+            return sections[needle]
+    for key, value in sections.items():
+        lowered = key.lower()
+        if any(needle in lowered for needle in normalized):
+            return value
+    return ""
 
 
 def _section_body(text: str, title: str) -> str:
@@ -272,12 +296,19 @@ class ProjectCase:
     tagline: str
     summary: str
     status: str
+    tier: str = "flagship"
     stack: list[str] = field(default_factory=list)
     resume_bullets: list[str] = field(default_factory=list)
     body: str = ""
     demonstrates: list[str] = field(default_factory=list)
     links: list[dict[str, str]] = field(default_factory=list)
     proof: list[str] = field(default_factory=list)
+    role_scope: str = ""
+    constraints: list[str] = field(default_factory=list)
+    outcomes: list[str] = field(default_factory=list)
+    case_study_sections: list[str] = field(default_factory=list)
+    demo_asset: str = ""
+    display_order: int = 999
 
 
 @dataclass(slots=True)
@@ -305,6 +336,227 @@ class CoverageGap:
     severity: str
     summary: str
     recommendation: str
+
+
+_CASE_STUDY_SECTION_ORDER = [
+    "Project Framing",
+    "Problem / Context",
+    "Role and Ownership",
+    "Constraints",
+    "Architecture",
+    "Key Decisions",
+    "Iterations and Struggles",
+    "Learnings",
+    "Outcomes",
+    "Next Improvements",
+]
+
+_PUBLIC_PROJECT_REGISTRY: dict[str, dict[str, Any]] = {
+    "dusrabheja": {
+        "title": "duSraBheja",
+        "aliases": ["du-sra-bheja", "dusra-bheja", "duSraBheja"],
+        "tier": "flagship",
+        "order": 0,
+        "demo_asset": "",
+        "role_scope": (
+            "I designed the system architecture, wrote the ingestion and public-surface code, "
+            "shaped the agent prompts, and owned the deployment and operational guardrails."
+        ),
+        "constraints": [
+            "The bot could not block on LLM or extraction work.",
+            "Public answers had to stay hard-walled from the private brain.",
+            "Everything needed to run cheaply on a single droplet.",
+        ],
+        "outcomes": [
+            "A Discord-native second brain with MCP access, public profile surfaces, and agent bootstrapping.",
+            "A production split between private knowledge and approved public facts.",
+        ],
+    },
+    "datagenie": {
+        "title": "dataGenie",
+        "aliases": ["data-genie"],
+        "tier": "flagship",
+        "order": 1,
+        "demo_asset": "datagenie_demo.mp4",
+        "role_scope": (
+            "I built the backend, query-routing logic, LLM provider layer, data profiling flow, "
+            "and the product framing for how non-technical users ask analytical questions."
+        ),
+        "constraints": [
+            "Simple questions needed fast direct answers instead of agent overhead.",
+            "Complex analytical questions still needed decomposition and synthesis.",
+            "The system had to stay usable even when one model provider failed.",
+        ],
+        "outcomes": [
+            "A conversational analytics prototype that routes between direct SQL and agentic reasoning.",
+            "A reusable provider abstraction with fallback between Claude, OpenAI, and local models.",
+        ],
+    },
+    "balkan-barbershop-website": {
+        "title": "Balkan Barbershop",
+        "aliases": [
+            "balkan-barbershop",
+            "barbershop",
+            "balkan-barbers",
+            "balkan-barbers-barbershop-booking-platform",
+        ],
+        "tier": "flagship",
+        "order": 2,
+        "demo_asset": "balkan_barbers_demo.mp4",
+        "role_scope": (
+            "I owned the customer booking flow, backend APIs, payments, admin tooling, notifications, "
+            "deployment, and the final editorial presentation of the brand."
+        ),
+        "constraints": [
+            "The product had to work for a real shop's operations, not just look premium.",
+            "Payments, reminders, and admin workflows all had to fit a lean single-owner setup.",
+            "Infrastructure had to stay maintainable without a dedicated ops team.",
+        ],
+        "outcomes": [
+            "A real booking platform with payments, admin tooling, and customer lifecycle flows.",
+            "A cleaner DigitalOcean deployment setup after simplifying an overbuilt AWS path.",
+        ],
+    },
+    "kaffa-espresso-bar-website": {
+        "title": "Kaffa Espresso Bar",
+        "aliases": [
+            "kaffa",
+            "kaffa-espresso-bar",
+            "kaffa-espresso-bar-website-live-client-project",
+        ],
+        "tier": "flagship",
+        "order": 3,
+        "demo_asset": "kaffa_espresso_bar_demo.mp4",
+        "role_scope": (
+            "I handled the brand translation, site build, domain migration, HTTPS setup, deployment "
+            "automation, and the production handoff for a real local business."
+        ),
+        "constraints": [
+            "The client needed a polished web presence without ongoing platform complexity.",
+            "Domain and hosting ownership were split across different systems.",
+            "Deployment needed rollback safety because the site was the shop's public front door.",
+        ],
+        "outcomes": [
+            "A live coffee-shop site on a custom domain with HTTPS, redirects, and git-driven releases.",
+            "A repeatable small-business deployment workflow I can reuse with future clients.",
+        ],
+    },
+    "teachassist-ai": {
+        "title": "TeachAssist AI",
+        "aliases": [
+            "teacherai",
+            "teachassist",
+            "teacherai-intelligent-teacher-ecosystem",
+            "teachassist-ai",
+        ],
+        "tier": "secondary",
+        "order": 4,
+        "demo_asset": "",
+        "role_scope": (
+            "I defined the product and technical architecture for an educator-facing AI workflow that "
+            "generates differentiated classroom materials."
+        ),
+        "constraints": [
+            "Outputs needed to be useful for teachers, not just visually plausible.",
+            "Compliance and classroom sensitivity mattered alongside content generation speed.",
+        ],
+        "outcomes": [
+            "A spec-rich monorepo MVP direction with strong testing and education-specific workflows.",
+        ],
+    },
+    "ai-resume-matcher": {
+        "title": "AI Resume Matcher",
+        "aliases": [
+            "resume-matcher",
+            "resume-matcher-fresh",
+            "resume-matcher-fresh-master-repo",
+            "ai-resume-matcher",
+        ],
+        "tier": "secondary",
+        "order": 5,
+        "demo_asset": "",
+        "role_scope": (
+            "I built the retrieval and matching flow, grounded LLM analysis path, and the UX for "
+            "natural-language candidate search across a real resume corpus."
+        ),
+        "constraints": [
+            "Resume formats were messy and inconsistent.",
+            "LLM analysis needed citations to avoid hallucinated candidate claims.",
+        ],
+        "outcomes": [
+            "A grounded candidate-search MVP with vector retrieval, JD analysis, and export workflows.",
+        ],
+    },
+}
+
+_OPEN_BRAIN_TOPICS = [
+    {
+        "title": "Projects I've actually shipped",
+        "summary": "duSraBheja, dataGenie, Balkan Barbershop, Kaffa, and why each one exists.",
+    },
+    {
+        "title": "How I think about AI systems",
+        "summary": "When I use agents, when I do not, and how I keep LLM-heavy systems honest.",
+    },
+    {
+        "title": "Why I left Amazon",
+        "summary": "The shift from scale-for-scale's-sake toward work I actually care about.",
+    },
+    {
+        "title": "What my life looks like outside work",
+        "summary": "Jersey City, Annie, Oscar and Iris, anime, Indian comedy, and music rabbit holes.",
+    },
+]
+
+
+def ordered_public_project_slugs() -> list[str]:
+    return list(_PUBLIC_PROJECT_REGISTRY)
+
+
+def canonical_public_project_slug(value: str | None) -> str:
+    slug = _slugify(value)
+    if not slug:
+        return ""
+    for canonical_slug, item in _PUBLIC_PROJECT_REGISTRY.items():
+        aliases = {_slugify(alias) for alias in item.get("aliases", [])}
+        if slug == canonical_slug or slug in aliases:
+            return canonical_slug
+    return slug
+
+
+def _project_registry_entry(value: str | None) -> dict[str, Any]:
+    return dict(_PUBLIC_PROJECT_REGISTRY.get(canonical_public_project_slug(value), {}))
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _compact(value)
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cleaned)
+    return deduped
+
+
+def _dedupe_links(links: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in links:
+        href = str(item.get("href") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if not href:
+            continue
+        key = href.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"label": label or "Open", "href": href})
+    return deduped
 
 
 def _photo_assets(seed_dir: Path, text: str) -> dict[str, PhotoAsset]:
@@ -391,11 +643,28 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
 _KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
     "balkan-barbershop-website": {
         "links": [{"label": "Live site", "href": "https://balkan.thisisrikisart.com"}],
-        "stack": ["React", "Node.js", "PostgreSQL", "Stripe", "Framer Motion", "Docker"],
+        "stack": [
+            "React",
+            "Node.js/Express",
+            "PostgreSQL",
+            "Stripe",
+            "Resend",
+            "Twilio",
+            "Docker",
+            "DigitalOcean",
+        ],
     },
     "kaffa-espresso-bar-website": {
         "links": [{"label": "Live site", "href": "https://kaffaespressobar.com"}],
-        "stack": ["React", "Next.js", "Nginx", "certbot", "DigitalOcean"],
+        "stack": [
+            "HTML",
+            "CSS",
+            "JavaScript",
+            "Nginx",
+            "Certbot",
+            "Bash",
+            "DigitalOcean",
+        ],
     },
     "dusrabheja": {
         "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/duSraBheja"}],
@@ -404,14 +673,20 @@ _KNOWN_PROJECT_EXTRAS: dict[str, dict] = {
             "FastAPI",
             "PostgreSQL",
             "pgvector",
-            "Claude API",
+            "ARQ",
             "Discord.py",
             "Docker",
         ],
     },
     "datagenie": {
         "links": [{"label": "GitHub", "href": "https://github.com/AhmadSK95/dataGenie"}],
-        "stack": ["Python", "FastAPI", "DuckDB", "Claude API", "Redis", "Docker"],
+        "stack": ["Python", "FastAPI", "DuckDB", "Redis", "Celery", "Docker"],
+    },
+    "teachassist-ai": {
+        "stack": ["TypeScript", "Next.js", "Python", "Claude API", "Docker", "Playwright"],
+    },
+    "ai-resume-matcher": {
+        "stack": ["Python", "Flask", "React", "ChromaDB", "OpenAI", "Docker"],
     },
 }
 
@@ -465,7 +740,7 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
     for match in sections:
         title = _compact(match.group("title"))
         body = match.group("body")
-        slug = _slugify(title.split(" - ", 1)[0])
+        slug = canonical_public_project_slug(title.split(" - ", 1)[0])
         resume_body = _extract_labeled_block(
             body,
             "Resume",
@@ -499,8 +774,8 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
         for fl in extras.get("links", []):
             if fl["href"] not in existing_hrefs:
                 links.append(fl)
-        if not stack and extras.get("stack"):
-            stack = extras["stack"]
+        if extras.get("stack"):
+            stack = _dedupe_strings(list(stack) + list(extras["stack"]))
 
         projects.append(
             ProjectCase(
@@ -513,11 +788,141 @@ def _parse_project_descriptions(text: str) -> tuple[str, list[ProjectCase]]:
                 resume_bullets=resume_bullets,
                 body=full_body,
                 demonstrates=demonstrates,
-                links=links,
+                links=_dedupe_links(links),
                 proof=resume_bullets[:2] + demonstrates[:2],
+                case_study_sections=list(_CASE_STUDY_SECTION_ORDER),
             )
         )
     return professional_summary, projects
+
+
+def _extract_other_project_summary(text: str, label: str) -> str:
+    pattern = re.compile(
+        rf"\*\*{re.escape(label)}[^*]*\*\*:\s*(?P<body>.*?)(?=\n\n\*\*|\Z)",
+        re.DOTALL,
+    )
+    match = pattern.search(text)
+    if not match:
+        return ""
+    return _compact(match.group("body"))
+
+
+def _repo_history_for_slug(
+    repo_histories: dict[str, dict[str, Any]], slug: str
+) -> dict[str, Any]:
+    canonical_slug = canonical_public_project_slug(slug)
+    for key, payload in repo_histories.items():
+        if canonical_public_project_slug(key) == canonical_slug:
+            return dict(payload)
+    return {}
+
+
+def _secondary_project_cases(
+    personal_bible_text: str,
+    repo_histories: dict[str, dict[str, Any]],
+) -> list[ProjectCase]:
+    secondary_specs = [
+        (
+            "teachassist-ai",
+            _extract_other_project_summary(personal_bible_text, "TeachAssist AI"),
+            [
+                "Monorepo architecture with educator-facing generation workflows.",
+                "Compliance-aware design for classroom contexts and differentiated materials.",
+            ],
+        ),
+        (
+            "ai-resume-matcher",
+            _extract_other_project_summary(personal_bible_text, "AI Resume Matcher"),
+            [
+                "Grounded candidate search across a large resume corpus.",
+                "Natural-language querying plus JD analysis and export workflows.",
+            ],
+        ),
+    ]
+    projects: list[ProjectCase] = []
+    for slug, bible_summary, proof in secondary_specs:
+        registry = _project_registry_entry(slug)
+        repo_history = _repo_history_for_slug(repo_histories, slug)
+        summary = _excerpt(
+            repo_history.get("executive_summary") or bible_summary or registry.get("title") or slug,
+            limit=340,
+        )
+        stack = _dedupe_strings(
+            list(repo_history.get("tech_stack") or [])
+            + list((_KNOWN_PROJECT_EXTRAS.get(slug) or {}).get("stack") or [])
+        )
+        projects.append(
+            ProjectCase(
+                slug=slug,
+                title=str(registry.get("title") or slug),
+                tagline=summary,
+                summary=summary,
+                status="Secondary proof",
+                tier="secondary",
+                stack=stack,
+                resume_bullets=[],
+                body=summary,
+                demonstrates=[],
+                links=_dedupe_links(list((_KNOWN_PROJECT_EXTRAS.get(slug) or {}).get("links") or [])),
+                proof=proof,
+                role_scope=str(registry.get("role_scope") or ""),
+                constraints=list(registry.get("constraints") or []),
+                outcomes=list(registry.get("outcomes") or []),
+                case_study_sections=list(_CASE_STUDY_SECTION_ORDER),
+                demo_asset=str(registry.get("demo_asset") or ""),
+                display_order=int(registry.get("order") or 999),
+            )
+        )
+    return projects
+
+
+def _curate_public_projects(
+    projects: list[ProjectCase],
+    *,
+    personal_bible_text: str,
+    repo_histories: dict[str, dict[str, Any]],
+) -> list[ProjectCase]:
+    indexed: dict[str, ProjectCase] = {}
+    for project in projects + _secondary_project_cases(personal_bible_text, repo_histories):
+        slug = canonical_public_project_slug(project.slug)
+        registry = _project_registry_entry(slug)
+        repo_history = _repo_history_for_slug(repo_histories, slug)
+        extras = _KNOWN_PROJECT_EXTRAS.get(slug) or {}
+        indexed[slug] = ProjectCase(
+            slug=slug,
+            title=str(registry.get("title") or project.title),
+            tagline=project.tagline,
+            summary=project.summary,
+            status=project.status,
+            tier=str(registry.get("tier") or project.tier or "flagship"),
+            stack=_dedupe_strings(
+                list(project.stack)
+                + list(repo_history.get("tech_stack") or [])
+                + list(extras.get("stack") or [])
+            ),
+            resume_bullets=list(project.resume_bullets),
+            body=project.body,
+            demonstrates=_clean_demonstrates(project.demonstrates),
+            links=_dedupe_links(list(project.links) + list(extras.get("links") or [])),
+            proof=_dedupe_strings(
+                list(project.proof)
+                + list(project.resume_bullets[:2])
+                + list(repo_history.get("tech_stack") or [])[:2]
+            )[:5],
+            role_scope=str(registry.get("role_scope") or project.role_scope),
+            constraints=list(registry.get("constraints") or project.constraints),
+            outcomes=list(registry.get("outcomes") or project.outcomes),
+            case_study_sections=list(
+                project.case_study_sections or registry.get("case_study_sections") or _CASE_STUDY_SECTION_ORDER
+            ),
+            demo_asset=str(registry.get("demo_asset") or project.demo_asset),
+            display_order=int(registry.get("order") or project.display_order),
+        )
+    curated: list[ProjectCase] = []
+    for slug in ordered_public_project_slugs():
+        if slug in indexed:
+            curated.append(indexed[slug])
+    return curated
 
 
 def _parse_roles(job_hunt_text: str) -> list[RoleExperience]:
@@ -563,6 +968,130 @@ def _role_from_block(title_line: str, body_lines: list[str]) -> RoleExperience:
         summary=_excerpt(" ".join(bullets), limit=220),
         bullets=bullets,
     )
+
+
+def _parse_education(job_hunt_text: str) -> list[dict[str, Any]]:
+    sections = _section_map(job_hunt_text)
+    entries: list[dict[str, Any]] = []
+    for bullet in _bullet_lines(sections.get("education")):
+        match = re.match(
+            r"(?P<degree>.+?)\s*-\s*(?P<school>.+?)\s*\((?P<years>[^)]+)\)\.\s*(?P<details>.+)$",
+            bullet,
+        )
+        if not match:
+            continue
+        entries.append(
+            {
+                "school": _compact(match.group("school")),
+                "degree": _compact(match.group("degree")),
+                "years": _compact(match.group("years")),
+                "details": _compact(match.group("details")),
+            }
+        )
+    return entries
+
+
+def _parse_skill_sections(job_hunt_text: str) -> list[dict[str, Any]]:
+    sections = _section_map(job_hunt_text)
+    skills: list[dict[str, Any]] = []
+    for bullet in _bullet_lines(sections.get("technical skills")):
+        match = re.match(r"(?P<label>.+?):\s*(?P<items>.+)$", bullet)
+        if not match:
+            continue
+        items = _dedupe_strings(
+            [item.strip() for item in re.split(r",\s*", match.group("items")) if item.strip()]
+        )
+        skills.append(
+            {
+                "category": _compact(match.group("label")),
+                "items": items,
+            }
+        )
+    return skills
+
+
+def _resume_sections(
+    professional_summary: str,
+    roles: list[RoleExperience],
+    education: list[dict[str, Any]],
+    skills: list[dict[str, Any]],
+    projects: list[ProjectCase],
+) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    if professional_summary:
+        sections.append(
+            {
+                "slug": "summary",
+                "title": "Professional Summary",
+                "summary": professional_summary,
+                "items": [],
+            }
+        )
+    sections.append(
+        {
+            "slug": "experience",
+            "title": "Experience",
+            "summary": "Roles across Amazon, Loylty Rewardz, and early systems work before the builder phase.",
+            "items": [
+                {
+                    "title": role.title,
+                    "subtitle": role.organization,
+                    "meta": role.period,
+                    "details": role.summary,
+                }
+                for role in roles
+            ],
+        }
+    )
+    sections.append(
+        {
+            "slug": "education",
+            "title": "Education",
+            "summary": "Formal training that sits underneath the systems and product work.",
+            "items": [
+                {
+                    "title": item.get("degree"),
+                    "subtitle": item.get("school"),
+                    "meta": item.get("years"),
+                    "details": item.get("details"),
+                }
+                for item in education
+            ],
+        }
+    )
+    sections.append(
+        {
+            "slug": "skills",
+            "title": "Technical Skills",
+            "summary": "The stack is broad because the work has been end to end.",
+            "items": [
+                {
+                    "title": item.get("category"),
+                    "subtitle": "",
+                    "meta": "",
+                    "details": ", ".join(item.get("items") or []),
+                }
+                for item in skills
+            ],
+        }
+    )
+    sections.append(
+        {
+            "slug": "projects",
+            "title": "Projects",
+            "summary": "The strongest current proof sits in the products and client work.",
+            "items": [
+                {
+                    "title": project.title,
+                    "subtitle": project.status,
+                    "meta": project.tier,
+                    "details": project.summary,
+                }
+                for project in projects
+            ],
+        }
+    )
+    return sections
 
 
 def _parse_capabilities(personal_bible_text: str) -> list[CapabilityBook]:
@@ -858,6 +1387,87 @@ def _personal_texture(personal_bible_text: str) -> list[str]:
     return deduped[:10]
 
 
+def _personal_signals(
+    person: dict[str, str],
+    personal_texture: list[str],
+    currently: dict[str, Any],
+) -> dict[str, Any]:
+    languages = [
+        item.strip()
+        for item in re.split(r",\s*", person.get("languages spoken", ""))
+        if item.strip()
+    ]
+    family = [
+        "Annie",
+        "Oscar",
+        "Iris",
+    ]
+    cultural_signals = _dedupe_strings(
+        [
+            "Jersey City life",
+            "Anime",
+            "Indian standup",
+            "Hip hop",
+            "Indian film music",
+            "Pokemon collecting",
+            "Cycling",
+        ]
+        + personal_texture
+    )
+    return {
+        "home_base": person.get("current base") or settings.public_profile_location,
+        "languages": languages,
+        "family": family,
+        "cultural_signals": cultural_signals[:10],
+        "currently": currently,
+    }
+
+
+def _photo_slots(photos: dict[str, Any]) -> list[dict[str, str]]:
+    ordered_slots = [
+        ("home", "hero", "hero"),
+        ("home", "builder-summary", "oscar_selfie"),
+        ("home", "open-brain", "ghibli_cat"),
+        ("home", "demo-proof", "personality"),
+        ("home", "currently", "friends_brooklyn"),
+        ("about", "intro", "indian_wedding"),
+        ("about", "act-one", "home"),
+        ("about", "experience", "work"),
+        ("about", "education", "ghibli_picnic"),
+        ("about", "skills", "pokemon"),
+        ("about", "life", "wedding"),
+        ("about", "life", "couple"),
+        ("about", "life", "cycling"),
+        ("about", "life", "photo_break"),
+        ("about", "life", "oscar_looking"),
+        ("about", "life", "oscar_home"),
+        ("about", "life", "skyline_2"),
+        ("about", "life", "baking"),
+        ("about", "life", "oscar_couch"),
+        ("about", "life", "oscar_sploot"),
+        ("about", "life", "oscar_office"),
+        ("about", "life", "oscar_chair"),
+        ("about", "life", "oscar_stairs"),
+        ("about", "life", "oscar_window"),
+        ("about", "life", "ghibli_cat"),
+    ]
+    slots: list[dict[str, str]] = []
+    for page, section, key in ordered_slots:
+        photo = photos.get(key)
+        if not photo:
+            continue
+        slots.append(
+            {
+                "page": page,
+                "section": section,
+                "photo_key": key,
+                "filename": str(photo.get("filename") or ""),
+                "title": str(photo.get("title") or ""),
+            }
+        )
+    return slots
+
+
 def _currently_feed(seed_dir: Path) -> dict[str, Any]:
     """Parse Ahmad_Profile_Signal.md for the 'Currently' living feed."""
     signal_path = seed_dir / "Ahmad_Profile_Signal.md"
@@ -945,12 +1555,16 @@ def _parse_repo_histories(seed_dir: Path) -> dict[str, dict[str, Any]]:
             project_blocks = re.split(r"\n##\s+\d+\.\s+", text)
             for block in project_blocks[1:]:
                 title_line = block.split("\n", 1)[0].strip()
-                project_slug = _slugify(title_line.split("(")[0].split("—")[0].strip())
+                project_slug = canonical_public_project_slug(
+                    title_line.split("(")[0].split("—")[0].strip()
+                )
                 parsed = _parse_single_repo_history(block, title_line)
                 if parsed:
                     histories[project_slug] = parsed
         else:
-            project_slug = slug_map.get(stem, _slugify(stem.replace("repo_history_", "")))
+            project_slug = canonical_public_project_slug(
+                slug_map.get(stem, stem.replace("repo_history_", ""))
+            )
             parsed = _parse_single_repo_history(text, stem)
             if parsed:
                 histories[project_slug] = parsed
@@ -961,13 +1575,20 @@ def _parse_repo_histories(seed_dir: Path) -> dict[str, dict[str, Any]]:
 def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any] | None:
     """Parse a single repo history block into structured data."""
     sections = _section_map(text)
+    header_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    header_title = _compact(header_match.group(1)) if header_match else _compact(fallback_title)
+    meta = _kv_lines(text[:2400])
+    project_title = (
+        _compact(str(meta.get("project") or "").split("—")[0])
+        or _compact(fallback_title.split("—")[0])
+        or header_title
+    )
 
     # Executive summary
     exec_summary = ""
-    for key in ("executive summary", "project overview", "overview"):
-        if key in sections:
-            exec_summary = _compact(sections[key])
-            break
+    exec_summary = _compact(
+        _find_section_text(sections, "executive summary", "project overview", "overview")
+    )
     if not exec_summary:
         # Try first paragraph of text
         paragraphs = _split_paragraphs(text[:2000])
@@ -1025,11 +1646,13 @@ def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any]
 
     # Architectural decisions
     architectural_decisions: list[dict[str, str]] = []
-    decisions_body = ""
-    for key in ("architectural decisions", "key decisions", "decisions"):
-        if key in sections:
-            decisions_body = sections[key]
-            break
+    decisions_body = _find_section_text(
+        sections,
+        "architectural decisions",
+        "key architectural decisions",
+        "key decisions",
+        "decisions",
+    )
     if decisions_body:
         for item in re.finditer(
             r"\*\*(?P<title>.+?)\*\*[:\s]*(?P<body>.*?)(?=\*\*[A-Z]|\Z)",
@@ -1045,14 +1668,30 @@ def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any]
                     "tradeoff": "",
                 }
             )
+        if not architectural_decisions:
+            for heading_match in re.finditer(
+                r"###\s+(?P<title>.+?)\n(?P<body>.*?)(?=###\s+|\Z)",
+                decisions_body,
+                re.DOTALL,
+            ):
+                architectural_decisions.append(
+                    {
+                        "title": _compact(heading_match.group("title")),
+                        "rationale": _excerpt(heading_match.group("body"), limit=260),
+                        "tradeoff": "",
+                    }
+                )
 
     # Challenges
     challenges: list[dict[str, str]] = []
-    challenges_body = ""
-    for key in ("challenges", "struggles", "pain points"):
-        if key in sections:
-            challenges_body = sections[key]
-            break
+    challenges_body = _find_section_text(
+        sections,
+        "critical challenges",
+        "key decisions & challenges",
+        "challenges",
+        "struggles",
+        "pain points",
+    )
     if challenges_body:
         for bullet in _bullet_lines(challenges_body)[:6]:
             parts = bullet.split("→") if "→" in bullet else bullet.split(" - ", 1)
@@ -1069,6 +1708,19 @@ def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any]
                     {
                         "title": _compact(bullet[:80]),
                         "problem": _compact(bullet),
+                        "solution": "",
+                    }
+                )
+        if not challenges:
+            for heading_match in re.finditer(
+                r"###\s+(?P<title>.+?)\n(?P<body>.*?)(?=###\s+|\Z)",
+                challenges_body,
+                re.DOTALL,
+            ):
+                challenges.append(
+                    {
+                        "title": _compact(heading_match.group("title")),
+                        "problem": _excerpt(heading_match.group("body"), limit=200),
                         "solution": "",
                     }
                 )
@@ -1104,19 +1756,49 @@ def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any]
 
     # Code metrics
     code_metrics: dict[str, str] = {}
-    for key in ("code metrics", "statistics", "metrics"):
-        if key in sections:
-            for line in _bullet_lines(sections[key]):
-                kv = re.match(r"(.+?):\s*(.+)", line)
-                if kv:
-                    code_metrics[_compact(kv.group(1)).lower()] = _compact(kv.group(2))
-            break
+    metrics_body = _find_section_text(sections, "code metrics", "statistics", "metrics")
+    if metrics_body:
+        for line in _bullet_lines(metrics_body):
+            kv = re.match(r"(.+?):\s*(.+)", line)
+            if kv:
+                code_metrics[_compact(kv.group(1)).lower()] = _compact(kv.group(2))
+
+    # Tech stack
+    tech_stack: list[str] = []
+    tech_sections = [
+        _find_section_text(sections, "tech stack"),
+        _find_section_text(sections, "frontend stack"),
+        _find_section_text(sections, "backend stack"),
+        _find_section_text(sections, "deployment stack"),
+    ]
+    for block in tech_sections:
+        if not block:
+            continue
+        for bullet in _bullet_lines(block):
+            parts = bullet.split(":", 1)
+            items_text = parts[1] if len(parts) == 2 else parts[0]
+            tech_stack.extend(
+                item.strip()
+                for item in re.split(r",\s*", _compact(items_text))
+                if item.strip()
+            )
+    if not tech_stack:
+        languages = meta.get("languages")
+        if languages:
+            tech_stack.extend(item.strip() for item in languages.split(",") if item.strip())
+
+    learnings: list[str] = []
+    learnings_body = _find_section_text(sections, "key learnings", "lessons")
+    if learnings_body:
+        learnings = _bullet_lines(learnings_body)[:6]
 
     # Only return if we have meaningful content
     if not exec_summary and not phases:
         return None
 
     return {
+        "project_title": project_title or header_title,
+        "project_meta": meta,
         "executive_summary": exec_summary,
         "phases": phases,
         "architecture_diagrams": architecture_diagrams,
@@ -1125,6 +1807,8 @@ def _parse_single_repo_history(text: str, fallback_title: str) -> dict[str, Any]
         "tech_oscillations": tech_oscillations[:6],
         "timeline_ascii": timeline_ascii,
         "code_metrics": code_metrics,
+        "tech_stack": _dedupe_strings(tech_stack),
+        "learnings": learnings,
     }
 
 
@@ -1376,6 +2060,8 @@ def build_profile_narrative() -> dict[str, Any]:
     project_descriptions_path = seed_dir / "Project_Descriptions_Improved.md"
     photo_guide_path = seed_dir / "Website_Photo_Guide.md"
     brain_dump_path = seed_dir / "brain_data_dump_mar16.md"
+    signal_path = seed_dir / "Ahmad_Profile_Signal.md"
+    repo_history_paths = sorted(seed_dir.glob("repo_history_*.md"))
 
     personal_bible_text = _read_text(personal_bible_path)
     job_hunt_text = _read_text(job_hunt_path)
@@ -1384,7 +2070,15 @@ def build_profile_narrative() -> dict[str, Any]:
     brain_dump_text = _read_text(brain_dump_path)
 
     professional_summary, projects = _parse_project_descriptions(project_descriptions_text)
+    repo_histories = _parse_repo_histories(seed_dir)
+    projects = _curate_public_projects(
+        projects,
+        personal_bible_text=personal_bible_text,
+        repo_histories=repo_histories,
+    )
     roles = _parse_roles(job_hunt_text)
+    education = _parse_education(job_hunt_text)
+    skills = _parse_skill_sections(job_hunt_text)
     timeline = _timeline_from_personal_bible(personal_bible_text)
     eras = _eras_from_personal_bible(personal_bible_text)
     capabilities = _parse_capabilities(personal_bible_text)
@@ -1398,7 +2092,9 @@ def build_profile_narrative() -> dict[str, Any]:
     personal_texture = _personal_texture(personal_bible_text)
     thought_garden = _thought_garden(job_hunt_text, personal_bible_text)
     currently = _currently_feed(seed_dir)
-    repo_histories = _parse_repo_histories(seed_dir)
+    personal_signals = _personal_signals(person, personal_texture, currently)
+    resume_sections = _resume_sections(professional_summary, roles, education, skills, projects)
+    photo_slots = _photo_slots(photos)
 
     faq = [
         {
@@ -1425,19 +2121,25 @@ def build_profile_narrative() -> dict[str, Any]:
         "hero_summary": identity_stack[0] if identity_stack else professional_summary,
         "identity_stack": identity_stack,
         "current_arc": current_arc,
+        "resume_sections": resume_sections,
         "eras": [asdict(era) for era in eras],
         "timeline": timeline,
         "timeline_highlights": _timeline_highlights(timeline),
         "roles": [asdict(role) for role in roles],
+        "education": education,
+        "skills": skills,
         "projects": [asdict(project) for project in projects],
         "capabilities": [asdict(book) for book in capabilities],
         "contact_modes": [asdict(item) for item in contact_modes],
         "proof_points": proof_points,
         "personal_texture": personal_texture,
+        "personal_signals": personal_signals,
         "thought_garden": thought_garden,
         "photos": photos,
+        "photo_slots": photo_slots,
         "faq": faq,
         "currently": currently,
+        "open_brain_topics": list(_OPEN_BRAIN_TOPICS),
         "repo_histories": repo_histories,
         "source_pack": {
             "seed_dir": str(seed_dir),
@@ -1447,6 +2149,8 @@ def build_profile_narrative() -> dict[str, Any]:
                 str(project_descriptions_path),
                 str(photo_guide_path),
                 str(brain_dump_path),
+                str(signal_path),
+                *[str(path) for path in repo_history_paths],
             ],
         },
     }

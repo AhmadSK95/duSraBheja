@@ -30,7 +30,12 @@ from src.models import (
     PublicProjectSnapshot,
 )
 from src.services.library import sync_canonical_library
-from src.services.profile_narrative import build_profile_narrative, resolve_public_seed_path
+from src.services.profile_narrative import (
+    build_profile_narrative,
+    canonical_public_project_slug,
+    ordered_public_project_slugs,
+    resolve_public_seed_path,
+)
 from src.services.providers import model_for_role, provider_registry_summary
 from src.services.secrets import extract_secret_candidates, redact_secret_candidates
 
@@ -128,6 +133,22 @@ def _excerpt(value: str | None, *, limit: int = 320) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return f"{cleaned[: limit - 1].rstrip()}…"
+
+
+def _dedupe_link_entries(links: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in links:
+        href = str(item.get("href") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if not href:
+            continue
+        key = href.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"label": label or "Open", "href": href})
+    return deduped
 
 
 def _extract_markdown_sections(text: str) -> list[tuple[int, str, str]]:
@@ -827,10 +848,12 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "site_title": settings.public_site_title,
         "hero_summary": hero_summary or identity,
         "identity": identity,
-        "skills": skills,
+        "professional_summary": narrative.get("professional_summary") or hero_summary or identity,
+        "skills": narrative.get("skills") or skills,
         "interests": interests,
         "experience": [fact.body for fact in profile_facts if fact.fact_type == "experience"],
-        "education": [fact.body for fact in profile_facts if fact.fact_type == "education"],
+        "education": narrative.get("education")
+        or [fact.body for fact in profile_facts if fact.fact_type == "education"],
         "current_focus": [
             fact.body for fact in profile_facts if fact.fact_type in {"narrative", "decisions"}
         ],
@@ -845,17 +868,21 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         ][:6],
         "identity_stack": narrative.get("identity_stack") or [],
         "current_arc": narrative.get("current_arc") or {},
+        "resume_sections": narrative.get("resume_sections") or [],
         "eras": narrative.get("eras") or [],
         "timeline": narrative.get("timeline") or [],
         "roles": narrative.get("roles") or [],
         "projects": narrative.get("projects") or [],
         "capabilities": narrative.get("capabilities") or [],
         "photos": narrative.get("photos") or {},
+        "photo_slots": narrative.get("photo_slots") or [],
         "proof_points": narrative.get("proof_points") or [],
         "personal_texture": narrative.get("personal_texture") or [],
+        "personal_signals": narrative.get("personal_signals") or {},
         "thought_garden": narrative.get("thought_garden") or [],
         "contact_modes": narrative_contacts,
         "currently": narrative.get("currently") or {},
+        "open_brain_topics": narrative.get("open_brain_topics") or [],
     }
     profile_snapshot = await _upsert_public_profile_snapshot(
         session,
@@ -871,9 +898,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     project_groups: dict[str, list[PublicFactRecord]] = defaultdict(list)
     for fact in project_facts:
         if fact.project_slug:
-            project_groups[fact.project_slug].append(fact)
+            project_groups[canonical_public_project_slug(fact.project_slug)].append(fact)
     narrative_projects = {
-        str(item.get("slug") or ""): dict(item)
+        canonical_public_project_slug(str(item.get("slug") or "")): dict(item)
         for item in (narrative.get("projects") or [])
         if item.get("slug")
     }
@@ -904,32 +931,31 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             if first_word and first_word != nslug:
                 variants.append(first_word)
             for v in variants:
+                key = canonical_public_project_slug(v)
                 if cs:
-                    _case_studies[v] = cs
+                    _case_studies[key] = cs
                 if rlinks:
-                    _repo_links[v] = rlinks
+                    _repo_links[key] = rlinks
     except Exception:
         pass  # non-fatal — project data still renders from narrative
 
     def _find_case_study(slug: str) -> dict | None:
-        """Fuzzy match: check exact slug, then check if any key is a substring."""
-        if slug in _case_studies:
-            return _case_studies[slug]
-        for key, cs in _case_studies.items():
-            if key in slug or slug in key:
-                return cs
-        return None
+        return _case_studies.get(canonical_public_project_slug(slug))
 
     def _find_repo_links(slug: str) -> list[dict[str, str]]:
-        if slug in _repo_links:
-            return _repo_links[slug]
-        for key, links in _repo_links.items():
-            if key in slug or slug in key:
-                return links
-        return []
+        return _repo_links.get(canonical_public_project_slug(slug), [])
 
     project_snapshots: list[PublicProjectSnapshot] = []
-    all_slugs = sorted(set(project_groups) | set(narrative_projects))
+    all_slugs = [
+        slug
+        for slug in ordered_public_project_slugs()
+        if slug in narrative_projects or slug in project_groups
+    ]
+    all_slugs.extend(
+        slug
+        for slug in sorted(set(project_groups) | set(narrative_projects))
+        if slug not in all_slugs
+    )
     for slug in all_slugs:
         facts = sorted(
             project_groups.get(slug, []),
@@ -951,6 +977,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             or _excerpt(primary.body if primary else "", limit=500),
             "tagline": narrative_project.get("tagline") or "",
             "status": narrative_project.get("status") or "",
+            "tier": narrative_project.get("tier") or "flagship",
             "stack": narrative_project.get("stack") or [],
             "resume_bullets": narrative_project.get("resume_bullets") or [],
             "demonstrates": [
@@ -958,8 +985,14 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 for d in (narrative_project.get("demonstrates") or [])
                 if d and d.strip() not in {"---", "--", "-", ""} and len(d.strip()) >= 10
             ],
-            "links": narrative_project.get("links") or [],
+            "links": _dedupe_link_entries(list(narrative_project.get("links") or [])),
             "proof": narrative_project.get("proof") or [],
+            "role_scope": narrative_project.get("role_scope") or "",
+            "constraints": narrative_project.get("constraints") or [],
+            "outcomes": narrative_project.get("outcomes") or [],
+            "case_study_sections": narrative_project.get("case_study_sections") or [],
+            "demo_asset": narrative_project.get("demo_asset") or "",
+            "display_order": narrative_project.get("display_order") or 999,
             "highlights": narrative_highlights + highlights,
             "signals": [
                 {
@@ -978,17 +1011,13 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         # B3: Merge repo history for rich narrative case studies
         repo_histories = narrative.get("repo_histories") or {}
         repo_hist = repo_histories.get(slug)
-        if not repo_hist:
-            for rh_slug, rh_data in repo_histories.items():
-                if rh_slug in slug or slug in rh_slug:
-                    repo_hist = rh_data
-                    break
         if repo_hist:
             payload["repo_history"] = repo_hist
         # Merge GitHub repo links (fuzzy slug match)
         for rl in _find_repo_links(slug):
             if rl["href"] not in {lk.get("href") for lk in payload["links"]}:
                 payload["links"].append(rl)
+        payload["links"] = _dedupe_link_entries(list(payload["links"]))
 
         project_snapshots.append(
             await _upsert_public_project_snapshot(
@@ -1088,9 +1117,7 @@ async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
 
 async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
     await refresh_public_snapshots_if_stale(session)
-    result = await session.execute(
-        select(PublicProjectSnapshot).order_by(PublicProjectSnapshot.title.asc())
-    )
+    result = await session.execute(select(PublicProjectSnapshot))
     items = [
         {
             "slug": record.slug,
@@ -1102,6 +1129,12 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
         for record in result.scalars().all()
     ]
     if items:
+        items.sort(
+            key=lambda item: (
+                int((item.get("payload") or {}).get("display_order") or 999),
+                str(item.get("title") or "").lower(),
+            )
+        )
         return items
     narrative = build_profile_narrative()
     return [
@@ -1118,18 +1151,12 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
 
 async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any] | None:
     await refresh_public_snapshots_if_stale(session)
+    canonical_slug = canonical_public_project_slug(slug)
     # Exact match first
     result = await session.execute(
-        select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == slug)
+        select(PublicProjectSnapshot).where(PublicProjectSnapshot.slug == canonical_slug)
     )
     record = result.scalar_one_or_none()
-    # Fuzzy match if exact fails — check substring both ways
-    if not record:
-        all_result = await session.execute(select(PublicProjectSnapshot))
-        for candidate in all_result.scalars().all():
-            if candidate.slug in slug or slug in candidate.slug:
-                record = candidate
-                break
     if record:
         return {
             "slug": record.slug,
@@ -1141,8 +1168,8 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
     # Fall back to narrative projects with same fuzzy matching
     narrative = build_profile_narrative()
     for item in narrative.get("projects") or []:
-        item_slug = item.get("slug") or ""
-        if item_slug == slug or item_slug in slug or slug in item_slug:
+        item_slug = canonical_public_project_slug(item.get("slug") or "")
+        if item_slug == canonical_slug:
             return {
                 "slug": item.get("slug"),
                 "title": item.get("title"),
@@ -1182,7 +1209,7 @@ async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
 async def get_public_answer_policy(session: AsyncSession) -> dict[str, Any]:
     await refresh_public_snapshots_if_stale(session)
     result = await session.execute(
-        select(PublicAnswerPolicy).where(PublicAnswerPolicy.is_active == True)
+        select(PublicAnswerPolicy).where(PublicAnswerPolicy.is_active)
     )
     record = result.scalar_one_or_none()
     if not record:

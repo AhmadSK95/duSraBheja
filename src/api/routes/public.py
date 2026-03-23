@@ -28,7 +28,6 @@ from src.services.public_surface import (
     list_public_faq,
     list_public_projects,
 )
-from src.services.website import list_page_sections
 
 router = APIRouter(tags=["public"])
 log = logging.getLogger("brain.public")
@@ -294,27 +293,82 @@ def _render_interests_posters() -> str:
     )
 
 
+def _project_payload(project: dict) -> dict:
+    return dict(project.get("payload") or project)
+
+
+def _project_collections(projects: list[dict]) -> tuple[list[dict], list[dict]]:
+    flagship = [project for project in projects if _project_payload(project).get("tier") != "secondary"]
+    secondary = [project for project in projects if _project_payload(project).get("tier") == "secondary"]
+    return flagship, secondary
+
+
+def _demo_video_html(project: dict, *, compact: bool = False) -> str:
+    payload = _project_payload(project)
+    demo_asset = payload.get("demo_asset")
+    if not demo_asset:
+        return ""
+    cls = " demo-video-card--compact" if compact else ""
+    title = _s(project.get("title") or payload.get("title"))
+    return (
+        f'<article class="demo-video-card{cls}">'
+        f'<div class="public-kicker">Live demo</div>'
+        f"<h3>{title}</h3>"
+        f'<video controls preload="metadata">'
+        f'<source src="/public-assets/profile/{_s(demo_asset)}" type="video/mp4">'
+        f"Your browser does not support video.</video>"
+        f"</article>"
+    )
+
+
+def _photo_tile(photo: dict | None, *, cls: str = "") -> str:
+    if not photo:
+        return ""
+    url = _photo_url(photo)
+    if not url:
+        return ""
+    extra_cls = f" {cls}" if cls else ""
+    return (
+        f'<div class="editorial-photo{extra_cls}">'
+        f'<img src="{url}" alt="{_s(photo.get("title", ""))}" loading="lazy" />'
+        f"</div>"
+    )
+
+
 def _project_card_html(project: dict, *, featured: bool = False) -> str:
-    p = dict(project.get("payload") or {})
+    p = _project_payload(project)
     stack = p.get("stack") or []
     slug = project.get("slug") or ""
     featured_cls = " project-card--featured" if featured else ""
-    links_html = "".join(
-        f'<a class="inline-link" href="{_s(item.get("href"))}"'
-        f' target="_blank" rel="noreferrer">'
+    tier = str(p.get("tier") or "flagship")
+    proof = list(p.get("proof") or [])[:3]
+    proof_html = "".join(f"<li>{_s(item)}</li>" for item in proof if item)
+    link_items = [
+        f'<a class="inline-link" href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">'
         f"{_s(item.get('label') or 'Open')}</a>"
         for item in (p.get("links") or [])
         if item.get("href")
-    )
+    ]
+    if tier == "flagship":
+        link_items.insert(0, f'<a class="inline-link" href="/projects/{_s(slug)}">Read case study</a>')
+    elif p.get("links"):
+        link_items.insert(0, '<span class="mono-accent">Secondary proof</span>')
+    demo_link = ""
+    if p.get("demo_asset"):
+        demo_link = (
+            f'<a class="inline-link" href="/projects/{_s(slug)}#demo">'
+            f"{_s('Watch demo' if tier == 'flagship' else 'View demo')}</a>"
+        )
+        link_items.append(demo_link)
     return f"""
     <article class="project-card{featured_cls} reveal">
-      <div class="public-kicker">{_s(p.get("status") or "Case Study")}</div>
+      <div class="public-kicker">{_s(p.get("status") or ("Case Study" if tier == "flagship" else "Project Proof"))}</div>
       <h3>{_s(project.get("title"))}</h3>
       <p>{_s(p.get("tagline") or project.get("summary") or "")}</p>
       {_pills(stack[:6])}
+      {'<ul class="project-proof-list">' + proof_html + '</ul>' if proof_html else ''}
       <div class="link-row mt-2">
-        <a class="inline-link" href="/projects/{_s(slug)}">Read case study</a>
-        {links_html}
+        {"".join(link_items)}
       </div>
     </article>
     """
@@ -661,15 +715,10 @@ async def public_home() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
-        sections = await list_page_sections(session, "home")
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-
-    if sections:
-        content = _render_sections(sections, photos, projects)
-    else:
-        content = _render_home_fallback(p, name, photos, projects)
+    content = _render_home_fallback(p, name, photos, projects)
 
     return HTMLResponse(
         render_public_shell(
@@ -687,174 +736,140 @@ async def public_home() -> HTMLResponse:
 
 
 def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> str:
+    flagship_projects, _secondary_projects = _project_collections(projects)
     hero_photo = photos.get("hero")
-
+    professional_summary = p.get("professional_summary") or p.get("hero_summary") or ""
+    identity_stack = list(p.get("identity_stack") or [])[:3]
+    proof_cards = [
+        ("6+", "Years shipping software"),
+        ("4", "Flagship case studies"),
+        ("2", "Client demos live"),
+        ("5", "Languages spoken"),
+    ]
+    proof_html = "".join(
+        f'<div class="proof-card"><div class="proof-card__number">{_s(number)}</div>'
+        f'<div class="proof-card__label">{_s(label)}</div></div>'
+        for number, label in proof_cards
+    )
+    identity_html = "".join(
+        f'<li>{_s(item)}</li>' for item in identity_stack if item and item != professional_summary
+    )
     hero_html = f"""
     <section class="hero-home">
       <div class="container">
         <div class="hero-home__text">
-          <div class="public-kicker">Software Engineer &amp; AI Builder</div>
+          <div class="public-kicker">Software Engineer · Builder · Systems thinker</div>
           <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
-          <p>6+ years at Amazon building distributed systems. Now building
-            AI-native products &mdash; duSraBheja (personal AI second brain)
-            and dataGenie (multi-agent data analytics).
-            IIT Kharagpur &amp; NYU Tandon grad.</p>
+          <p>{_s(professional_summary)}</p>
+          {'<ul class="hero-note-list">' + identity_html + '</ul>' if identity_html else ''}
           <div class="hero-home__ctas">
             <a class="cta" href="/work">See the work</a>
-            <a class="cta cta--outline" href="/brain">Ask my AI clone</a>
+            <a class="cta cta--outline" href="/about">Read the story</a>
           </div>
         </div>
-        <div class="hero-home__photo">
-          {_photo_img(hero_photo, loading="eager", alt=f"{name} waterfront portrait")}
+        <div class="hero-home__photo hero-home__photo--compact">
+          {_photo_img(hero_photo, loading="eager", alt=f"{name} portrait")}
         </div>
+      </div>
+    </section>
+    <section class="section section--tight container reveal">
+      <div class="proof-grid">{proof_html}</div>
+    </section>
+    """
+
+    open_brain_topics = list(p.get("open_brain_topics") or [])[:4]
+    topic_cards = "".join(
+        f'<div class="brain-topic-card"><h3>{_s(item.get("title", ""))}</h3>'
+        f'<p>{_s(item.get("summary", ""))}</p></div>'
+        for item in open_brain_topics
+    )
+    open_brain_html = f"""
+    <section class="section container reveal">
+      <div class="open-brain-hero">
+        <div>
+          <div class="public-kicker">Open Brain</div>
+          <h2 class="display-heading display-heading--section">The site can explain me in my own language.</h2>
+          <p>This is not a generic chatbot bolted onto a portfolio. It is a public-safe layer on top of the same brain I use to track work, projects, and personal context.</p>
+          <div class="link-row mt-2">
+            <a class="cta" href="/brain">Open the brain</a>
+            <a class="inline-link" href="/brain">Ask about duSraBheja, Amazon, Balkan, Kaffa, or what I want next</a>
+          </div>
+        </div>
+        <div class="brain-topic-grid">{topic_cards}</div>
       </div>
     </section>
     """
 
-    stat_html = """
-    <section class="full-bleed dark-band reveal">
-      <div class="container">
-        <div class="proof-grid">
-          <div class="proof-card">
-            <div class="proof-card__number">3+</div>
-            <div class="proof-card__label">Years at Amazon</div>
-          </div>
-          <div class="proof-card">
-            <div class="proof-card__number">5</div>
-            <div class="proof-card__label">AI Agents Built</div>
-          </div>
-          <div class="proof-card">
-            <div class="proof-card__number">4</div>
-            <div class="proof-card__label">Live Projects</div>
-          </div>
-          <div class="proof-card">
-            <div class="proof-card__number">5</div>
-            <div class="proof-card__label">Languages Spoken</div>
-          </div>
-        </div>
-      </div>
-    </section>
-    """
-
-    about_html = f"""
+    summary_photo = _photo_tile(photos.get("oscar_selfie"), cls="editorial-photo--small")
+    builder_summary_html = f"""
     <section class="section container reveal">
       <div class="offset-grid offset-grid--60-40">
         <div>
-          <div class="public-kicker">What I Build</div>
-          <h2 class="display-heading display-heading--section">
-            AI systems that solve real problems.</h2>
-          <p>Like duSraBheja &mdash; my personal AI that ingests everything
-            I capture across Discord, PDFs, and voice memos, then organizes
-            it into searchable knowledge using 5 specialized AI agents.
-            I care about ownership &mdash; architecture to deployment to operations.</p>
-          <a class="inline-link mt-2" href="/about">The full picture</a>
+          <div class="public-kicker">What this home page is doing</div>
+          <h2 class="display-heading display-heading--section">A concise version of the resume, but with actual signal.</h2>
+          <p>I spent years in distributed systems work at Amazon, but the strongest proof of what I want to do next lives in the products and client projects I have been building myself. That is why this site starts with work and context instead of generic claims.</p>
+          <a class="inline-link mt-2" href="/about">See the full resume story on the About page</a>
         </div>
-        <div class="photo-accent--sm">
-          {_photo_img(photos.get("oscar_selfie"), alt="Ahmad with Oscar at colorful art wall")}
-        </div>
+        <div>{summary_photo}</div>
       </div>
     </section>
     """
 
-    # Chatbot teaser
-    chatbot_html = """
-    <section class="section container reveal">
-      <div class="chatbot-teaser">
-        <div class="public-kicker">Digital Clone</div>
-        <h2 class="display-heading display-heading--section">
-          I built an AI that knows my work.</h2>
-        <p>Not a generic chatbot &mdash; a conversational clone built
-          from real evidence. Ask it what I'd build for your problem,
-          why I left Amazon, or what anime I'm watching.</p>
-        <a class="cta" href="/brain">Open the brain</a>
-      </div>
-    </section>
-    """
-
-    ghibli_accent = ""
-    ghibli = photos.get("ghibli_cat")
-    if ghibli:
-        ghibli_url = _photo_url(ghibli)
-        if ghibli_url:
-            ghibli_accent = (
-                f'<div class="photo-accent--sm" style="max-width:160px;margin:0 auto 1.5rem;">'
-                f'<img src="{ghibli_url}" alt="Ghibli illustration" loading="lazy" '
-                f'style="width:100%;border-radius:var(--radius-sm);" /></div>'
-            )
-
-    first_project = _project_card_html(projects[0], featured=True) if projects else ""
-    grid_projects = "".join(_project_card_html(proj) for proj in projects[1:4])
+    featured = _project_card_html(flagship_projects[0], featured=True) if flagship_projects else ""
+    grid = "".join(_project_card_html(project) for project in flagship_projects[1:4])
     work_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Selected Work</div>
-      <h2 class="display-heading display-heading--section">
-        Built, shipped, running.</h2>
-      {ghibli_accent}
-      {first_project}
-      <div class="project-grid mt-3">
-        {grid_projects}
-        <article class="project-card reveal"
-          style="display:flex;align-items:center;justify-content:center;">
-          <a class="cta" href="/work">View all projects</a>
-        </article>
+      <div class="public-kicker">Flagship Work</div>
+      <h2 class="display-heading display-heading--section">Four projects I can defend in detail.</h2>
+      {featured}
+      <div class="project-grid mt-3">{grid}</div>
+      <div class="link-row mt-3">
+        <a class="cta cta--outline" href="/work">See all work</a>
       </div>
     </section>
     """
 
-    # Interests posters
-    interests_html = _render_interests_posters()
+    demo_projects = [
+        project
+        for project in flagship_projects
+        if _project_payload(project).get("slug") in {"balkan-barbershop-website", "kaffa-espresso-bar-website"}
+        or project.get("slug") in {"balkan-barbershop-website", "kaffa-espresso-bar-website"}
+    ]
+    demo_html = "".join(_demo_video_html(project, compact=True) for project in demo_projects[:2])
+    demos_section = (
+        f"""
+        <section class="section container reveal" id="demo-proof">
+          <div class="public-kicker">Client Demo Proof</div>
+          <h2 class="display-heading display-heading--section">Balkan and Kaffa are not mockups.</h2>
+          <div class="demo-video-grid">{demo_html}</div>
+        </section>
+        """
+        if demo_html
+        else ""
+    )
 
-    # Life photos row
-    life_photos_html = ""
-    life_photo_keys = ["oscar_stairs", "oscar_couch", "baking", "friends_brooklyn"]
-    life_imgs = ""
-    for key in life_photo_keys:
-        photo = photos.get(key)
-        if photo:
-            url = _photo_url(photo)
-            if url:
-                life_imgs += (
-                    f'<div class="photo-row__item photo-row__item--sm photo-sticker">'
-                    f'<img src="{url}" alt="{_s(photo.get("title", ""))}" loading="lazy" />'
-                    f'</div>'
-                )
-    if life_imgs:
-        life_photos_html = f'''
-    <section class="section container reveal">
-      <div class="photo-row">{life_imgs}</div>
-    </section>
-    '''
+    currently_html = _render_currently_feed(p)
 
     contact_items = list(p.get("contact") or p.get("contact_modes") or [])
-    contact_links = ""
-    for item in contact_items:
-        href = item.get("href")
-        if not href:
-            continue
-        contact_links += (
-            f'<a href="{_s(href)}" target="_blank" rel="noreferrer">'
-            f"{_s(item.get('label') or 'Contact')}</a>"
-        )
-    location = p.get("location") or "Jersey City, NJ"
+    contact_links = "".join(
+        f'<a href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">{_s(item.get("label") or "Contact")}</a>'
+        for item in contact_items
+        if item.get("href")
+    )
     contact_html = f"""
     <section class="section container reveal">
-      <div class="contact-strip">
-        {contact_links}
-        <span>{_s(location)}</span>
+      <div class="closing-cta">
+        <div>
+          <div class="public-kicker">Connect</div>
+          <h2 class="display-heading display-heading--section">If the work feels aligned, reach out.</h2>
+          <p>I am looking for high-ownership engineering work where systems depth, product taste, and AI fluency all matter at once.</p>
+        </div>
+        <div class="closing-cta__links">{contact_links}</div>
       </div>
     </section>
     """
 
-    return (
-        hero_html
-        + stat_html
-        + about_html
-        + work_html
-        + interests_html
-        + life_photos_html
-        + chatbot_html
-        + contact_html
-    )
+    return hero_html + open_brain_html + builder_summary_html + work_html + demos_section + currently_html + contact_html
 
 
 # ──────────────────────────────────────────────
@@ -901,247 +916,171 @@ async def public_about() -> HTMLResponse:
     name = _short_name(p)
     photos = p.get("photos") or {}
     current_arc = p.get("current_arc") or {}
-
-    hero_photo = photos.get("indian_wedding")
+    roles = list(p.get("roles") or [])
+    education = list(p.get("education") or [])
+    skills = list(p.get("skills") or [])
+    personal_signals = dict(p.get("personal_signals") or {})
+    resume_sections = list(p.get("resume_sections") or [])
     hero_html = f"""
     <section class="about-hero">
       <div class="container">
         <div class="about-hero__text">
           <div class="public-kicker">About</div>
-          <h1 class="display-heading display-heading--hero">The full picture.</h1>
-          <p>From IIT Kharagpur to Amazon to building
-            independently in Jersey City.</p>
+          <h1 class="display-heading display-heading--hero">The resume, with the actual person still intact.</h1>
+          <p>I moved from IIT Kharagpur to New York, spent years in enterprise and Amazon-scale systems, then stepped into a builder phase where I care more about ownership, product conviction, and work that feels worth carrying.</p>
         </div>
-        <div class="about-hero__photo">
-          {_photo_img(hero_photo, loading="eager", alt="Ahmad with Oscar at colorful art wall")}
+        <div class="about-hero__photo about-hero__photo--compact">
+          {_photo_img(photos.get("indian_wedding"), loading="eager", alt=f"{name} in wedding attire")}
         </div>
       </div>
     </section>
     """
 
-    # Career arc — 3 acts
     acts = list(current_arc.get("acts") or [])
-    act_cards = ""
-    for act in acts[:3]:
-        act_cards += (
-            f'<div class="act-card">'
-            f'<div class="public-kicker">{_s(act.get("period", ""))}</div>'
-            f'<h3>{_s(act.get("label", ""))}</h3>'
-            f'<p>{_s(act.get("body", ""))}</p></div>'
-        )
+    act_cards = "".join(
+        f'<div class="act-card"><div class="public-kicker">{_s(act.get("period", ""))}</div>'
+        f'<h3>{_s(act.get("label", ""))}</h3><p>{_s(act.get("body", ""))}</p></div>'
+        for act in acts[:3]
+    )
     throughline = current_arc.get("throughline") or ""
-    throughline_html = ""
-    if throughline:
-        throughline_html = f'<blockquote class="throughline-quote">{_s(throughline)}</blockquote>'
-    acts_html = f"""
+    throughline_html = (
+        f'<blockquote class="throughline-quote">{_s(throughline)}</blockquote>' if throughline else ""
+    )
+    arc_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">The Arc</div>
-      <h2 class="display-heading display-heading--section">Three acts, one throughline.</h2>
+      <div class="public-kicker">Three-act arc</div>
+      <h2 class="display-heading display-heading--section">India, New York, then the builder phase.</h2>
       <div class="act-cards">{act_cards}</div>
       {throughline_html}
     </section>
     """
 
-    ghibli_accent = ""
-    gp = photos.get("ghibli_picnic")
-    if gp:
-        gpu = _photo_url(gp)
-        if gpu:
-            ghibli_accent = (
-                f'<div class="photo-accent--sm" style="max-width:200px;margin:1.5rem 0;">'
-                f'<img src="{gpu}" alt="Ghibli picnic" loading="lazy" '
-                f'style="width:100%;border-radius:var(--radius-sm);" /></div>'
-            )
-
-    # Experience (full detail)
-    experience_html = f'''
-<section class="section container reveal">
-  <div class="offset-grid offset-grid--65-35">
-    <div>
-      <div class="public-kicker">Experience</div>
-      <h2 class="display-heading display-heading--section">The work history.</h2>
-      <div class="roles-table">
-        <div class="role-row">
-          <span class="role-row__period">Jun 2022 – Sep 2025</span>
-          <span class="role-row__org">Amazon</span>
-          <span class="role-row__title">Software Development Engineer</span>
-          <span class="role-row__summary">New York, NY</span>
-        </div>
-      </div>
-      <ul class="public-bullet-list mt-2">
-        <li>Owned frontend and backend services on the advertising
-          platform, shipping features for international launches.</li>
-        <li>Built Java and Python microservices for ad delivery
-          across AWS regions — service meshes, regional failover,
-          multi-service debugging.</li>
-        <li>Led cross-org coordination for international expansion,
-          integrating compliance and localization frameworks.</li>
-      </ul>
-      <div class="roles-table mt-3">
-        <div class="role-row">
-          <span class="role-row__period">Oct 2018 – Apr 2020</span>
-          <span class="role-row__org">Loylty Rewardz</span>
-          <span class="role-row__title">Software Engineer</span>
-          <span class="role-row__summary">Mumbai, India</span>
-        </div>
-      </div>
-      <ul class="public-bullet-list mt-2">
-        <li>Core team on loyalty rewards engine processing millions
-          of daily transactions. Java/Hibernate/SQL — learned ORMs
-          break on complex batch ops.</li>
-        <li>Designed Apache Camel file ingestion pipelines
-          normalizing dozens of formats into a single data model.</li>
-        <li>Led migration from batch processing to Apache Kafka
-          for real-time event streaming.</li>
-      </ul>
-      <div class="roles-table mt-3">
-        <div class="role-row">
-          <span class="role-row__period">Jul 2017 – Oct 2018</span>
-          <span class="role-row__org">Loylty Rewardz</span>
-          <span class="role-row__title">Management Trainee</span>
-          <span class="role-row__summary">Mumbai, India</span>
-        </div>
-      </div>
-      <ul class="public-bullet-list mt-2">
-        <li>Shipped production code within first quarter. Built
-          ETL jobs in Talend for data migration and real-time
-          transaction sync.</li>
-      </ul>
-    </div>
-    <div class="photo-accent--sm">
-      {_photo_img(photos.get("work"), alt="Ahmad NYC street portrait")}
-    </div>
-  </div>
-</section>
-'''
-
-    # Education
-    education_html = f'''
-<section class="section container reveal">
-  <div class="offset-grid offset-grid--65-35">
-    <div>
-      <div class="public-kicker">Education</div>
-      <h2 class="display-heading display-heading--section">IIT Kharagpur + NYU Tandon.</h2>
-      <div class="education-rows">
-        <div class="education-row">
-          <span class="education-row__period">2021 – 2022</span>
-          <div>
-            <div class="education-row__school">NYU Tandon School of Engineering</div>
-            <div class="education-row__degree">Master of Science, Electrical Engineering</div>
-            <p class="mt-1" style="color:var(--ink-light);font-size:0.92rem;">
-              Coursework: Machine Learning, Deep Learning, Big Data.
-              Project: Automated Tagging of News Articles (LDA, search engine UI).</p>
-          </div>
-        </div>
-        <div class="education-row">
-          <span class="education-row__period">2013 – 2017</span>
-          <div>
-            <div class="education-row__school">Indian Institute of Technology, Kharagpur</div>
-            <div class="education-row__degree">Bachelor of Technology, Electrical Engineering</div>
-            <p class="mt-1" style="color:var(--ink-light);font-size:0.92rem;">
-              Projects: Automated Background Modelling (Computer Vision, optical flow),
-              Smart Home Energy Management (IoT). KVPY Scholar. NSEP Qualifier.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="photo-accent--sm">
-      {_photo_img(photos.get("indian_wedding"), alt="Ahmad and Annie in Indian attire")}
-    </div>
-  </div>
-</section>
-'''
-
-    # Skills grid
-    skill_sections = ""
-    for label, items in _RESUME_SKILLS:
-        pills = "".join(f'<span class="pill">{_s(item)}</span>' for item in items)
-        skill_sections += (
-            f'<div class="skill-category">'
-            f'<div class="skill-category__label">{_s(label)}</div>'
-            f'<div class="pill-list">{pills}</div></div>'
-        )
-    skills_html = f'''
-<section class="section container reveal">
-  <div class="public-kicker">Technical Stack</div>
-  <h2 class="display-heading display-heading--section">What I work with.</h2>
-  <div class="skills-grid">{skill_sections}</div>
-</section>
-'''
-
-    # Life facts with photo grid
-    life_photo_keys = [
-        "oscar_stairs", "oscar_window", "oscar_chair",
-        "oscar_office", "oscar_couch", "baking",
-    ]
-    life_photo_imgs = ""
-    for key in life_photo_keys:
-        ph = photos.get(key)
-        if ph:
-            pu = _photo_url(ph)
-            if pu:
-                life_photo_imgs += (
-                    f'<div class="photo-gallery__item">'
-                    f'<img src="{pu}" alt="{_s(ph.get("title", ""))}" loading="lazy" /></div>'
-                )
-
-    life_html = f'''
-<section class="section container reveal">
-  <div class="public-kicker public-kicker--gold">Life</div>
-  <h2 class="display-heading display-heading--section">The human side.</h2>
-  <div class="offset-grid offset-grid--60-40">
-    <div>
-      <div class="life-facts">
-        <div class="life-fact">
-          <strong>Home</strong>
-          <span>Jersey City, NJ</span></div>
-        <div class="life-fact">
-          <strong>Married</strong>
-          <span>Annie Harpel, November 2025</span></div>
-        <div class="life-fact">
-          <strong>Cats</strong>
-          <span>Oscar (orange tabby, 7yo) &amp; Iris</span></div>
-        <div class="life-fact">
-          <strong>Languages</strong>
-          <span>English, Hindi, Telugu, Urdu, Tamil</span></div>
-        <div class="life-fact">
-          <strong>After hours</strong>
-          <span>Anime, Indian standup, hip hop, cycling,
-            Pokemon collecting</span></div>
-      </div>
-    </div>
-    <div class="photo-gallery">{life_photo_imgs}</div>
-  </div>
-</section>
-'''
-
-    # Photo gallery from all gallery photos
-    gallery_photos = list(photos.get("gallery") or [])
-    gallery_imgs = ""
-    for ph in gallery_photos:
-        url = _photo_url(ph)
-        if url:
-            gallery_imgs += (
-                f'<div class="photo-gallery__item">'
-                f'<img src="{url}" alt="{_s(ph.get("title", ""))}" loading="lazy" /></div>'
-            )
-    gallery_html = ""
-    if gallery_imgs:
-        gallery_html = f'''
+    resume_cards = "".join(
+        f'<div class="resume-section-card"><h3>{_s(section.get("title", ""))}</h3>'
+        f'<p>{_s(section.get("summary", ""))}</p></div>'
+        for section in resume_sections[:4]
+    )
+    resume_overview_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker public-kicker--purple">Life in Pictures</div>
-      <div class="photo-gallery">{gallery_imgs}</div>
+      <div class="public-kicker">Resume structure</div>
+      <div class="resume-section-grid">{resume_cards}</div>
     </section>
-    '''
+    """
 
-    # Interests posters — top 5s with links
+    experience_rows = ""
+    for role in roles:
+        bullets_html = "".join(f"<li>{_s(item)}</li>" for item in list(role.get("bullets") or [])[:3])
+        experience_rows += (
+            f'<article class="experience-card">'
+            f'<div class="experience-card__meta">{_s(role.get("period", ""))} · {_s(role.get("location", ""))}</div>'
+            f'<h3>{_s(role.get("title", ""))}</h3>'
+            f'<div class="experience-card__org">{_s(role.get("organization", ""))}</div>'
+            f'<p>{_s(role.get("summary", ""))}</p>'
+            f'<ul class="public-bullet-list">{bullets_html}</ul>'
+            f"</article>"
+        )
+    experience_html = f"""
+    <section class="section container reveal">
+      <div class="about-split">
+        <div>
+          <div class="public-kicker">Experience</div>
+          <h2 class="display-heading display-heading--section">The work history, chronologically.</h2>
+          <div class="experience-stack">{experience_rows}</div>
+        </div>
+        <div class="about-side-photos">
+          {_photo_tile(photos.get("work"), cls="editorial-photo--medium")}
+          {_photo_tile(photos.get("home"), cls="editorial-photo--small")}
+        </div>
+      </div>
+    </section>
+    """
+
+    education_html = "".join(
+        f'<article class="education-card"><div class="education-card__years">{_s(item.get("years", ""))}</div>'
+        f'<h3>{_s(item.get("school", ""))}</h3><div class="education-card__degree">{_s(item.get("degree", ""))}</div>'
+        f'<p>{_s(item.get("details", ""))}</p></article>'
+        for item in education
+    )
+    education_section = f"""
+    <section class="section container reveal">
+      <div class="about-split">
+        <div>
+          <div class="public-kicker">Education</div>
+          <h2 class="display-heading display-heading--section">IIT Kharagpur and NYU Tandon are both in the wiring.</h2>
+          <div class="education-grid">{education_html}</div>
+        </div>
+        <div class="about-side-photos">
+          {_photo_tile(photos.get("ghibli_picnic"), cls="editorial-photo--medium")}
+          {_photo_tile(photos.get("pokemon"), cls="editorial-photo--small")}
+        </div>
+      </div>
+    </section>
+    """
+
+    skill_cards = "".join(
+        f'<div class="skill-category"><div class="skill-category__label">{_s(item.get("category", ""))}</div>'
+        f'{_pills(list(item.get("items") or []), cls="pill-list")}</div>'
+        for item in skills
+    )
+    skills_section = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Skills</div>
+      <h2 class="display-heading display-heading--section">The stack is wide because the work has been end to end.</h2>
+      <div class="skills-grid">{skill_cards}</div>
+    </section>
+    """
+
+    life_cards = "".join(
+        f'<div class="life-detail"><strong>{_s(label)}</strong><br />{_s(value)}</div>'
+        for label, value in [
+            ("Home base", personal_signals.get("home_base") or p.get("location") or ""),
+            ("Family", ", ".join(personal_signals.get("family") or [])),
+            ("Languages", ", ".join(personal_signals.get("languages") or [])),
+            ("Current signals", ", ".join((personal_signals.get("cultural_signals") or [])[:4])),
+        ]
+        if value
+    )
+    life_photo_keys = [
+        "wedding",
+        "couple",
+        "cycling",
+        "photo_break",
+        "oscar_looking",
+        "oscar_home",
+        "skyline_2",
+        "baking",
+        "friends_brooklyn",
+        "oscar_couch",
+        "oscar_sploot",
+        "oscar_office",
+        "oscar_chair",
+        "oscar_stairs",
+        "oscar_window",
+    ]
+    life_gallery = "".join(_photo_tile(photos.get(key), cls="editorial-photo--small") for key in life_photo_keys)
+    life_section = f"""
+    <section class="section container reveal">
+      <div class="public-kicker public-kicker--gold">Life</div>
+      <h2 class="display-heading display-heading--section">Jersey City, Annie, Oscar, Iris, anime, comedy, music.</h2>
+      <div class="life-details">{life_cards}</div>
+      <div class="editorial-gallery editorial-gallery--dense">{life_gallery}</div>
+    </section>
+    """
+
+    gallery_html = "".join(
+        _photo_tile(photo, cls="editorial-photo--small")
+        for photo in list(photos.get("gallery") or [])
+    )
+    gallery_section = f"""
+    <section class="section container reveal">
+      <div class="public-kicker public-kicker--purple">All approved photos</div>
+      <div class="editorial-gallery">{gallery_html}</div>
+    </section>
+    """
+
     interests_html = _render_interests_posters()
 
-    content = (
-        hero_html + acts_html + ghibli_accent
-        + experience_html + education_html + skills_html
-        + life_html + gallery_html + interests_html
-    )
+    content = hero_html + arc_html + resume_overview_html + experience_html + education_section + skills_section + life_section + gallery_section + interests_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -1164,15 +1103,10 @@ async def public_work() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
         projects = await list_public_projects(session)
-        sections = await list_page_sections(session, "work")
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-
-    if sections:
-        content = _render_sections(sections, photos, projects)
-    else:
-        content = _render_work_fallback(p, photos, projects)
+    content = _render_work_fallback(p, photos, projects)
 
     return HTMLResponse(
         render_public_shell(
@@ -1196,31 +1130,62 @@ async def public_projects() -> HTMLResponse:
 
 def _render_work_fallback(p: dict, photos: dict, projects: list) -> str:
     capabilities = list(p.get("capabilities") or [])
-
+    flagship_projects, secondary_projects = _project_collections(projects)
     hero_html = f"""
     <section class="hero-inner">
       <div class="container">
-        <div>
+        <div class="hero-inner__copy">
           <div class="public-kicker">Work</div>
-          <h1 class="display-heading display-heading--hero">Work.</h1>
-          <p>Everything here is real. Live URLs, real users,
-            production infrastructure.</p>
+          <h1 class="display-heading display-heading--hero">Flagship case studies first. Smaller proof after that.</h1>
+          <p>The public site should make it obvious what deserves a deep read and what is still supporting proof. That is the structure here.</p>
         </div>
-        <div class="photo-accent--lg">
-          {_photo_img(photos.get("work"), alt="Ahmad street portrait")}
+        <div class="photo-accent--md">
+          {_photo_img(photos.get("personality"), alt="Ahmad holding Oscar")}
         </div>
       </div>
     </section>
     """
 
-    featured = _project_card_html(projects[0], featured=True) if projects else ""
-    grid = "".join(_project_card_html(proj) for proj in projects[1:])
-    projects_html = f"""
-    <section class="section container">
-      {featured}
-      <div class="project-grid mt-3">{grid}</div>
+    flagship_html = "".join(
+        _project_card_html(project, featured=index == 0)
+        for index, project in enumerate(flagship_projects[:4])
+    )
+    flagship_section = f"""
+    <section class="section container reveal">
+      <div class="public-kicker">Flagship Projects</div>
+      <h2 class="display-heading display-heading--section">The four projects with full case-study treatment.</h2>
+      <div class="project-stack-grid">{flagship_html}</div>
     </section>
     """
+
+    secondary_html = "".join(_project_card_html(project) for project in secondary_projects[:2])
+    secondary_section = (
+        f"""
+        <section class="section container reveal">
+          <div class="public-kicker">Secondary Proof</div>
+          <h2 class="display-heading display-heading--section">Useful evidence, but not pretending to be fuller than it is.</h2>
+          <div class="project-grid">{secondary_html}</div>
+        </section>
+        """
+        if secondary_html
+        else ""
+    )
+
+    demo_cards = "".join(
+        _demo_video_html(project, compact=False)
+        for project in flagship_projects
+        if _project_payload(project).get("demo_asset")
+    )
+    demo_section = (
+        f"""
+        <section class="section container reveal">
+          <div class="public-kicker">Demo Library</div>
+          <div class="demo-video-grid">{demo_cards}</div>
+        </section>
+        """
+        if demo_cards
+        else ""
+    )
 
     cap_tags = "".join(
         f'<span class="capability-tag">{_s(item.get("title"))}</span>' for item in capabilities[:8]
@@ -1232,7 +1197,7 @@ def _render_work_fallback(p: dict, photos: dict, projects: list) -> str:
     </section>
     """
 
-    return hero_html + projects_html + cap_html
+    return hero_html + flagship_section + secondary_section + demo_section + cap_html
 
 
 # ──────────────────────────────────────────────
@@ -1258,201 +1223,167 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     proj_p = dict(project.get("payload") or {})
     case_study = proj_p.get("case_study") or {}
     repo_history = proj_p.get("repo_history") or {}
-
-    # ── Hero (clean, no photo) ──
-    hero_html = f"""
-    <section class="hero-inner">
-      <div class="container">
-        <div>
-          {_kicker("Case Study")}
-          <h1 class="display-heading display-heading--section">
-            {_s(project["title"])}</h1>
-          <span class="status-badge">
-            {_s(proj_p.get("status") or "Active")}</span>
-          <p class="mt-2">
-            {_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
-        </div>
-        <div class="detail-sidebar">
-          <div class="detail-sidebar__block">
-            <h4>Stack</h4>
-            {_pills(list(proj_p.get("stack") or [])[:8])}
-          </div>
-          <div class="detail-sidebar__block">
-            <h4>Links</h4>
-            <div class="link-column">{
-    "".join(
-        f'<a class="inline-link" href="{_s(item.get("href"))}"'
-        f' target="_blank" rel="noreferrer">'
-        f"{_s(item.get('label') or 'Open')}</a>"
+    link_html = "".join(
+        f'<a class="inline-link" href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">{_s(item.get("label") or "Open")}</a>'
         for item in list(proj_p.get("links") or [])
         if item.get("href")
     ) or "<span class='mono-accent'>Links coming soon.</span>"
-    }</div>
+    hero_html = f"""
+    <section class="hero-inner">
+      <div class="container detail-layout">
+        <div>
+          {_kicker("Case Study")}
+          <h1 class="display-heading display-heading--section">{_s(project["title"])}</h1>
+          <span class="status-badge">{_s(proj_p.get("status") or "Active")}</span>
+          <p class="mt-2">{_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
+        </div>
+        <aside class="detail-sidebar">
+          <div class="detail-sidebar__block">
+            <h4>Stack</h4>
+            {_pills(list(proj_p.get("stack") or [])[:10])}
           </div>
+          <div class="detail-sidebar__block">
+            <h4>Links</h4>
+            <div class="link-column">{link_html}</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+    """
+
+    framing_html = f"""
+    <section class="section container reveal">
+      {_kicker("Project Framing")}
+      <div class="case-study-grid case-study-grid--framing">
+        <div class="case-study-panel">
+          <h3>Problem / Context</h3>
+          <p>{_s(case_study.get("motivation") or repo_history.get("executive_summary") or project.get("summary") or "")}</p>
+        </div>
+        <div class="case-study-panel">
+          <h3>Role and Ownership</h3>
+          <p>{_s(proj_p.get("role_scope") or "I owned the core technical and product decisions across this project.")}</p>
         </div>
       </div>
     </section>
     """
 
-    # ── Problem statement ──
-    motivation = case_study.get("motivation") or repo_history.get("executive_summary") or ""
-    problem_html = ""
-    if motivation:
-        problem_html = f"""
-        <section class="section container reveal">
-          {_kicker("The Problem")}
-          <div class="cs-problem"><p>{_s(motivation)}</p></div>
-        </section>
-        """
-
-    # ── Architecture diagram ──
-    arch_html = ""
-    diagrams = repo_history.get("architecture_diagrams") or []
-    arch_desc = case_study.get("architecture_description") or ""
-    if diagrams:
-        diagram_blocks = ""
-        for d in diagrams[:2]:
-            title = d.get("title", "")
-            diag_text = d.get("diagram", "")
-            explanation = d.get("explanation", "")
-            diag_html = ""
-            if diag_text:
-                diag_html = (
-                    f'<div class="cs-arch__terminal">'
-                    f'<div class="cs-arch__terminal-bar">'
-                    f'<span class="cs-arch__terminal-dot"></span>'
-                    f'<span class="cs-arch__terminal-title">'
-                    f'{_s(title) if title else "architecture"}</span></div>'
-                    f'<pre class="cs-arch__diagram">{_s(diag_text)}</pre></div>'
-                )
-            # Truncate explanation
-            if explanation and len(explanation) > 300:
-                explanation = explanation[:297].rstrip() + "..."
-            expl_html = (
-                f'<div class="cs-arch__explanation">{_s(explanation)}</div>'
-                if explanation else ""
-            )
-            diagram_blocks += f"{diag_html}{expl_html}"
-        arch_html = f"""
-        <section class="section container reveal">
-          {_kicker("Architecture")}
-          <div class="cs-arch">{diagram_blocks}</div>
-        </section>
-        """
-    elif arch_desc:
-        arch_html = f"""
-        <section class="section container reveal">
-          {_kicker("Architecture")}
-          <div class="cs-arch">
-            <div class="cs-arch__block">
-              <div class="cs-arch__diagram">{_s(arch_desc)}</div>
-            </div>
-          </div>
-        </section>
-        """
-
-    # ── Decision history slider ──
-    all_decisions = list(case_study.get("key_decisions") or [])
-    arch_decisions = list(repo_history.get("architectural_decisions") or [])
-    for ad in arch_decisions:
-        all_decisions.append(
-            {"decision": ad.get("title", ""), "context": ad.get("rationale", "")}
-        )
-    decisions_html = ""
-    if all_decisions:
-        slides = ""
-        for i, d in enumerate(all_decisions):
-            title = _s(d.get("decision") or d.get("title", ""))
-            context = _s(d.get("context") or d.get("rationale", ""))
-            slides += (
-                f'<div class="cs-decision-slide" data-slide="{i}">'
-                f'<div class="cs-decision-slide__num">#{i + 1}</div>'
-                f'<h4>{title}</h4>'
-                f"<p>{context}</p></div>"
-            )
-        decisions_html = f"""
-        <section class="section container reveal">
-          {_kicker("Key Decisions")}
-          <div class="cs-decision-slider" data-decision-slider>
-            <div class="cs-decision-slider__track">{slides}</div>
-            <div class="cs-decision-slider__controls">
-              <button class="cs-slider-btn" data-slider-prev
-                aria-label="Previous">&larr;</button>
-              <span class="cs-slider-counter" data-slider-counter>
-                1 / {len(all_decisions)}</span>
-              <button class="cs-slider-btn" data-slider-next
-                aria-label="Next">&rarr;</button>
-            </div>
-          </div>
-        </section>
-        """
-
-    # ── Challenges ──
-    all_challenges = list(case_study.get("struggles") or [])
-    repo_challenges = list(repo_history.get("challenges") or [])
-    for rc in repo_challenges:
-        all_challenges.append(
-            {"problem": rc.get("title", ""), "resolution": rc.get("solution", "")}
-        )
-    challenges_html = ""
-    if all_challenges:
-        cards = ""
-        for ch in all_challenges:
-            prob = _s(ch.get("problem") or ch.get("title", ""))
-            resolution = ch.get("resolution") or ch.get("solution") or ""
-            res_html = (
-                f'<div class="cs-challenge__resolution">{_s(resolution)}</div>'
-                if resolution
-                else ""
-            )
-            cards += (
-                f'<div class="cs-challenge">'
-                f"<h4>{prob}</h4>{res_html}</div>"
-            )
-        challenges_html = f"""
-        <section class="section container reveal">
-          {_kicker("Challenges")}
-          <div class="cs-challenges">{cards}</div>
-        </section>
-        """
-
-    # ── Learnings ──
-    raw_learnings = list(case_study.get("learnings") or [])
-    learnings_html = ""
-    if raw_learnings:
-        items = "".join(
-            f'<div class="cs-learning"><span>{_s(lr)}</span></div>'
-            for lr in raw_learnings
-        )
-        learnings_html = f"""
-        <section class="section container reveal">
-          {_kicker("Learnings")}
-          <div class="cs-learnings">{items}</div>
-        </section>
-        """
-
-    # ── Demo video ──
-    demo_video_map = {
-        "balkan-barbershop-website": "balkan_barbers_demo.mp4",
-        "kaffa-espresso-bar-website": "kaffa_espresso_bar_demo.mp4",
-        "datagenie": "datagenie_demo.mp4",
-    }
-    demo_file = demo_video_map.get(slug)
-    media_html = ""
-    if demo_file:
-        preload = "none" if "kaffa" in demo_file else "metadata"
-        media_html = (
-            f'<section class="section container reveal">'
-            f'{_kicker("Demo")}'
-            f'<video class="cs-demo-video" controls preload="{preload}">'
-            f'<source src="/public-assets/profile/{_s(demo_file)}" type="video/mp4">'
-            f'Your browser does not support video.</video></section>'
+    constraints = list(proj_p.get("constraints") or [])
+    outcomes = list(proj_p.get("outcomes") or [])
+    summary_grid = ""
+    if constraints or outcomes:
+        summary_grid = (
+            f'<section class="section container reveal"><div class="case-study-grid">'
+            f'<div class="case-study-panel"><h3>Constraints</h3>{_bullet_list(constraints)}</div>'
+            f'<div class="case-study-panel"><h3>Outcomes</h3>{_bullet_list(outcomes)}</div>'
+            f"</div></section>"
         )
 
-    content = (
-        hero_html + problem_html + arch_html
-        + decisions_html + challenges_html + learnings_html + media_html
+    diagrams = list(repo_history.get("architecture_diagrams") or [])
+    architecture_blocks = ""
+    for item in diagrams[:2]:
+        diagram = item.get("diagram") or ""
+        explanation = item.get("explanation") or ""
+        architecture_blocks += (
+            f'<div class="case-study-panel">'
+            f'<h3>{_s(item.get("title") or "Architecture")}</h3>'
+            f'{f"<pre class=\"case-study-code\">{_s(diagram)}</pre>" if diagram else ""}'
+            f'{f"<p>{_s(explanation)}</p>" if explanation else ""}'
+            f"</div>"
+        )
+    if not architecture_blocks and case_study.get("architecture_description"):
+        architecture_blocks = (
+            f'<div class="case-study-panel"><h3>Architecture</h3>'
+            f'<p>{_s(case_study.get("architecture_description"))}</p></div>'
+        )
+    architecture_html = (
+        f'<section class="section container reveal" id="architecture">{_kicker("Architecture")}<div class="case-study-grid">{architecture_blocks}</div></section>'
+        if architecture_blocks
+        else ""
     )
+
+    decision_cards = "".join(
+        _card_html(
+            "decision-card",
+            item.get("decision") or item.get("title") or "",
+            item.get("context") or item.get("rationale") or "",
+        )
+        for item in (list(case_study.get("key_decisions") or []) + list(repo_history.get("architectural_decisions") or []))[:6]
+    )
+    decisions_html = (
+        f'<section class="section container reveal">{_kicker("Key Decisions")}<div class="case-study-stack">{decision_cards}</div></section>'
+        if decision_cards
+        else ""
+    )
+
+    phase_cards = "".join(
+        f'<div class="case-study-panel"><h3>{_s(item.get("title", ""))}</h3>'
+        f'<div class="mono-accent">{_s(item.get("date_range", ""))}</div>'
+        f'<p>{_s(item.get("narrative", ""))}</p></div>'
+        for item in list(repo_history.get("phases") or [])[:4]
+    )
+    phases_html = (
+        f'<section class="section container reveal">{_kicker("Iterations and Struggles")}<div class="case-study-grid">{phase_cards}</div></section>'
+        if phase_cards
+        else ""
+    )
+
+    challenge_cards = ""
+    for item in (list(case_study.get("struggles") or []) + list(repo_history.get("challenges") or []))[:6]:
+        resolution = item.get("solution") or item.get("resolution") or ""
+        resolution_html = f"<p>{_s(resolution)}</p>" if resolution else ""
+        challenge_cards += (
+            f'<div class="case-study-panel"><h3>{_s(item.get("problem") or item.get("title") or "")}</h3>'
+            f"{resolution_html}</div>"
+        )
+    challenges_html = (
+        f'<section class="section container reveal">{_kicker("Specific Challenges")}<div class="case-study-grid">{challenge_cards}</div></section>'
+        if challenge_cards
+        else ""
+    )
+
+    learnings = list(case_study.get("learnings") or repo_history.get("learnings") or [])
+    learning_cards = "".join(
+        f'<div class="cs-learning"><span>{_s(item)}</span></div>' for item in learnings[:6]
+    )
+    learnings_html = (
+        f'<section class="section container reveal">{_kicker("Learnings")}<div class="cs-learnings">{learning_cards}</div></section>'
+        if learning_cards
+        else ""
+    )
+
+    metrics_rows = ""
+    if repo_history.get("code_metrics"):
+        metrics_rows = "".join(
+            f'<div class="metric-row"><span>{_s(key.replace("-", " ").title())}</span><strong>{_s(value)}</strong></div>'
+            for key, value in dict(repo_history.get("code_metrics") or {}).items()
+        )
+    metrics_html = (
+        f'<section class="section container reveal">{_kicker("Outcomes and Scale")}<div class="metrics-panel">{metrics_rows}</div></section>'
+        if metrics_rows
+        else ""
+    )
+
+    next_steps = list(proj_p.get("signals") or [])[:3]
+    next_steps_html = ""
+    if next_steps:
+        next_steps_html = (
+            f'<section class="section container reveal">{_kicker("Next Improvements")}<div class="signal-feed">'
+            + "".join(
+                f'<div class="signal-item"><div class="signal-item__time">{_s(item.get("updated_at") or item.get("fact_type") or "")}</div>'
+                f'<div class="signal-item__body"><strong>{_s(item.get("title") or item.get("fact_type") or "")}</strong><p>{_s(item.get("body") or "")}</p></div></div>'
+                for item in next_steps
+            )
+            + "</div></section>"
+        )
+
+    demo_file = proj_p.get("demo_asset") or ""
+    media_html = (
+        f'<section class="section container reveal" id="demo">{_kicker("Demo")}<div class="demo-video-container"><video class="demo-video" controls preload="metadata"><source src="/public-assets/profile/{_s(demo_file)}" type="video/mp4">Your browser does not support video.</video></div></section>'
+        if demo_file
+        else ""
+    )
+
+    content = hero_html + framing_html + summary_grid + architecture_html + decisions_html + phases_html + challenges_html + learnings_html + metrics_html + next_steps_html + media_html
     return HTMLResponse(
         render_public_shell(
             page_title=_s(project["title"]),
@@ -1476,16 +1407,9 @@ async def public_brain() -> HTMLResponse:
         profile = await get_public_profile(session)
         faq = await list_public_faq(session)
         await get_public_answer_policy(session)
-        sections = await list_page_sections(session, "brain")
     p = _payload(profile)
     name = _short_name(p)
-    photos = p.get("photos") or {}
-
-    if sections:
-        projects = []  # brain page doesn't need projects
-        content = _render_sections(sections, photos, projects)
-    else:
-        content = _render_brain_fallback(p, name, faq)
+    content = _render_brain_fallback(p, name, faq)
 
     page_script = ""
     turnstile_configured = bool(
@@ -1535,6 +1459,7 @@ async def public_open_brain() -> HTMLResponse:
 
 def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
     thought_garden = list(p.get("thought_garden") or [])
+    open_brain_topics = list(p.get("open_brain_topics") or [])
     turnstile_configured = bool(
         settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key
     )
@@ -1556,10 +1481,51 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
     if turnstile_configured:
         turnstile_widget = '<div id="turnstile-widget"></div>'
 
+    hero_html = f"""
+    <section class="section container reveal">
+      <div class="open-brain-hero open-brain-hero--page">
+        <div>
+          <div class="public-kicker">Open Brain</div>
+          <h1 class="display-heading display-heading--hero">Ask the public-safe version of my brain.</h1>
+          <p>It knows the approved version of my work, experience, projects, interests, and what I am trying to build. It does not have access to private memory, secrets, or unrelated assistant capabilities.</p>
+        </div>
+        <div class="brain-topic-grid">
+          {"".join(
+              f'<div class="brain-topic-card"><h3>{_s(item.get("title", ""))}</h3><p>{_s(item.get("summary", ""))}</p></div>'
+              for item in open_brain_topics[:4]
+          )}
+        </div>
+      </div>
+    </section>
+    """
+
+    scope_html = """
+    <section class="section container reveal">
+      <div class="case-study-grid">
+        <div class="case-study-panel">
+          <h3>What it knows</h3>
+          <ul class="public-bullet-list">
+            <li>My resume, work history, and current builder phase.</li>
+            <li>Case-study level detail on duSraBheja, dataGenie, Balkan, and Kaffa.</li>
+            <li>Public-safe life context like Jersey City, Annie, Oscar, Iris, music, anime, and comedy.</li>
+          </ul>
+        </div>
+        <div class="case-study-panel">
+          <h3>What it will not do</h3>
+          <ul class="public-bullet-list">
+            <li>Answer generic web questions or act like a normal assistant.</li>
+            <li>Reveal private brain memory, secrets, credentials, or internal notes.</li>
+            <li>Pretend certainty when the approved public evidence is thin.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+    """
+
     chat_html = f"""
     <section class="section container">
-      <div class="public-kicker">Digital Clone</div>
-      <h1 class="display-heading display-heading--section">Ask Ahmad's brain.</h1>
+      <div class="public-kicker">Chat</div>
+      <h2 class="display-heading display-heading--section">Prompt it like a person, not like a search box.</h2>
       <div class="chat-shell mt-2">
         <div class="chat-shell__header">
           <span class="chat-shell__dot"></span>
@@ -1597,25 +1563,21 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
       </div>
     </section>
     """
-
     how_html = """
     <section class="section container reveal">
-      <div class="public-kicker">How It Works</div>
+      <div class="public-kicker">How it works</div>
       <div class="how-cards">
         <div class="how-card">
-          <h4>Approved Facts Only</h4>
-          <p>Every answer is grounded in a curated allowlist
-            of public facts — not the full brain.</p>
+          <h4>Approved facts only</h4>
+          <p>The public brain is grounded in a curated allowlist, not the raw private knowledge base.</p>
         </div>
         <div class="how-card">
-          <h4>Multi-Turn</h4>
-          <p>Ask follow-ups. The clone tracks conversation
-            context across multiple exchanges.</p>
+          <h4>Multi-turn</h4>
+          <p>You can ask follow-ups and push on details the same way you would in a real conversation.</p>
         </div>
         <div class="how-card">
-          <h4>Evidence-Led</h4>
-          <p>Answers cite real projects, roles, and decisions
-            — not hallucinated filler.</p>
+          <h4>Evidence-led</h4>
+          <p>It is designed to sound like me without drifting into generic filler or fake certainty.</p>
         </div>
       </div>
     </section>
@@ -1653,7 +1615,7 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
         else ""
     )
 
-    return chat_html + how_html + faq_html + garden_html
+    return hero_html + scope_html + chat_html + how_html + faq_html + garden_html
 
 
 # ──────────────────────────────────────────────
@@ -1665,15 +1627,10 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
 async def public_connect() -> HTMLResponse:
     async with async_session() as session:
         profile = await get_public_profile(session)
-        sections = await list_page_sections(session, "connect")
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-
-    if sections:
-        content = _render_sections(sections, photos, [])
-    else:
-        content = _render_connect_fallback(p, photos)
+    content = _render_connect_fallback(p, photos)
 
     return HTMLResponse(
         render_public_shell(
