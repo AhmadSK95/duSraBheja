@@ -688,23 +688,23 @@ async def public_home() -> HTMLResponse:
 
 def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> str:
     hero_photo = photos.get("hero")
-    personality_photo = photos.get("personality")
 
     hero_html = f"""
     <section class="hero-home">
       <div class="container">
         <div class="hero-home__text">
-          <div class="public-kicker">Software Engineer</div>
+          <div class="public-kicker">Software Engineer &amp; AI Builder</div>
           <h1 class="display-heading display-heading--hero">{_s(name)}</h1>
-          <p>Ex-Amazon engineer building AI-native products in Jersey City.
-            I ship real things for real people &mdash; from barbershop booking
-            systems to personal AI second brains.</p>
+          <p>6+ years at Amazon building distributed systems. Now building
+            AI-native products &mdash; duSraBheja (personal AI second brain)
+            and dataGenie (multi-agent data analytics).
+            IIT Kharagpur &amp; NYU Tandon grad.</p>
           <div class="hero-home__ctas">
             <a class="cta" href="/work">See the work</a>
             <a class="cta cta--outline" href="/brain">Ask my AI clone</a>
           </div>
         </div>
-        <div class="hero-home__photo hero-home__photo--lg">
+        <div class="hero-home__photo">
           {_photo_img(hero_photo, loading="eager", alt=f"{name} waterfront portrait")}
         </div>
       </div>
@@ -721,15 +721,15 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
           </div>
           <div class="proof-card">
             <div class="proof-card__number">5</div>
-            <div class="proof-card__label">AI Agents in Production</div>
+            <div class="proof-card__label">AI Agents Built</div>
           </div>
           <div class="proof-card">
-            <div class="proof-card__number">2</div>
-            <div class="proof-card__label">Live Client Sites</div>
+            <div class="proof-card__number">4</div>
+            <div class="proof-card__label">Live Projects</div>
           </div>
           <div class="proof-card">
-            <div class="proof-card__number">6+</div>
-            <div class="proof-card__label">Years Engineering</div>
+            <div class="proof-card__number">5</div>
+            <div class="proof-card__label">Languages Spoken</div>
           </div>
         </div>
       </div>
@@ -749,15 +749,12 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
             I care about ownership &mdash; architecture to deployment to operations.</p>
           <a class="inline-link mt-2" href="/about">The full picture</a>
         </div>
-        <div class="photo-accent--lg">
-          {_photo_img(personality_photo, alt="Ahmad with Oscar at colorful art wall")}
+        <div class="photo-accent--sm">
+          {_photo_img(photos.get("oscar_selfie"), alt="Ahmad with Oscar at colorful art wall")}
         </div>
       </div>
     </section>
     """
-
-    # Currently living feed
-    currently_html = _render_currently_feed(p)
 
     # Chatbot teaser
     chatbot_html = """
@@ -774,6 +771,17 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     </section>
     """
 
+    ghibli_accent = ""
+    ghibli = photos.get("ghibli_cat")
+    if ghibli:
+        ghibli_url = _photo_url(ghibli)
+        if ghibli_url:
+            ghibli_accent = (
+                f'<div class="photo-accent--sm" style="max-width:160px;margin:0 auto 1.5rem;">'
+                f'<img src="{ghibli_url}" alt="Ghibli illustration" loading="lazy" '
+                f'style="width:100%;border-radius:var(--radius-sm);" /></div>'
+            )
+
     first_project = _project_card_html(projects[0], featured=True) if projects else ""
     grid_projects = "".join(_project_card_html(proj) for proj in projects[1:4])
     work_html = f"""
@@ -781,6 +789,7 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
       <div class="public-kicker">Selected Work</div>
       <h2 class="display-heading display-heading--section">
         Built, shipped, running.</h2>
+      {ghibli_accent}
       {first_project}
       <div class="project-grid mt-3">
         {grid_projects}
@@ -794,6 +803,27 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
 
     # Interests posters
     interests_html = _render_interests_posters()
+
+    # Life photos row
+    life_photos_html = ""
+    life_photo_keys = ["oscar_stairs", "oscar_couch", "baking", "friends_brooklyn"]
+    life_imgs = ""
+    for key in life_photo_keys:
+        photo = photos.get(key)
+        if photo:
+            url = _photo_url(photo)
+            if url:
+                life_imgs += (
+                    f'<div class="photo-row__item photo-row__item--sm photo-sticker">'
+                    f'<img src="{url}" alt="{_s(photo.get("title", ""))}" loading="lazy" />'
+                    f'</div>'
+                )
+    if life_imgs:
+        life_photos_html = f'''
+    <section class="section container reveal">
+      <div class="photo-row">{life_imgs}</div>
+    </section>
+    '''
 
     contact_items = list(p.get("contact") or p.get("contact_modes") or [])
     contact_links = ""
@@ -819,10 +849,10 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
         hero_html
         + stat_html
         + about_html
-        + currently_html
-        + chatbot_html
         + work_html
         + interests_html
+        + life_photos_html
+        + chatbot_html
         + contact_html
     )
 
@@ -832,6 +862,37 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
 # ──────────────────────────────────────────────
 
 
+_RESUME_SKILLS = [
+    ("Languages", ["Java", "Python", "JavaScript/TypeScript", "SQL"]),
+    ("Frontend", ["React", "Next.js", "HTML/CSS", "Vite", "Framer Motion"]),
+    (
+        "Backend",
+        ["FastAPI", "Flask", "Node.js/Express", "Spring",
+         "Hibernate", "Apache Camel", "Kafka"],
+    ),
+    (
+        "AI / ML",
+        ["Claude API", "OpenAI API", "MCP", "pgvector",
+         "sentence-transformers", "DuckDB", "scikit-learn"],
+    ),
+    (
+        "Cloud / Infra",
+        ["AWS (production at Amazon)", "DigitalOcean",
+         "Docker Compose", "CI/CD", "Nginx", "certbot"],
+    ),
+    (
+        "Data",
+        ["PostgreSQL", "pgvector", "DuckDB", "Redis",
+         "ARQ", "Elasticsearch", "SQLAlchemy", "Alembic"],
+    ),
+    (
+        "Tools",
+        ["Git", "GitHub", "Discord.py", "Ollama",
+         "npm", "pip", "Linux/macOS"],
+    ),
+]
+
+
 @router.get("/about", response_class=HTMLResponse)
 async def public_about() -> HTMLResponse:
     async with async_session() as session:
@@ -839,10 +900,9 @@ async def public_about() -> HTMLResponse:
     p = _payload(profile)
     name = _short_name(p)
     photos = p.get("photos") or {}
-    roles = list(p.get("roles") or [])
     current_arc = p.get("current_arc") or {}
 
-    hero_photo = photos.get("personality")
+    hero_photo = photos.get("indian_wedding")
     hero_html = f"""
     <section class="about-hero">
       <div class="container">
@@ -852,7 +912,7 @@ async def public_about() -> HTMLResponse:
           <p>From IIT Kharagpur to Amazon to building
             independently in Jersey City.</p>
         </div>
-        <div class="about-hero__photo about-hero__photo--lg">
+        <div class="about-hero__photo">
           {_photo_img(hero_photo, loading="eager", alt="Ahmad with Oscar at colorful art wall")}
         </div>
       </div>
@@ -882,49 +942,206 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    # Life facts — condensed, no photos
-    life_html = """
-    <section class="section container reveal">
-      <div class="public-kicker public-kicker--gold">Life</div>
-      <h2 class="display-heading display-heading--section">The human side.</h2>
+    ghibli_accent = ""
+    gp = photos.get("ghibli_picnic")
+    if gp:
+        gpu = _photo_url(gp)
+        if gpu:
+            ghibli_accent = (
+                f'<div class="photo-accent--sm" style="max-width:200px;margin:1.5rem 0;">'
+                f'<img src="{gpu}" alt="Ghibli picnic" loading="lazy" '
+                f'style="width:100%;border-radius:var(--radius-sm);" /></div>'
+            )
+
+    # Experience (full detail)
+    experience_html = f'''
+<section class="section container reveal">
+  <div class="offset-grid offset-grid--65-35">
+    <div>
+      <div class="public-kicker">Experience</div>
+      <h2 class="display-heading display-heading--section">The work history.</h2>
+      <div class="roles-table">
+        <div class="role-row">
+          <span class="role-row__period">Jun 2022 – Sep 2025</span>
+          <span class="role-row__org">Amazon</span>
+          <span class="role-row__title">Software Development Engineer</span>
+          <span class="role-row__summary">New York, NY</span>
+        </div>
+      </div>
+      <ul class="public-bullet-list mt-2">
+        <li>Owned frontend and backend services on the advertising
+          platform, shipping features for international launches.</li>
+        <li>Built Java and Python microservices for ad delivery
+          across AWS regions — service meshes, regional failover,
+          multi-service debugging.</li>
+        <li>Led cross-org coordination for international expansion,
+          integrating compliance and localization frameworks.</li>
+      </ul>
+      <div class="roles-table mt-3">
+        <div class="role-row">
+          <span class="role-row__period">Oct 2018 – Apr 2020</span>
+          <span class="role-row__org">Loylty Rewardz</span>
+          <span class="role-row__title">Software Engineer</span>
+          <span class="role-row__summary">Mumbai, India</span>
+        </div>
+      </div>
+      <ul class="public-bullet-list mt-2">
+        <li>Core team on loyalty rewards engine processing millions
+          of daily transactions. Java/Hibernate/SQL — learned ORMs
+          break on complex batch ops.</li>
+        <li>Designed Apache Camel file ingestion pipelines
+          normalizing dozens of formats into a single data model.</li>
+        <li>Led migration from batch processing to Apache Kafka
+          for real-time event streaming.</li>
+      </ul>
+      <div class="roles-table mt-3">
+        <div class="role-row">
+          <span class="role-row__period">Jul 2017 – Oct 2018</span>
+          <span class="role-row__org">Loylty Rewardz</span>
+          <span class="role-row__title">Management Trainee</span>
+          <span class="role-row__summary">Mumbai, India</span>
+        </div>
+      </div>
+      <ul class="public-bullet-list mt-2">
+        <li>Shipped production code within first quarter. Built
+          ETL jobs in Talend for data migration and real-time
+          transaction sync.</li>
+      </ul>
+    </div>
+    <div class="photo-accent--sm">
+      {_photo_img(photos.get("work"), alt="Ahmad NYC street portrait")}
+    </div>
+  </div>
+</section>
+'''
+
+    # Education
+    education_html = f'''
+<section class="section container reveal">
+  <div class="offset-grid offset-grid--65-35">
+    <div>
+      <div class="public-kicker">Education</div>
+      <h2 class="display-heading display-heading--section">IIT Kharagpur + NYU Tandon.</h2>
+      <div class="education-rows">
+        <div class="education-row">
+          <span class="education-row__period">2021 – 2022</span>
+          <div>
+            <div class="education-row__school">NYU Tandon School of Engineering</div>
+            <div class="education-row__degree">Master of Science, Electrical Engineering</div>
+            <p class="mt-1" style="color:var(--ink-light);font-size:0.92rem;">
+              Coursework: Machine Learning, Deep Learning, Big Data.
+              Project: Automated Tagging of News Articles (LDA, search engine UI).</p>
+          </div>
+        </div>
+        <div class="education-row">
+          <span class="education-row__period">2013 – 2017</span>
+          <div>
+            <div class="education-row__school">Indian Institute of Technology, Kharagpur</div>
+            <div class="education-row__degree">Bachelor of Technology, Electrical Engineering</div>
+            <p class="mt-1" style="color:var(--ink-light);font-size:0.92rem;">
+              Projects: Automated Background Modelling (Computer Vision, optical flow),
+              Smart Home Energy Management (IoT). KVPY Scholar. NSEP Qualifier.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="photo-accent--sm">
+      {_photo_img(photos.get("indian_wedding"), alt="Ahmad and Annie in Indian attire")}
+    </div>
+  </div>
+</section>
+'''
+
+    # Skills grid
+    skill_sections = ""
+    for label, items in _RESUME_SKILLS:
+        pills = "".join(f'<span class="pill">{_s(item)}</span>' for item in items)
+        skill_sections += (
+            f'<div class="skill-category">'
+            f'<div class="skill-category__label">{_s(label)}</div>'
+            f'<div class="pill-list">{pills}</div></div>'
+        )
+    skills_html = f'''
+<section class="section container reveal">
+  <div class="public-kicker">Technical Stack</div>
+  <h2 class="display-heading display-heading--section">What I work with.</h2>
+  <div class="skills-grid">{skill_sections}</div>
+</section>
+'''
+
+    # Life facts with photo grid
+    life_photo_keys = [
+        "oscar_stairs", "oscar_window", "oscar_chair",
+        "oscar_office", "oscar_couch", "baking",
+    ]
+    life_photo_imgs = ""
+    for key in life_photo_keys:
+        ph = photos.get(key)
+        if ph:
+            pu = _photo_url(ph)
+            if pu:
+                life_photo_imgs += (
+                    f'<div class="photo-gallery__item">'
+                    f'<img src="{pu}" alt="{_s(ph.get("title", ""))}" loading="lazy" /></div>'
+                )
+
+    life_html = f'''
+<section class="section container reveal">
+  <div class="public-kicker public-kicker--gold">Life</div>
+  <h2 class="display-heading display-heading--section">The human side.</h2>
+  <div class="offset-grid offset-grid--60-40">
+    <div>
       <div class="life-facts">
         <div class="life-fact">
           <strong>Home</strong>
-          <span>Jersey City, NJ &mdash; married Annie in 2025, cat dad to Oscar &amp; Iris</span>
-        </div>
+          <span>Jersey City, NJ</span></div>
+        <div class="life-fact">
+          <strong>Married</strong>
+          <span>Annie Harpel, November 2025</span></div>
+        <div class="life-fact">
+          <strong>Cats</strong>
+          <span>Oscar (orange tabby, 7yo) &amp; Iris</span></div>
         <div class="life-fact">
           <strong>Languages</strong>
-          <span>English, Hindi, Telugu, Urdu, Tamil</span>
-        </div>
+          <span>English, Hindi, Telugu, Urdu, Tamil</span></div>
         <div class="life-fact">
           <strong>After hours</strong>
-          <span>Anime, Indian standup, hip hop, cycling, Pokemon collecting</span>
-        </div>
+          <span>Anime, Indian standup, hip hop, cycling,
+            Pokemon collecting</span></div>
       </div>
-    </section>
-    """
+    </div>
+    <div class="photo-gallery">{life_photo_imgs}</div>
+  </div>
+</section>
+'''
 
-    # Career table
-    role_rows = "".join(
-        f'<div class="role-row">'
-        f'<span class="role-row__period">{_s(item.get("period"))}</span>'
-        f'<span class="role-row__org">{_s(item.get("organization"))}</span>'
-        f'<span class="role-row__title">{_s(item.get("title"))}</span>'
-        f'<span class="role-row__summary">{_s(item.get("summary"))}</span></div>'
-        for item in roles[:6]
-    )
-    roles_html = f"""
+    # Photo gallery from all gallery photos
+    gallery_photos = list(photos.get("gallery") or [])
+    gallery_imgs = ""
+    for ph in gallery_photos:
+        url = _photo_url(ph)
+        if url:
+            gallery_imgs += (
+                f'<div class="photo-gallery__item">'
+                f'<img src="{url}" alt="{_s(ph.get("title", ""))}" loading="lazy" /></div>'
+            )
+    gallery_html = ""
+    if gallery_imgs:
+        gallery_html = f'''
     <section class="section container reveal">
-      <div class="public-kicker">Career</div>
-      <h2 class="display-heading display-heading--section">Career proof, condensed.</h2>
-      <div class="roles-table">{role_rows}</div>
+      <div class="public-kicker public-kicker--purple">Life in Pictures</div>
+      <div class="photo-gallery">{gallery_imgs}</div>
     </section>
-    """
+    '''
 
     # Interests posters — top 5s with links
     interests_html = _render_interests_posters()
 
-    content = hero_html + acts_html + life_html + roles_html + interests_html
+    content = (
+        hero_html + acts_html + ghibli_accent
+        + experience_html + education_html + skills_html
+        + life_html + gallery_html + interests_html
+    )
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -1098,23 +1315,24 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             title = d.get("title", "")
             diag_text = d.get("diagram", "")
             explanation = d.get("explanation", "")
-            title_html = (
-                f'<div class="cs-arch__title">{_s(title)}</div>' if title else ""
-            )
-            diag_html = (
-                f'<div class="cs-arch__diagram">{_s(diag_text)}</div>'
-                if diag_text
-                else ""
-            )
+            diag_html = ""
+            if diag_text:
+                diag_html = (
+                    f'<div class="cs-arch__terminal">'
+                    f'<div class="cs-arch__terminal-bar">'
+                    f'<span class="cs-arch__terminal-dot"></span>'
+                    f'<span class="cs-arch__terminal-title">'
+                    f'{_s(title) if title else "architecture"}</span></div>'
+                    f'<pre class="cs-arch__diagram">{_s(diag_text)}</pre></div>'
+                )
+            # Truncate explanation
+            if explanation and len(explanation) > 300:
+                explanation = explanation[:297].rstrip() + "..."
             expl_html = (
                 f'<div class="cs-arch__explanation">{_s(explanation)}</div>'
-                if explanation
-                else ""
+                if explanation else ""
             )
-            diagram_blocks += (
-                f'<div class="cs-arch__block">'
-                f"{title_html}{diag_html}{expl_html}</div>"
-            )
+            diagram_blocks += f"{diag_html}{expl_html}"
         arch_html = f"""
         <section class="section container reveal">
           {_kicker("Architecture")}
@@ -1213,15 +1431,23 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
         </section>
         """
 
-    # ── Media placeholder ──
-    media_html = """
-    <section class="section container reveal">
-      <div class="cs-media-placeholder">
-        <div class="public-kicker">Media</div>
-        <span>Project videos and screenshots coming soon.</span>
-      </div>
-    </section>
-    """
+    # ── Demo video ──
+    demo_video_map = {
+        "balkan-barbershop-website": "balkan_barbers_demo.mp4",
+        "kaffa-espresso-bar-website": "kaffa_espresso_bar_demo.mp4",
+        "datagenie": "datagenie_demo.mp4",
+    }
+    demo_file = demo_video_map.get(slug)
+    media_html = ""
+    if demo_file:
+        preload = "none" if "kaffa" in demo_file else "metadata"
+        media_html = (
+            f'<section class="section container reveal">'
+            f'{_kicker("Demo")}'
+            f'<video class="cs-demo-video" controls preload="{preload}">'
+            f'<source src="/public-assets/profile/{_s(demo_file)}" type="video/mp4">'
+            f'Your browser does not support video.</video></section>'
+        )
 
     content = (
         hero_html + problem_html + arch_html

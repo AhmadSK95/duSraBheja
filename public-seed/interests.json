@@ -1,12 +1,12 @@
 {
-  "_description": "Top 5 interests for public profile posters. Update via signal pipeline or edit manually. Items render as poster-style cards with links.",
+  "_description": "Top 5 interests from brain signals. Updated from media-history-dump.md (Mar 23, 2026).",
   "_updated": "2026-03-23",
   "top5_youtubers": [
-    {"name": "Nate B Jones", "subtitle": "AI News & Strategy Daily", "link": "https://www.youtube.com/@NateBJones"},
-    {"name": "Tried&Refused Productions", "subtitle": "Bollywood & cinema analysis", "link": "https://www.youtube.com/@traboretmul"},
-    {"name": "KVizzing", "subtitle": "Comedy quiz — Members only", "link": "https://www.youtube.com/@KVizzingWithKumarVarun"},
-    {"name": "Kenny Sebastian", "subtitle": "Simple Ken Podcast", "link": "https://www.youtube.com/@KennySebastian"},
-    {"name": "Tanmay Bhat", "subtitle": "Content & comedy", "link": "https://www.youtube.com/@TanmayBhatYouTube"}
+    {"name": "Nate B Jones", "subtitle": "AI News & Strategy — 51 videos", "link": "https://www.youtube.com/@NateBJones"},
+    {"name": "Tried&Refused Productions", "subtitle": "Bollywood analysis — 30 videos", "link": "https://www.youtube.com/@traboretmul"},
+    {"name": "Coffee and Cults", "subtitle": "Deep dives & pop culture — 17 videos", "link": "https://www.youtube.com/@CoffeeandCults"},
+    {"name": "Louaista", "subtitle": "Hip hop & internet culture — 17 videos", "link": "https://www.youtube.com/@Louaista"},
+    {"name": "Patrick Cc:", "subtitle": "Celebrity deep dives — 13 videos", "link": "https://www.youtube.com/@PatrickCc"}
   ],
   "top5_anime": [
     {"name": "Naruto Shippuden", "subtitle": "Currently on S9", "link": "https://www.crunchyroll.com/series/GYQ4MW246/naruto-shippuden"},
@@ -18,5 +18,11 @@
     {"name": "Brooklyn Nine-Nine", "subtitle": "Stress-watch comfort show", "link": "https://www.netflix.com/title/70281562"},
     {"name": "Orange Is the New Black", "subtitle": "Recently started", "link": "https://www.netflix.com/title/70242311"}
   ],
-  "top5_artists": []
+  "top5_artists": [
+    {"name": "Seedhe Maut", "subtitle": "18 tracks in Top Songs 2025", "link": "https://open.spotify.com/artist/4JEoKXmDv5ILIZBghmsz5l"},
+    {"name": "Raftaar", "subtitle": "17 tracks in Top Songs 2025", "link": "https://open.spotify.com/artist/1mYsTxnqsietFxj1OgoGbG"},
+    {"name": "Kendrick Lamar", "subtitle": "13 tracks — GNX album", "link": "https://open.spotify.com/artist/2YZyLoL8N0Wb9xBt1NhZWg"},
+    {"name": "Yashraj", "subtitle": "11 tracks — MERI JAAN PEHLE NAACH", "link": "https://open.spotify.com/artist/4jvekmhcLGwF4qCJz3sKGr"},
+    {"name": "MC SQUARE", "subtitle": "11 tracks — FEROZI", "link": "https://open.spotify.com/artist/75Hm2HZ9PxYfJxGBz0BnOD"}
+  ]
 }

@@ -344,6 +344,7 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
         return None
 
     return {
+        # Original 13 JPGs
         "hero": pick("05_nov2025_waterfront_fullbody_portrait.jpg"),
         "personality": pick("09_aug2025_holding_oscar_colorful_art_wall.jpg"),
         "work": pick("02_feb2026_nyc_street_portrait_with_badge.jpg"),
@@ -354,9 +355,23 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
         "pokemon": pick("10_aug2025_pokemon_plushies.jpg"),
         "cycling": pick("07_sep2025_bike_helmet_oscar_front_door.jpg"),
         "photo_break": pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
-        "oscar_looking": pick("04_jan2026_oscar_looking_at_camera.jpg"),
-        "oscar_home": pick("08_jan2026_oscar_home.jpg"),
-        "skyline_2": pick("12_jul2025_skyline_2.jpg"),
+        "oscar_looking": pick("04_jan2026_oscar_on_shoulder_looking_away.jpg"),
+        "oscar_home": pick("08_aug2025_holding_oscar_at_home.jpg"),
+        "skyline_2": pick("12_jul2025_couple_sunset_nyc_skyline_2.jpg"),
+        # New 12 PNGs
+        "oscar_selfie": pick("ahmad_selfie_with_oscar.png"),
+        "indian_wedding": pick("ahmad_indian_wedding_tulips.png"),
+        "ghibli_picnic": pick("ahmad_ghibli_picnic.png"),
+        "ghibli_cat": pick("ahmad_with_cat_ghibli.png"),
+        "baking": pick("baking_hamantaschen.png"),
+        "friends_brooklyn": pick("group_photo_brooklyn.png"),
+        "oscar_couch": pick("oscar_cat_couch_closeup.png"),
+        "oscar_sploot": pick("oscar_cat_from_above.png"),
+        "oscar_office": pick("oscar_cat_office_chair.png"),
+        "oscar_chair": pick("oscar_cat_on_chair.png"),
+        "oscar_stairs": pick("oscar_cat_stairs.png"),
+        "oscar_window": pick("oscar_cat_window.png"),
+        # Collections
         "mosaic": [
             pick("09_aug2025_holding_oscar_colorful_art_wall.jpg"),
             pick("13_nov2025_wedding_love_sign_flower_arch.jpg"),
@@ -366,8 +381,9 @@ def _photo_selection(assets: dict[str, PhotoAsset]) -> dict[str, dict[str, Any] 
             pick("11_jul2025_couple_sunset_nyc_skyline.jpg"),
         ],
         "gallery": [
-            asset.as_dict() for asset in sorted(assets.values(), key=lambda item: item.filename)
-        ][:8],
+            asset.as_dict()
+            for asset in sorted(assets.values(), key=lambda item: item.filename)
+        ],
     }
 
 

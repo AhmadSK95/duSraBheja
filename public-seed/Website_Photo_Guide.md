@@ -123,4 +123,80 @@
 
 ---
 
-*All photos have been converted from HEIC to JPG and are web-ready. Files are in `website_photos/` folder with descriptive names.*
+## New Photos Added (March 2026)
+
+### 14. Ahmad Selfie with Oscar (2026)
+- **Filename:** `ahmad_selfie_with_oscar.png`
+- **Description:** Ahmad on couch with Oscar the orange tabby, casual selfie. Home setting.
+- **Vibe:** Casual, cozy, cat-dad
+- **Best for:** About section accent, skills section
+
+### 15. Indian Wedding — Tulips (Apr 2025)
+- **Filename:** `ahmad_indian_wedding_tulips.png`
+- **Description:** Ahmad and Annie in green Indian clothes (kurta/saree), sitting in front of vibrant pink/red tulip garden. Both smiling.
+- **Vibe:** Colorful, cultural, joyful, gorgeous
+- **Best for:** About hero, education section, personal life
+
+### 16. Ghibli Picnic Illustration (2026)
+- **Filename:** `ahmad_ghibli_picnic.png`
+- **Description:** Studio Ghibli-style illustration of Ahmad and Annie at a park picnic. Warm autumn colors.
+- **Vibe:** Artistic, warm, whimsical
+- **Best for:** Arc/throughline section, personal touch
+
+### 17. Ghibli Cat Illustration (2026)
+- **Filename:** `ahmad_with_cat_ghibli.png`
+- **Description:** Studio Ghibli-style illustration of Ahmad sitting with Oscar on a pink bed. Warm peach tones.
+- **Vibe:** Artistic, warm, personality
+- **Best for:** Projects section accent, personality touch
+
+### 18. Baking Hamantaschen (2026)
+- **Filename:** `baking_hamantaschen.png`
+- **Description:** Annie holding a plate of freshly baked hamantaschen. Caption: "First time we baked."
+- **Vibe:** Homey, couple life, cooking
+- **Best for:** Life section, photo gallery
+
+### 19. Group Photo Brooklyn (2025)
+- **Filename:** `group_photo_brooklyn.png`
+- **Description:** Group selfie with 6 friends under a Brooklyn overpass at dusk. Ahmad and Annie in center.
+- **Vibe:** Social, NYC, friend group
+- **Best for:** Life section, photo gallery, social proof
+
+### 20. Oscar — Couch Closeup (2026)
+- **Filename:** `oscar_cat_couch_closeup.png`
+- **Description:** Oscar lying on blue couch, closeup of face with green eyes staring at camera.
+- **Vibe:** Cute, intimate, cat portrait
+- **Best for:** Life photos row, gallery
+
+### 21. Oscar — Sploot from Above (2026)
+- **Filename:** `oscar_cat_from_above.png`
+- **Description:** Oscar splooting on concrete floor, seen from above. Green collar, white paws spread.
+- **Vibe:** Funny, candid, cat personality
+- **Best for:** Gallery, fun accent
+
+### 22. Oscar — Office Chair (2026)
+- **Filename:** `oscar_cat_office_chair.png`
+- **Description:** Oscar sitting upright on a pink office chair, looking directly at camera. Green collar.
+- **Vibe:** Boss cat, workspace energy
+- **Best for:** Life grid, gallery
+
+### 23. Oscar — Orange Chair (2026)
+- **Filename:** `oscar_cat_on_chair.png`
+- **Description:** Oscar sitting on an orange armchair in cozy home setting. Wall art and lamp visible.
+- **Vibe:** Cozy, homey, warm tones
+- **Best for:** Life grid, gallery
+
+### 24. Oscar — Stairs Portrait (2026)
+- **Filename:** `oscar_cat_stairs.png`
+- **Description:** Oscar sitting on purple stairs, looking up at camera. Green collar, white chest. Beautiful portrait.
+- **Vibe:** Portrait, striking, best Oscar solo shot
+- **Best for:** Life photos row, feature photo
+
+### 25. Oscar Through Window (2026)
+- **Filename:** `oscar_cat_window.png`
+- **Description:** Annie's hand touching glass from outside, Oscar touching from inside through window pane.
+- **Vibe:** Tender, emotional, separation/connection
+- **Best for:** Life grid, gallery, personal moment
+
+---
+
+*All original JPGs converted from HEIC. New PNGs added from Instagram/phone exports March 2026.*

@@ -2182,6 +2182,125 @@ body.public-body {
   }
 }
 
+/* ===== Skills Grid ===== */
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.skill-category {
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.skill-category__label {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+/* ===== Education Rows ===== */
+.education-rows {
+  display: grid;
+  gap: 0;
+}
+
+.education-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 1.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.education-row__period {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.education-row__school {
+  font-weight: 600;
+}
+
+.education-row__degree {
+  color: var(--ink-light);
+  font-size: 0.92rem;
+}
+
+/* ===== Terminal Architecture Box ===== */
+.cs-arch__terminal {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: #0d0d14;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+.cs-arch__terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--line);
+}
+
+.cs-arch__terminal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.cs-arch__terminal-title {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+pre.cs-arch__diagram {
+  padding: 1.5rem;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--accent);
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* ===== Demo Video ===== */
+.cs-demo-video {
+  width: 100%;
+  max-width: 800px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: #000;
+  margin-top: 1rem;
+}
+
+/* ===== Responsive for new components ===== */
+@media (max-width: 860px) {
+  .skills-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .education-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
 /* ===== Legacy compat (kept for any straggling references) ===== */
 .public-bullet-list { margin: 0; padding-left: 1.1rem; }
 .public-bullet-list li { margin-bottom: 0.45rem; line-height: 1.65; }
@@ -2245,6 +2364,13 @@ body.public-body {
 .poster-row::-webkit-scrollbar { height: 3px; }
 .poster-row::-webkit-scrollbar-track { background: var(--line); border-radius: 2px; }
 .poster-row::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+
+a.poster-card,
+a.poster-card:link,
+a.poster-card:visited {
+  text-decoration: none;
+  color: inherit;
+}
 
 .poster-card {
   flex: 0 0 180px;
