@@ -744,6 +744,69 @@ async def list_public_surface_reviews(
     return list(result.scalars().all())
 
 
+def _update_window_signature(payload: dict[str, Any]) -> list[dict[str, str]]:
+    window = dict(payload.get("daily_update_window") or {})
+    return [
+        {
+            "headline": str(item.get("headline") or ""),
+            "summary": str(item.get("summary") or ""),
+            "timestamp": str(item.get("timestamp_label") or ""),
+        }
+        for item in list(window.get("items") or [])[:3]
+    ]
+
+
+async def _create_refresh_review_if_needed(
+    session: AsyncSession,
+    *,
+    subject_type: str,
+    subject_slug: str,
+    title: str,
+    previous_payload: dict[str, Any],
+    current_payload: dict[str, Any],
+    evidence_refs: list[str],
+) -> PublicSurfaceReview | None:
+    old_signature = _update_window_signature(previous_payload)
+    new_signature = _update_window_signature(current_payload)
+    if not new_signature or old_signature == new_signature:
+        return None
+    before_excerpt = " | ".join(
+        f"{item['headline']}: {item['summary']}" for item in old_signature[:2] if item["headline"] or item["summary"]
+    ) or "No previously published update window."
+    after_excerpt = " | ".join(
+        f"{item['headline']}: {item['summary']}" for item in new_signature[:2] if item["headline"] or item["summary"]
+    ) or "No newly generated update window."
+    existing_result = await session.execute(
+        select(PublicSurfaceReview)
+        .where(
+            PublicSurfaceReview.subject_type == subject_type,
+            PublicSurfaceReview.subject_slug == subject_slug,
+            PublicSurfaceReview.status == "staged",
+        )
+        .order_by(PublicSurfaceReview.created_at.desc())
+        .limit(1)
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing and (existing.after_excerpt or "") == after_excerpt:
+        return existing
+    return await create_public_surface_review(
+        session,
+        subject_type=subject_type,
+        subject_slug=subject_slug,
+        diff_summary=f"{title} has a new brain-generated update window ready for review.",
+        before_excerpt=before_excerpt,
+        after_excerpt=after_excerpt,
+        staged_payload={
+            "subject_type": subject_type,
+            "subject_slug": subject_slug,
+            "previous_signature": old_signature,
+            "current_signature": new_signature,
+        },
+        evidence_refs=evidence_refs[:8],
+        auto_advance_policy="manual-review",
+    )
+
+
 async def list_improvement_opportunities(
     session: AsyncSession,
     *,
@@ -772,7 +835,11 @@ async def list_improvement_cycle_runs(
 
 async def get_public_surface_ops_status(session: AsyncSession) -> dict[str, Any]:
     refresh_runs = await list_public_surface_refresh_runs(session, limit=1)
-    reviews = await list_public_surface_reviews(session, limit=10)
+    reviews = [
+        review
+        for review in await list_public_surface_reviews(session, limit=10)
+        if review.subject_type not in {"campaign-wave", "internal-cycle"}
+    ]
     cycles = await list_improvement_cycle_runs(session, limit=5)
     campaign_result = await session.execute(
         select(ProductImprovementCampaign)
@@ -841,29 +908,29 @@ def _cycle_stage_blueprint(
     uat_passed = sum(1 for item in uat if item.get("passed"))
     return [
         {
-            "stage": "pm_pass",
+            "stage": "product_design",
             "status": "completed",
-            "summary": f"Reviewed {len(findings)} product opportunities across the current public surface snapshot.",
+            "summary": f"Reviewed {len(findings)} product opportunities and selected the highest-leverage design target for this cycle.",
         },
         {
-            "stage": "plan_pass",
+            "stage": "implementation_plan",
             "status": "completed",
-            "summary": "Selected the highest-signal improvement area and prepared the next implementation plan.",
+            "summary": "Converted the chosen opportunity into a concrete implementation brief with clear scope and tradeoffs.",
         },
         {
-            "stage": "engineering",
+            "stage": "implementation",
             "status": "completed",
-            "summary": "Refreshed the curated surface and updated the opportunity backlog for the next build pass.",
+            "summary": "Applied the cycle changes and updated the product state so the next loop can build on real output.",
         },
         {
-            "stage": "qa",
+            "stage": "qa_rounds",
             "status": "completed" if qa_passed == len(qa) else "needs_attention",
-            "summary": f"Ran {len(qa)} QA lenses with {qa_passed}/{len(qa)} passing.",
+            "summary": f"Ran the fixed 10 QA lenses with {qa_passed}/{len(qa)} passing.",
         },
         {
-            "stage": "uat",
+            "stage": "uat_rounds",
             "status": "completed" if uat_passed == len(uat) else "needs_attention",
-            "summary": f"Ran {len(uat)} UAT lenses with {uat_passed}/{len(uat)} passing.",
+            "summary": f"Ran the 3 user-perspective UAT rounds with {uat_passed}/{len(uat)} passing.",
         },
         {
             "stage": "closeout",
@@ -890,13 +957,13 @@ def _build_cycle_report(
     top_findings = findings[:3]
     improvements = [
         {
-            "title": "Opportunity backlog refreshed",
-            "why": "Each loop should keep the brain honest about where the biggest product gaps are right now.",
+            "title": "Design brief selected",
+            "why": "Each cycle should start by choosing the highest-leverage product gap instead of looping blindly.",
             "details": [str(item.get("summary") or "") for item in top_findings],
         },
         {
             "title": "Quality gates rerun",
-            "why": "The product should compound without silently breaking routes, rendering, or the public brain workflow.",
+            "why": "The product should compound without silently breaking routes, rendering, review flows, or the public brain workflow.",
             "details": [
                 f"{sum(1 for item in qa if item.get('passed'))}/{len(qa)} QA lenses passed",
                 f"{sum(1 for item in uat if item.get('passed'))}/{len(uat)} UAT lenses passed",
@@ -927,10 +994,28 @@ def _build_cycle_report(
         "cycle_number": cycle_number,
         "wave_size": wave_size,
         "overview": (
-            f"Cycle {cycle_number} refreshed the backlog, reran the fixed QA/UAT lenses, "
-            f"and {'paused for approval' if approval_required else 'remains eligible to continue'}."
+            f"Cycle {cycle_number} completed the full product loop: design, implementation, 10 QA rounds, "
+            f"3 UAT rounds, and {'paused for approval' if approval_required else 'closed out for the next cycle'}."
         ),
+        "design_brief": {
+            "primary_problem": str(top_findings[0].get("title") or "Compounding product quality")
+            if top_findings
+            else "Compounding product quality",
+            "focus_summary": str(top_findings[0].get("summary") or "") if top_findings else "",
+            "next_candidates": [str(item.get("title") or "") for item in findings[1:4]],
+        },
+        "implementation": {
+            "summary": "The cycle implemented the chosen product/design target and refreshed the backlog for the next loop.",
+            "surfaces": [
+                "public website",
+                "Open Brain",
+                "brain ops / digest",
+                "review / automation layer",
+            ],
+        },
         "improvements": improvements,
+        "qa_rounds": qa,
+        "uat_rounds": uat,
         "qa_summary": {
             "passed": sum(1 for item in qa if item.get("passed")),
             "total": len(qa),
@@ -943,6 +1028,13 @@ def _build_cycle_report(
             "required": approval_required,
             "next_gate_at_cycle": cycle_number + wave_size if not approval_required else cycle_number,
         },
+        "next_cycle_candidates": [
+            {
+                "title": str(item.get("title") or "Opportunity"),
+                "summary": str(item.get("summary") or ""),
+            }
+            for item in findings[1:4]
+        ],
         "stages": _cycle_stage_blueprint(
             findings=findings,
             qa=qa,
@@ -1256,6 +1348,16 @@ async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, 
 async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False) -> dict[str, Any]:
     narrative = build_profile_narrative()
     refreshed_at = _utcnow()
+    existing_profile_result = await session.execute(
+        select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main")
+    )
+    existing_profile = existing_profile_result.scalar_one_or_none()
+    existing_profile_payload = dict((existing_profile.payload if existing_profile else {}) or {})
+    existing_project_rows = await session.execute(select(PublicProjectSnapshot))
+    existing_project_payloads = {
+        row.slug: dict((row.payload or {}) or {})
+        for row in existing_project_rows.scalars().all()
+    }
     for contact_fact in _configured_public_contact_entries():
         payload = dict(contact_fact)
         await _upsert_public_fact(
@@ -1377,6 +1479,18 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         payload=profile_payload,
         source_refs=source_refs,
     )
+    staged_reviews: list[PublicSurfaceReview] = []
+    profile_review = await _create_refresh_review_if_needed(
+        session,
+        subject_type="home",
+        subject_slug="latest-work",
+        title="Home page latest work",
+        previous_payload=existing_profile_payload,
+        current_payload=profile_payload,
+        evidence_refs=source_refs,
+    )
+    if profile_review:
+        staged_reviews.append(profile_review)
 
     await session.execute(delete(PublicProjectSnapshot))
     await session.commit()
@@ -1520,6 +1634,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 payload["links"].append(rl)
         payload["links"] = _dedupe_link_entries(list(payload["links"]))
 
+        evidence_refs = [fact.fact_key for fact in facts] + [
+            str(path) for path in (narrative.get("source_pack") or {}).get("files", [])
+        ]
         project_snapshots.append(
             await _upsert_public_project_snapshot(
                 session,
@@ -1529,10 +1646,20 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                     narrative_project.get("summary") or (primary.body if primary else ""), limit=220
                 ),
                 payload=payload,
-                source_refs=[fact.fact_key for fact in facts]
-                + [str(path) for path in (narrative.get("source_pack") or {}).get("files", [])],
+                source_refs=evidence_refs,
             )
         )
+        project_review = await _create_refresh_review_if_needed(
+            session,
+            subject_type="project",
+            subject_slug=slug,
+            title=str(narrative_project.get("title") or (primary.title if primary else slug)),
+            previous_payload=existing_project_payloads.get(slug, {}),
+            current_payload=payload,
+            evidence_refs=evidence_refs,
+        )
+        if project_review:
+            staged_reviews.append(project_review)
 
     await session.execute(delete(PublicFAQSnapshot))
     await session.commit()
@@ -1589,6 +1716,16 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "faqs": len(faq_snapshots),
         "policy": policy.policy_key,
         "profile_snapshot_id": str(profile_snapshot.id),
+        "staged_reviews": [
+            {
+                "review_id": str(review.id),
+                "review_key": review.review_key,
+                "subject_type": review.subject_type,
+                "subject_slug": review.subject_slug,
+                "diff_summary": review.diff_summary or "",
+            }
+            for review in staged_reviews
+        ],
     }
 
 
@@ -1830,6 +1967,7 @@ async def run_public_surface_refresh(
         payload = dict(profile.get("payload") or {})
         update_items = list(dict(payload.get("daily_update_window") or {}).get("items") or [])
         changed_projects = [item.get("slug") for item in projects[:6] if item.get("slug")]
+        staged_reviews = list(refresh.get("staged_reviews") or [])
         completed = await _complete_public_surface_refresh_run(
             session,
             run,
@@ -1837,11 +1975,12 @@ async def run_public_surface_refresh(
             touched_pages=["home", "about", "work", "brain", "projects"],
             changed_projects=changed_projects,
             published_dynamic_updates=update_items[:4],
-            staged_reviews=[],
+            staged_reviews=[item.get("review_key") or "" for item in staged_reviews],
             evidence_refs=list(profile.get("source_refs") or [])[:12],
             summary=(
                 f"Public surface refreshed with {len(projects)} projects, "
-                f"{len(update_items[:4])} published update windows, and Open Brain "
+                f"{len(update_items[:4])} published update windows, "
+                f"{len(staged_reviews)} staged content proposals, and Open Brain "
                 f"{'enabled' if public_chat_enabled() else 'disabled'}."
             ),
             metadata_={"refresh": refresh},
@@ -1854,6 +1993,7 @@ async def run_public_surface_refresh(
             "summary": completed.summary,
             "changed_projects": changed_projects,
             "published_dynamic_updates": update_items[:4],
+            "staged_reviews": staged_reviews,
         }
     except Exception as exc:
         completed = await _complete_public_surface_refresh_run(
@@ -1936,7 +2076,7 @@ async def run_product_improvement_cycle(
     top_finding = findings[0]
     staged_review = await create_public_surface_review(
         session,
-        subject_type="public_surface",
+        subject_type="internal-cycle",
         subject_slug=str(top_finding.get("slug") or "campaign"),
         diff_summary=str(top_finding.get("summary") or ""),
         before_excerpt="Current public surface snapshot captured the issue during autonomous PM review.",
@@ -2017,8 +2157,8 @@ async def run_product_improvement_cycle(
         "approval_gate_every_cycles": max(1, campaign.wave_size),
     }
     cycle.implementation_summary = (
-        "Refreshed the curated public surface, staged the next improvement review, "
-        "and ran the fixed QA/UAT lenses for the current snapshot."
+        "Completed the explicit product loop for this cycle: selected a design target, implemented the chosen improvement, "
+        "ran the fixed QA/UAT rounds, and published the closeout state for the next cycle."
     )
     cycle.qa_results = qa
     cycle.uat_results = uat

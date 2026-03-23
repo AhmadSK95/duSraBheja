@@ -4,8 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
-from src.services import digest as digest_service
 from src.bot.cogs.inbox import build_board_embed, build_digest_embeds
+from src.services import digest as digest_service
 
 
 @dataclass
@@ -68,12 +68,20 @@ def test_build_daily_digest_payload_uses_latest_daily_board(monkeypatch) -> None
         assert category == "task"
         return [FakeNote("t1", "Clean up Discord bot outputs")]
 
+    async def fake_list_public_surface_reviews(session, status=None, limit=20):
+        return []
+
+    async def fake_list_improvement_opportunities(session, limit=20):
+        return []
+
     monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
     monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
     monkeypatch.setattr(digest_service.store, "get_note", fake_get_note)
     monkeypatch.setattr(digest_service.store, "list_reminders", fake_list_reminders)
     monkeypatch.setattr(digest_service.store, "list_notes", fake_list_notes)
     monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
+    monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
 
     payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
 
@@ -82,6 +90,7 @@ def test_build_daily_digest_payload_uses_latest_daily_board(monkeypatch) -> None
     assert payload["project_status"][0]["project"] == "duSraBheja"
     assert payload["possible_tasks"][0]["title"] == "Deploy the board-first changes"
     assert payload["possible_tasks"][1]["title"] == "Verify the moderation dashboard"
+    assert payload["priority_moves"][0]["lane"] == "project"
     assert payload["reminders_due_today"][0]["title"] == "Call Annie"
 
 
@@ -109,12 +118,20 @@ def test_build_daily_digest_payload_generates_missing_board(monkeypatch) -> None
     async def fake_list_notes(session, category=None, limit=12, status="active"):
         return []
 
+    async def fake_list_public_surface_reviews(session, status=None, limit=20):
+        return []
+
+    async def fake_list_improvement_opportunities(session, limit=20):
+        return []
+
     monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
     monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
     monkeypatch.setattr(digest_service.store, "list_reminders", fake_list_reminders)
     monkeypatch.setattr(digest_service.store, "list_notes", fake_list_notes)
     monkeypatch.setattr(digest_service, "generate_or_refresh_board", fake_generate_or_refresh_board)
     monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
+    monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
+    monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
 
     payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
 
@@ -151,10 +168,13 @@ def test_digest_and_board_embeds_fit_discord_field_limits() -> None:
                 for idx in range(5)
             ],
             "possible_tasks": [{"title": "t" * 250, "why": "u" * 250} for _ in range(8)],
+            "priority_moves": [{"title": "p" * 250, "why": "q" * 250, "lane": "project"} for _ in range(6)],
+            "review_queue": [{"subject_type": "project", "subject": "dusrabheja", "summary": "r" * 250} for _ in range(5)],
+            "improvement_watchlist": [{"title": "watch" * 40, "severity": "high", "summary": "s" * 250} for _ in range(4)],
             "reminders_due_today": [{"title": "r" * 250, "next_fire_at": "today"} for _ in range(8)],
         }
     )
 
     for embed in [board_embed, *digest_embeds]:
-        for field in embed.fields:
-            assert len(field.value) <= 1024
+        for embed_field in embed.fields:
+            assert len(embed_field.value) <= 1024

@@ -172,6 +172,9 @@ def test_public_overhaul_pages_render(client: TestClient, path: str, heading: st
 
     assert response.status_code == 200
     assert heading in response.text
+    if path == "/brain":
+        assert "What this surface is actually good at." in response.text
+        assert "What the brain keeps warm" in response.text
 
 
 @pytest.mark.parametrize(
@@ -194,6 +197,8 @@ def test_flagship_case_study_routes_render(client: TestClient, slug: str) -> Non
         assert "Constraints" in response.text
         assert "Outcomes" in response.text
         assert "Architecture narrative" in response.text
+        assert "Architecture diagram" in response.text
+        assert "System flow" in response.text
         assert "Evidence Appendix" in response.text
 
 
@@ -203,6 +208,8 @@ def test_case_study_routes_do_not_render_raw_dump_markdown(client: TestClient) -
     assert response.status_code == 200
     assert "Resume (3 bullets)" not in response.text
     assert "LinkedIn (longer form)" not in response.text
+    assert "cap_discord" not in response.text
+    assert "proc_queue" not in response.text
     assert "All approved photos" not in client.get("/about").text
 
 

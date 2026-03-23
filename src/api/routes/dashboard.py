@@ -1185,7 +1185,7 @@ async def dashboard_public_surface(token: str = Query(default="")) -> HTMLRespon
     ) or "<tr><td colspan='3'>No stage data yet.</td></tr>"
     body = f"""
     <h1>Public Surface Ops</h1>
-    <p>Morning refreshes, staged review cards, and the autonomous campaign all land here before or alongside Discord visibility. The campaign now pauses every 5 cycles for approval before the next wave can start.</p>
+    <p>Morning refreshes, staged content proposals, and the autonomous campaign all land here. Discord review visibility is reserved for real public-content proposals, while the 5-cycle wave approval gate stays inline with the main product loop.</p>
     <div class="atlas-panel-grid">
       <section class="atlas-panel-card">
         <h2>Latest Refresh</h2>

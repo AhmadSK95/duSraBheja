@@ -207,3 +207,23 @@ async def test_answer_public_question_allows_no_captcha_mode(monkeypatch) -> Non
     )
 
     assert response["ok"] is True
+
+
+def test_cycle_report_uses_explicit_product_loop_stages() -> None:
+    report = public_surface._build_cycle_report(
+        cycle_number=6,
+        wave_size=5,
+        findings=[
+            {"title": "About revamp", "summary": "About still needs a stronger editorial layout."},
+            {"title": "Open Brain polish", "summary": "Open Brain still has layout opportunities."},
+        ],
+        qa=[{"name": f"qa-{idx}", "passed": True} for idx in range(10)],
+        uat=[{"name": f"uat-{idx}", "passed": True} for idx in range(3)],
+        staged_review=None,
+        approval_required=False,
+    )
+
+    assert report["stages"][0]["stage"] == "product_design"
+    assert report["stages"][3]["stage"] == "qa_rounds"
+    assert report["stages"][4]["stage"] == "uat_rounds"
+    assert report["design_brief"]["primary_problem"] == "About revamp"

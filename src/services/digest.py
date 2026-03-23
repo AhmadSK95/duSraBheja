@@ -10,6 +10,7 @@ from src.lib import store
 from src.lib.time import human_datetime_text
 from src.services.boards import daily_board_window, generate_or_refresh_board
 from src.services.project_state import recompute_project_states
+from src.services.public_surface import list_improvement_opportunities, list_public_surface_reviews
 
 
 def _shorten(value: str | None, limit: int = 220) -> str:
@@ -38,7 +39,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
     board = await store.get_latest_board(session, board_type="daily", generated_for_date=board_date)
     if not board:
         window = daily_board_window(board_date)
-        payload = await generate_or_refresh_board(session, window=window)
+        await generate_or_refresh_board(session, window=window)
         board = await store.get_latest_board(session, board_type="daily", generated_for_date=board_date)
     board_payload = dict((board.payload if board else {}) or {})
 
@@ -99,6 +100,58 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         if reminder.next_fire_at and reminder.next_fire_at.astimezone(reminder_zone).date() == digest_date
     ][:10]
 
+    priority_moves: list[dict] = []
+    seen_moves: set[str] = set()
+    for item in project_status:
+        title = f"{item['project']}: {item['best_next_move']}"
+        if title in seen_moves:
+            continue
+        seen_moves.add(title)
+        priority_moves.append(
+            {
+                "title": title,
+                "why": item["blocked_or_unclear"],
+                "lane": "project",
+            }
+        )
+        if len(priority_moves) >= 4:
+            break
+    for item in possible_tasks:
+        title = item.get("title") or ""
+        if not title or title in seen_moves:
+            continue
+        seen_moves.add(title)
+        priority_moves.append(
+            {
+                "title": title,
+                "why": item.get("why") or "Important carry-forward from the current board.",
+                "lane": "board",
+            }
+        )
+        if len(priority_moves) >= 6:
+            break
+
+    public_reviews = await list_public_surface_reviews(session, status="staged", limit=12)
+    review_queue = [
+        {
+            "subject": review.subject_slug,
+            "subject_type": review.subject_type,
+            "summary": _shorten(review.diff_summary, 180),
+        }
+        for review in public_reviews
+        if review.subject_type not in {"campaign-wave", "internal-cycle"}
+    ][:5]
+
+    watchlist = [
+        {
+            "title": item.title,
+            "summary": _shorten(item.summary, 180),
+            "severity": item.severity,
+        }
+        for item in await list_improvement_opportunities(session, limit=6)
+        if item.status == "open"
+    ][:4]
+
     summary = board_payload.get("story") or "Morning operating brief grounded in the latest daily board."
     return {
         "digest_date": digest_date.isoformat(),
@@ -107,6 +160,9 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         "summary": _shorten(summary, 1200),
         "project_status": project_status,
         "possible_tasks": possible_tasks[:8],
+        "priority_moves": priority_moves,
+        "review_queue": review_queue,
+        "improvement_watchlist": watchlist,
         "reminders_due_today": reminders_due_today,
         "trigger": trigger,
     }

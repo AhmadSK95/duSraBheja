@@ -369,6 +369,12 @@ def _render_architecture_diagram(spec: dict | None) -> str:
     lanes = list(diagram.get("lanes") or [])
     if not lanes:
         return ""
+    node_lookup: dict[str, str] = {}
+    for lane in lanes:
+        for node in list(lane.get("nodes") or []):
+            node_id = str(node.get("id") or "").strip()
+            if node_id:
+                node_lookup[node_id] = str(node.get("label") or node_id)
     lane_html = "".join(
         f'<section class="architecture-lane">'
         f'<div class="architecture-lane__label">{_s(lane.get("label") or "")}</div>'
@@ -378,9 +384,9 @@ def _render_architecture_diagram(spec: dict | None) -> str:
         for lane in lanes
     )
     edge_html = "".join(
-        f'<div class="architecture-edge"><span>{_s(edge.get("from") or "")}</span>'
-        f'<span>{_s(edge.get("label") or "")}</span>'
-        f'<span>{_s(edge.get("to") or "")}</span></div>'
+        f'<div class="architecture-flow-step"><strong>{_s(node_lookup.get(str(edge.get("from") or ""), str(edge.get("from") or "")))}</strong>'
+        f'<span>{_s(edge.get("label") or "flows into")}</span>'
+        f'<strong>{_s(node_lookup.get(str(edge.get("to") or ""), str(edge.get("to") or "")))}</strong></div>'
         for edge in list(diagram.get("edges") or [])[:8]
     )
     callouts = "".join(
@@ -391,8 +397,8 @@ def _render_architecture_diagram(spec: dict | None) -> str:
         f'<section class="architecture-diagram">'
         f'<div class="architecture-diagram__header"><h3>{_s(diagram.get("title") or "Architecture")}</h3>'
         f'<p>{_s(diagram.get("caption") or "")}</p></div>'
+        f'{"<div class=\"architecture-diagram__flow\"><div class=\"architecture-lane__label\">System flow</div><div class=\"architecture-flow\">" + edge_html + "</div></div>" if edge_html else ""}'
         f'<div class="architecture-diagram__lanes">{lane_html}</div>'
-        f'<div class="architecture-diagram__edges">{edge_html}</div>'
         f'<div class="architecture-diagram__callouts">{callouts}</div>'
         f"</section>"
     )
@@ -471,6 +477,38 @@ def _photo_tile(photo: dict | None, *, cls: str = "") -> str:
         f'<img src="{url}" alt="{_s(photo.get("title", ""))}" loading="lazy" />'
         f"</div>"
     )
+
+
+def _photo_story_card(
+    photo: dict | None,
+    *,
+    eyebrow: str = "",
+    title: str = "",
+    caption: str = "",
+    cls: str = "",
+) -> str:
+    if not photo:
+        return ""
+    url = _photo_url(photo)
+    if not url:
+        return ""
+    extra_cls = f" {cls}" if cls else ""
+    eyebrow_html = f'<div class="public-kicker">{_s(eyebrow)}</div>' if eyebrow else ""
+    title_html = f"<h3>{_s(title)}</h3>" if title else ""
+    caption_html = f"<p>{_s(caption)}</p>" if caption else ""
+    return (
+        f'<article class="photo-story-card{extra_cls}">'
+        f'<div class="photo-story-card__image">'
+        f'<img src="{url}" alt="{_s(photo.get("title", ""))}" loading="lazy" />'
+        f"</div>"
+        f'<div class="photo-story-card__body">{eyebrow_html}{title_html}{caption_html}</div>'
+        f"</article>"
+    )
+
+
+def _section_chip_row(items: list[str], *, cls: str = "section-chip-row") -> str:
+    chips = "".join(f'<span class="section-chip">{_s(item)}</span>' for item in items if item)
+    return f'<div class="{cls}">{chips}</div>' if chips else ""
 
 
 def _project_card_html(project: dict, *, featured: bool = False) -> str:
@@ -1082,6 +1120,7 @@ async def public_about() -> HTMLResponse:
     skills = list(p.get("skills") or [])
     personal_signals = dict(p.get("personal_signals") or {})
     resume_sections = list(p.get("resume_sections") or [])
+    focus_points = list(current_arc.get("focus") or [])
     used_about_photo_refs: set[str] = set()
 
     def take_about_photo(key: str) -> dict | None:
@@ -1099,16 +1138,25 @@ async def public_about() -> HTMLResponse:
         used_about_photo_refs.add(ref)
         return photo
 
+    hero_bullets = [
+        "IIT Kharagpur to New York, with Amazon-scale systems and enterprise backend work in between.",
+        "The current phase is less about titles and more about ownership, product taste, and building tools that feel worth carrying.",
+        "The person in the system matters too: Annie, Oscar, Jersey City, anime, music, and a bias toward things that feel alive.",
+    ]
+    hero_photo = take_about_photo("personality") or take_about_photo("hero") or take_about_photo("work")
     hero_html = f"""
     <section class="about-hero">
       <div class="container">
         <div class="about-hero__text">
           <div class="public-kicker">About</div>
           <h1 class="display-heading display-heading--hero">The resume, with the actual person still intact.</h1>
-          <p>I moved from IIT Kharagpur to New York, spent years in enterprise and Amazon-scale systems, then stepped into a builder phase where I care more about ownership, product conviction, and work that feels worth carrying.</p>
+          <p>I moved from IIT Kharagpur to New York, spent years in enterprise and Amazon-scale systems, and then stepped into a builder phase where product conviction and ownership matter more than looking conventionally impressive.</p>
+          <ul class="about-hero__lede-list">
+            {"".join(f"<li>{_s(item)}</li>" for item in hero_bullets)}
+          </ul>
         </div>
         <div class="about-hero__photo about-hero__photo--compact">
-          {_photo_img(take_about_photo("indian_wedding"), loading="eager", alt=f"{name} in wedding attire")}
+          {_photo_img(hero_photo, loading="eager", alt=f"{name} with Oscar")}
         </div>
       </div>
     </section>
@@ -1134,14 +1182,25 @@ async def public_about() -> HTMLResponse:
     """
 
     resume_cards = "".join(
-        f'<div class="resume-section-card"><h3>{_s(section.get("title", ""))}</h3>'
+        f'<div class="resume-section-card">'
+        f'<div class="public-kicker">{_s(section.get("title", ""))}</div>'
         f'<p>{_s(section.get("summary", ""))}</p></div>'
         for section in resume_sections[:4]
     )
     resume_overview_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Resume structure</div>
-      <div class="resume-section-grid">{resume_cards}</div>
+      <div class="about-frame">
+        <div>
+          <div class="public-kicker">Resume structure</div>
+          <h2 class="display-heading display-heading--section">The formal story and the current one are finally aligned.</h2>
+          <div class="resume-section-grid resume-section-grid--compact">{resume_cards}</div>
+        </div>
+        <aside class="about-side-note">
+          <div class="public-kicker">Current focus</div>
+          <h3>What the brain keeps warm right now.</h3>
+          {_bullet_list(focus_points[:3])}
+        </aside>
+      </div>
     </section>
     """
 
@@ -1163,17 +1222,12 @@ async def public_about() -> HTMLResponse:
         )
     experience_html = f"""
     <section class="section container reveal">
-      <div class="about-split">
-        <div>
-          <div class="public-kicker">Experience</div>
-          <h2 class="display-heading display-heading--section">The work history, chronologically.</h2>
-          <div class="experience-stack">{experience_rows}</div>
-        </div>
-        <div class="about-side-photos">
-          {_photo_tile(take_about_photo("work"), cls="editorial-photo--medium")}
-          {_photo_tile(take_about_photo("home"), cls="editorial-photo--small")}
-        </div>
+      <div class="public-kicker">Experience</div>
+      <div class="about-section-heading">
+        <h2 class="display-heading display-heading--section">The work history, chronologically.</h2>
+        <p>Amazon-scale systems, enterprise backend foundations, and then a builder phase where product taste started to matter as much as technical depth.</p>
       </div>
+      <div class="experience-stack">{experience_rows}</div>
     </section>
     """
 
@@ -1185,15 +1239,16 @@ async def public_about() -> HTMLResponse:
     )
     education_section = f"""
     <section class="section container reveal">
-      <div class="about-split">
+      <div class="about-two-column">
         <div>
           <div class="public-kicker">Education</div>
           <h2 class="display-heading display-heading--section">IIT Kharagpur and NYU Tandon are both in the wiring.</h2>
           <div class="education-grid">{education_html}</div>
         </div>
-        <div class="about-side-photos">
-          {_photo_tile(take_about_photo("ghibli_picnic"), cls="editorial-photo--medium")}
-          {_photo_tile(take_about_photo("pokemon"), cls="editorial-photo--small")}
+        <div class="about-side-note">
+          <div class="public-kicker">Working mode</div>
+          <h3>The way I work now.</h3>
+          <p>I like end-to-end ownership, products with a real point of view, and systems where the operational details are part of the product rather than hidden behind it.</p>
         </div>
       </div>
     </section>
@@ -1206,9 +1261,18 @@ async def public_about() -> HTMLResponse:
     )
     skills_section = f"""
     <section class="section container reveal">
-      <div class="public-kicker">Skills</div>
-      <h2 class="display-heading display-heading--section">The stack is wide because the work has been end to end.</h2>
-      <div class="skills-grid">{skill_cards}</div>
+      <div class="about-two-column">
+        <div>
+          <div class="public-kicker">Skills</div>
+          <h2 class="display-heading display-heading--section">The stack is wide because the work has been end to end.</h2>
+          <div class="skills-grid">{skill_cards}</div>
+        </div>
+        <div class="about-side-note about-side-note--soft">
+          <div class="public-kicker">Builder bias</div>
+          <h3>The throughline is not “full stack.”</h3>
+          <p>It is owning enough of the product to make better decisions: backend systems, AI orchestration, interface quality, deployment, and the narrative layer people actually experience.</p>
+        </div>
+      </div>
     </section>
     """
 
@@ -1222,42 +1286,46 @@ async def public_about() -> HTMLResponse:
         ]
         if value
     )
-    life_photo_keys = [
-        "wedding",
-        "couple",
-        "cycling",
-        "photo_break",
-        "oscar_looking",
-        "oscar_home",
-        "skyline_2",
-        "baking",
-        "friends_brooklyn",
-        "ghibli_cat",
-        "ghibli_picnic",
-        "pokemon",
-        "oscar_selfie",
-        "oscar_couch",
-        "oscar_sploot",
-        "oscar_office",
-        "oscar_chair",
-        "oscar_stairs",
-        "oscar_window",
+    story_cards = [
+        _photo_story_card(
+            take_about_photo("work"),
+            eyebrow="Builder in New York",
+            title="The city and the work started collapsing into each other.",
+            caption="The builder phase is as much about operating in public and shipping with conviction as it is about the code itself.",
+            cls="photo-story-card--portrait",
+        ),
+        _photo_story_card(
+            take_about_photo("indian_wedding"),
+            eyebrow="Family",
+            title="Life is not separate from the work anymore.",
+            caption="Annie, family, and the move into marriage changed the way ambition feels. It is less abstract now.",
+        ),
+        _photo_story_card(
+            take_about_photo("photo_break"),
+            eyebrow="Jersey City",
+            title="The skyline, the ferry, the in-between hours.",
+            caption="A lot of the product thinking happens while walking near the water or decompressing after a long build day.",
+        ),
+        _photo_story_card(
+            take_about_photo("friends_brooklyn"),
+            eyebrow="People",
+            title="The life around the work matters.",
+            caption="Brooklyn evenings, shared projects, and people who make New York feel a little less transactional.",
+        ),
+        _photo_story_card(
+            take_about_photo("oscar_home"),
+            eyebrow="Home",
+            title="Oscar still appears in most systems eventually.",
+            caption="Which is probably correct. The home context is part of what keeps the ambition human.",
+            cls="photo-story-card--portrait",
+        ),
     ]
-    life_gallery = "".join(
-        _photo_tile(take_about_photo(key), cls="editorial-photo--small")
-        for key in life_photo_keys[:8]
-    )
-    cat_gallery = "".join(
-        _photo_tile(take_about_photo(key), cls="editorial-photo--small")
-        for key in life_photo_keys[8:]
-    )
     life_section = f"""
     <section class="section container reveal">
       <div class="public-kicker public-kicker--gold">Life</div>
       <h2 class="display-heading display-heading--section">Jersey City, Annie, Oscar, Iris, anime, comedy, music.</h2>
       <div class="life-details">{life_cards}</div>
-      <div class="editorial-gallery editorial-gallery--editorial">{life_gallery}</div>
-      <div class="editorial-gallery editorial-gallery--cats">{cat_gallery}</div>
+      <div class="about-photo-story">{"".join(card for card in story_cards if card)}</div>
     </section>
     """
 
@@ -1412,6 +1480,9 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     update_window = dict(proj_p.get("daily_update_window") or {})
     supporting_evidence = list(proj_p.get("supporting_evidence") or case_study.get("supporting_evidence") or [])
     appendix = dict(case_study.get("appendix") or {})
+    case_study_sections = list(
+        proj_p.get("case_study_sections") or case_study.get("case_study_sections") or []
+    )
     link_html = "".join(
         f'<a class="inline-link" href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">{_s(item.get("label") or "Open")}</a>'
         for item in list(proj_p.get("links") or [])
@@ -1426,8 +1497,13 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
           <span class="status-badge">{_s(proj_p.get("status") or "Active")}</span>
           <p class="mt-2">{_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
           <div class="freshness-pill mt-2">Last curated refresh: {_s(freshness.get("last_refreshed_at") or project.get("refreshed_at") or "Now")}</div>
+          <div class="mt-2">{_section_chip_row(case_study_sections, cls="section-chip-row section-chip-row--wrap")}</div>
         </div>
         <aside class="detail-sidebar">
+          <div class="detail-sidebar__block">
+            <h4>Role</h4>
+            <p>{_s(proj_p.get("role_scope") or "I owned the core technical and product decisions across this project.")}</p>
+          </div>
           <div class="detail-sidebar__block">
             <h4>Stack</h4>
             {_pills(list(proj_p.get("stack") or [])[:10])}
@@ -1443,19 +1519,25 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
 
     framing_html = f"""
     <section class="section container reveal">
-      {_kicker("Project Framing")}
-      <div class="case-study-grid case-study-grid--framing case-study-grid--triple">
-        <div class="case-study-panel">
+      {_kicker("Case Study Map")}
+      <div class="case-study-intro">
+        <div class="case-study-panel case-study-panel--full">
           <h3>Project framing</h3>
           <p>{_s(case_study.get("project_framing") or project.get("summary") or "")}</p>
         </div>
-        <div class="case-study-panel">
-          <h3>Problem / Context</h3>
-          <p>{_s(case_study.get("problem") or project.get("summary") or "")}</p>
-        </div>
-        <div class="case-study-panel">
-          <h3>Role and Ownership</h3>
-          <p>{_s(proj_p.get("role_scope") or "I owned the core technical and product decisions across this project.")}</p>
+        <div class="case-study-grid case-study-grid--triple">
+          <div class="case-study-panel">
+            <h3>Problem / Context</h3>
+            <p>{_s(case_study.get("problem") or project.get("summary") or "")}</p>
+          </div>
+          <div class="case-study-panel">
+            <h3>Role and Ownership</h3>
+            <p>{_s(proj_p.get("role_scope") or "I owned the core technical and product decisions across this project.")}</p>
+          </div>
+          <div class="case-study-panel">
+            <h3>Why now</h3>
+            <p>{_s(case_study.get("why_now") or "")}</p>
+          </div>
         </div>
       </div>
     </section>
@@ -1463,13 +1545,22 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
 
     constraints = list(proj_p.get("constraints") or case_study.get("constraints") or [])
     outcomes = list(case_study.get("outcomes") or proj_p.get("outcomes") or [])
-    why_now = case_study.get("why_now") or ""
     summary_grid = f"""
     <section class="section container reveal">
-      <div class="case-study-grid">
-        <div class="case-study-panel"><h3>Why now</h3><p>{_s(why_now)}</p></div>
-        <div class="case-study-panel"><h3>Constraints</h3>{_bullet_list(constraints)}</div>
-        <div class="case-study-panel"><h3>Outcomes</h3>{_bullet_list(outcomes)}</div>
+      {_kicker("Topline")}
+      <div class="case-study-grid case-study-grid--triple">
+        <div class="case-study-panel">
+          <h3>Constraints</h3>
+          {_bullet_list(constraints)}
+        </div>
+        <div class="case-study-panel">
+          <h3>Outcomes</h3>
+          {_bullet_list(outcomes)}
+        </div>
+        <div class="case-study-panel">
+          <h3>What changed because of the project</h3>
+          <p>{_s((outcomes[0] if outcomes else project.get("summary")) or "")}</p>
+        </div>
       </div>
     </section>
     """
@@ -1480,6 +1571,10 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
       <div class="case-study-panel case-study-panel--full">
         <h3>Architecture narrative</h3>
         <p>{_s(case_study.get("architecture_narrative") or "")}</p>
+      </div>
+      <div class="case-study-panel case-study-panel--full">
+        <h3>Architecture diagram</h3>
+        <p>The diagram below is the system view, not the file tree. It shows the operational lanes, core components, and how information moves through the product.</p>
       </div>
       {_render_architecture_diagram(case_study.get("architecture_diagram"))}
     </section>
@@ -1493,23 +1588,23 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     """
 
     phase_cards = "".join(
-        f'<div class="case-study-panel"><div class="public-kicker">{_s(item.get("title", ""))}</div>'
-        f'<p>{_s(item.get("summary", ""))}</p></div>'
+        f'<article class="case-study-journey__item"><div class="public-kicker">{_s(item.get("title", ""))}</div>'
+        f'<p>{_s(item.get("summary", ""))}</p></article>'
         for item in list(case_study.get("iterations") or [])[:4]
     )
     phases_html = (
-        f'<section class="section container reveal">{_kicker("Build Journey")}<div class="case-study-grid">{phase_cards}</div></section>'
+        f'<section class="section container reveal">{_kicker("Build Journey")}<div class="case-study-journey">{phase_cards}</div></section>'
         if phase_cards
         else ""
     )
 
     challenge_cards = "".join(
-        f'<div class="case-study-panel"><h3>{_s(item.get("problem") or "")}</h3>'
-        f'<p>{_s(item.get("resolution") or item.get("solution") or "")}</p></div>'
+        f'<article class="cs-challenge"><h4>{_s(item.get("problem") or "")}</h4>'
+        f'<div class="cs-challenge__resolution">{_s(item.get("resolution") or item.get("solution") or "")}</div></article>'
         for item in list(case_study.get("struggles") or [])[:6]
     )
     challenges_html = (
-        f'<section class="section container reveal">{_kicker("Struggles")}<div class="case-study-grid">{challenge_cards}</div></section>'
+        f'<section class="section container reveal">{_kicker("Struggles")}<div class="cs-challenges">{challenge_cards}</div></section>'
         if challenge_cards
         else ""
     )
@@ -1585,7 +1680,14 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             page_title=_s(project["title"]),
             content_html=content,
             active_nav="projects",
-            page_data={"page": "project-detail", "project": project},
+            page_data={
+                "page": "project-detail",
+                "project": {
+                    "slug": project.get("slug"),
+                    "title": project.get("title"),
+                    "status": proj_p.get("status") or "Active",
+                },
+            },
             body_class="public-page-project-detail",
             og_description=_s(proj_p.get("tagline") or project.get("summary") or ""),
         )
@@ -1659,6 +1761,9 @@ async def public_open_brain() -> HTMLResponse:
 def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
     thought_garden = list(p.get("thought_garden") or [])
     open_brain_topics = list(p.get("open_brain_topics") or [])
+    current_arc = dict(p.get("current_arc") or {})
+    capabilities = list(p.get("capabilities") or [])
+    latest_updates = dict(p.get("daily_update_window") or {})
     captcha_enabled = public_chat_captcha_enabled()
     chat_live = public_chat_enabled()
 
@@ -1676,29 +1781,62 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
     )
 
     turnstile_widget = '<div id="turnstile-widget"></div>' if captcha_enabled else ""
+    focus_cards = "".join(
+        f'<div class="brain-status-card"><div class="brain-status-card__label">Focus {index + 1:02d}</div><p>{_s(item)}</p></div>'
+        for index, item in enumerate(list(current_arc.get("focus") or [])[:3])
+    )
+    capability_cards = "".join(
+        f'<article class="brain-capability-card"><div class="public-kicker">{_s(item.get("title") or "")}</div>'
+        f'<p>{_s(item.get("summary") or "")}</p></article>'
+        for item in capabilities[:3]
+    )
+    topic_cards = "".join(
+        f'<div class="brain-topic-card"><h3>{_s(item.get("title", ""))}</h3><p>{_s(item.get("summary", ""))}</p></div>'
+        for item in open_brain_topics[:4]
+    )
+    signal_cards = "".join(
+        f'<div class="brain-signal-card"><div class="public-kicker">Signal</div><h3>{_s(item.get("title") or "")}</h3>'
+        f'<p>{_s(item.get("summary") or "")}</p></div>'
+        for item in thought_garden[:3]
+    )
 
     hero_html = f"""
     <section class="section container reveal">
-      <div class="open-brain-hero open-brain-hero--page">
-        <div>
+      <div class="open-brain-stage">
+        <div class="open-brain-stage__intro">
           <div class="public-kicker">Open Brain</div>
           <h1 class="display-heading display-heading--hero">Ask the public-safe version of my brain.</h1>
           <p>It knows the approved version of my work, experience, projects, interests, and what I am trying to build. It does not have access to private memory, secrets, or unrelated assistant capabilities.</p>
           <div class="freshness-pill mt-2">{_s("Captcha enabled" if captcha_enabled else "No-captcha mode")} · {_s("Chat live" if chat_live else "Chat offline")}</div>
+          <div class="open-brain-stage__chips">
+            {_section_chip_row(["Approved facts only", "Multi-turn memory", "Public-safe clone", "Evidence-led answers"], cls="section-chip-row section-chip-row--wrap")}
+          </div>
         </div>
-        <div class="brain-topic-grid">
-          {"".join(
-              f'<div class="brain-topic-card"><h3>{_s(item.get("title", ""))}</h3><p>{_s(item.get("summary", ""))}</p></div>'
-              for item in open_brain_topics[:4]
-          )}
+        <div class="brain-status-grid">
+          <div class="brain-status-card brain-status-card--accent">
+            <div class="brain-status-card__label">State</div>
+            <p>{_s("Public chat is live and grounded in curated snapshots." if chat_live else "Public chat is currently offline.")}</p>
+          </div>
+          <div class="brain-status-card">
+            <div class="brain-status-card__label">Safety wall</div>
+            <p>The public clone can talk about work, projects, interests, and collaboration fit, but not private memory or unrelated assistant tasks.</p>
+          </div>
+          {focus_cards}
         </div>
       </div>
     </section>
     """
 
-    scope_html = """
+    scope_html = f"""
     <section class="section container reveal">
-      <div class="case-study-grid">
+      <div class="public-kicker">Scope</div>
+      <h2 class="display-heading display-heading--section">What this surface is actually good at.</h2>
+      <div class="brain-topic-grid brain-topic-grid--wide">
+        {topic_cards}
+      </div>
+    </section>
+    <section class="section container reveal">
+      <div class="case-study-grid case-study-grid--triple">
         <div class="case-study-panel">
           <h3>What it knows</h3>
           <ul class="public-bullet-list">
@@ -1715,63 +1853,70 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
             <li>Pretend certainty when the approved public evidence is thin.</li>
           </ul>
         </div>
+        <div class="case-study-panel">
+          <h3>What the brain keeps warm</h3>
+          {_bullet_list(list(current_arc.get("focus") or [])[:3])}
+        </div>
       </div>
     </section>
     """
 
     chat_html = f"""
-    <section class="section container">
-      <div class="public-kicker">Chat</div>
-      <h2 class="display-heading display-heading--section">Prompt it like a person, not like a search box.</h2>
-      <div class="chat-shell mt-2">
-        <div class="chat-shell__header">
-          <span class="chat-shell__dot"></span>
-          <span class="chat-shell__title">open-brain &mdash; {_s(name)}</span>
-          <button class="chat-shell__new-btn" data-new-conversation>New conversation</button>
-        </div>
-        <div class="chat-log" data-public-chat-log>
-          <div class="chat-message">
-            <strong>Ahmad's Clone</strong>
-            <div>Ask about my work, projects, strengths,
-              interests, or collaboration fit.
-              I'm not a general-purpose assistant
-              &mdash; I'm a conversational version of Ahmad,
-              built from real evidence.</div>
+    <section class="section container reveal">
+      <div class="brain-chat-layout">
+        <aside class="brain-chat-sidebar">
+          <div class="public-kicker">Prompting style</div>
+          <h2 class="display-heading display-heading--section">Prompt it like a person, not like a search box.</h2>
+          <p class="brain-chat-sidebar__copy">The best questions are specific, personal, and tied to the real public record: projects, strengths, tradeoffs, why I built something, or whether I fit a certain kind of role.</p>
+          <div class="starter-prompts starter-prompts--stack">{starter_chips}</div>
+          {_render_update_window(latest_updates, compact=True)}
+        </aside>
+        <div>
+          <div class="public-kicker">Chat</div>
+          <div class="chat-shell mt-2">
+            <div class="chat-shell__header">
+              <span class="chat-shell__dot"></span>
+              <span class="chat-shell__title">open-brain &mdash; {_s(name)}</span>
+              <button class="chat-shell__new-btn" data-new-conversation>New conversation</button>
+            </div>
+            <div class="chat-log" data-public-chat-log>
+              <div class="chat-message">
+                <strong>Ahmad's Clone</strong>
+                <div>Ask about my work, projects, strengths,
+                  interests, or collaboration fit.
+                  I'm not a general-purpose assistant
+                  &mdash; I'm a conversational version of Ahmad,
+                  built from real evidence.</div>
+              </div>
+            </div>
+            <form class="chat-form" data-public-chat-form>
+              <textarea name="question"
+                placeholder="Ask me about the work, why I built something, or what kind of role fits me best."></textarea>
+              <input type="hidden" name="turnstile_token" value="" />
+              {turnstile_widget}
+              <button class="cta" type="submit"
+                {"disabled" if not chat_live else ""}
+              >Ask the clone</button>
+              <div class="chat-footnote"
+                data-public-chat-status>
+                {_s("Multi-turn conversation. Ask follow-ups." if chat_live else "The public clone is temporarily offline.")}
+              </div>
+            </form>
           </div>
         </div>
-        <div class="starter-prompts">{starter_chips}</div>
-        <form class="chat-form" data-public-chat-form>
-          <textarea name="question"
-            placeholder="Ask me anything..."></textarea>
-          <input type="hidden" name="turnstile_token" value="" />
-          {turnstile_widget}
-          <button class="cta" type="submit"
-            {"disabled" if not chat_live else ""}
-          >Ask the clone</button>
-          <div class="chat-footnote"
-            data-public-chat-status>
-            {_s("Multi-turn conversation. Ask follow-ups." if chat_live else "The public clone is temporarily offline.")}
-          </div>
-        </form>
       </div>
     </section>
     """
-    how_html = """
+
+    how_html = f"""
     <section class="section container reveal">
-      <div class="public-kicker">How it works</div>
-      <div class="how-cards">
-        <div class="how-card">
-          <h4>Approved facts only</h4>
-          <p>The public brain is grounded in a curated allowlist, not the raw private knowledge base.</p>
-        </div>
-        <div class="how-card">
-          <h4>Multi-turn</h4>
-          <p>You can ask follow-ups and push on details the same way you would in a real conversation.</p>
-        </div>
-        <div class="how-card">
-          <h4>Evidence-led</h4>
-          <p>It is designed to sound like me without drifting into generic filler or fake certainty.</p>
-        </div>
+      <div class="public-kicker">What makes it useful</div>
+      <div class="brain-capability-grid">
+        {capability_cards}
+        <article class="brain-capability-card brain-capability-card--signal">
+          <div class="public-kicker">Review lane</div>
+          <p>The brain can stage public-safe content changes for review, but the website itself only reads curated snapshots.</p>
+        </article>
       </div>
     </section>
     """
@@ -1793,22 +1938,18 @@ def _render_brain_fallback(p: dict, name: str, faq: list) -> str:
     </section>
     """
 
-    garden_tags = "".join(
-        f'<span class="thought-tag">{_s(item.get("title") or "")}</span>'
-        for item in thought_garden[:8]
-    )
     garden_html = (
         f"""
     <section class="section container reveal">
-      <div class="public-kicker">Thought Garden</div>
-      <div class="thought-garden">{garden_tags}</div>
+      <div class="public-kicker">Signals in rotation</div>
+      <div class="brain-signal-grid">{signal_cards}</div>
     </section>
     """
-        if garden_tags
+        if signal_cards
         else ""
     )
 
-    return hero_html + scope_html + chat_html + how_html + faq_html + garden_html
+    return hero_html + scope_html + chat_html + how_html + garden_html + faq_html
 
 
 # ──────────────────────────────────────────────

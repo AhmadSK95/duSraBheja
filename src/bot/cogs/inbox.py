@@ -967,7 +967,39 @@ def build_digest_embeds(payload: dict) -> list[discord.Embed]:
     )
     if payload.get("board_date"):
         embed.set_footer(text=f"Grounded in daily board for {payload['board_date']}")
-    return [embed]
+    ops_embed = discord.Embed(
+        title="Action Memo",
+        description="What deserves attention next, plus any brain-generated content proposals waiting for review.",
+        color=discord.Color.dark_gold(),
+    )
+    priority_lines = [
+        f"{item.get('title')} — {item.get('why')}"
+        for item in (payload.get("priority_moves") or [])[:6]
+    ] or ["No strong priority moves yet."]
+    ops_embed.add_field(
+        name="Priority Moves",
+        value=_format_digest_entries(priority_lines, limit=6, max_line=180),
+        inline=False,
+    )
+    review_lines = [
+        f"{item.get('subject_type')}/{item.get('subject')} — {item.get('summary')}"
+        for item in (payload.get("review_queue") or [])[:5]
+    ] or ["No content proposals waiting for review."]
+    ops_embed.add_field(
+        name="Content Review Queue",
+        value=_format_digest_entries(review_lines, limit=5, max_line=180),
+        inline=False,
+    )
+    watch_lines = [
+        f"{item.get('title')} ({item.get('severity')}) — {item.get('summary')}"
+        for item in (payload.get("improvement_watchlist") or [])[:4]
+    ] or ["No open improvement watch items."]
+    ops_embed.add_field(
+        name="Improvement Watchlist",
+        value=_format_digest_entries(watch_lines, limit=4, max_line=180),
+        inline=False,
+    )
+    return [embed, ops_embed]
 
 
 def build_board_embed(payload: dict) -> discord.Embed:
