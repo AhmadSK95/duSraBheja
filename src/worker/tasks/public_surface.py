@@ -23,7 +23,7 @@ async def run_product_improvement_cycle_task(ctx) -> dict:
     async with async_session() as session:
         result = await run_product_improvement_cycle(session, trigger="scheduled")
     await publish_event(EVENT_IMPROVEMENT_CYCLE_COMPLETED, result)
-    if result.get("review_id"):
+    if result.get("review_id") and result.get("review_subject_type") != "campaign-wave":
         await publish_event(
             EVENT_PUBLIC_SURFACE_REVIEW_CREATED,
             {

@@ -460,8 +460,10 @@ class InboxCog(commands.Cog):
 
     async def _handle_public_surface_review_created(self, payload: dict):
         is_wave_gate = str(payload.get("subject_type") or "") == "campaign-wave"
+        if is_wave_gate:
+            return
         embed = discord.Embed(
-            title="Wave Approval Needed" if is_wave_gate else "Public Surface Review Needed",
+            title="Public Surface Review Needed",
             description=payload.get("diff_summary") or "A staged public-surface rewrite is ready for review.",
             color=discord.Color.gold(),
         )
@@ -489,6 +491,8 @@ class InboxCog(commands.Cog):
                     await session.commit()
 
     async def _handle_public_surface_review_resolved(self, payload: dict):
+        if str(payload.get("subject_type") or "") == "campaign-wave":
+            return
         embed = discord.Embed(
             title="Public Surface Review Resolved",
             description=payload.get("resolution_notes") or "Review status updated.",
