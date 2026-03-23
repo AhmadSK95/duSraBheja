@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 
 import pytest
@@ -192,6 +193,14 @@ def test_about_experience_cards_prefer_bullets_without_duplicate_summary(client:
 
     assert response.status_code == 200
     assert response.text.count("Advertising platform team, cross-collaboration expansion team") == 1
+
+
+def test_about_page_does_not_reuse_same_photo_src(client: TestClient) -> None:
+    response = client.get("/about")
+
+    assert response.status_code == 200
+    sources = re.findall(r'<img src="([^"]+)" alt=', response.text)
+    assert len(sources) == len(set(sources))
 
 
 def test_public_health_reports_chat_and_refresh_state(client: TestClient) -> None:

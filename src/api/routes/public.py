@@ -1078,6 +1078,23 @@ async def public_about() -> HTMLResponse:
     skills = list(p.get("skills") or [])
     personal_signals = dict(p.get("personal_signals") or {})
     resume_sections = list(p.get("resume_sections") or [])
+    used_about_photo_refs: set[str] = set()
+
+    def take_about_photo(key: str) -> dict | None:
+        photo = photos.get(key)
+        if not photo:
+            return None
+        ref = str(
+            photo.get("filename")
+            or photo.get("src")
+            or photo.get("url")
+            or key
+        )
+        if ref in used_about_photo_refs:
+            return None
+        used_about_photo_refs.add(ref)
+        return photo
+
     hero_html = f"""
     <section class="about-hero">
       <div class="container">
@@ -1087,7 +1104,7 @@ async def public_about() -> HTMLResponse:
           <p>I moved from IIT Kharagpur to New York, spent years in enterprise and Amazon-scale systems, then stepped into a builder phase where I care more about ownership, product conviction, and work that feels worth carrying.</p>
         </div>
         <div class="about-hero__photo about-hero__photo--compact">
-          {_photo_img(photos.get("indian_wedding"), loading="eager", alt=f"{name} in wedding attire")}
+          {_photo_img(take_about_photo("indian_wedding"), loading="eager", alt=f"{name} in wedding attire")}
         </div>
       </div>
     </section>
@@ -1149,8 +1166,8 @@ async def public_about() -> HTMLResponse:
           <div class="experience-stack">{experience_rows}</div>
         </div>
         <div class="about-side-photos">
-          {_photo_tile(photos.get("work"), cls="editorial-photo--medium")}
-          {_photo_tile(photos.get("home"), cls="editorial-photo--small")}
+          {_photo_tile(take_about_photo("work"), cls="editorial-photo--medium")}
+          {_photo_tile(take_about_photo("home"), cls="editorial-photo--small")}
         </div>
       </div>
     </section>
@@ -1171,8 +1188,8 @@ async def public_about() -> HTMLResponse:
           <div class="education-grid">{education_html}</div>
         </div>
         <div class="about-side-photos">
-          {_photo_tile(photos.get("ghibli_picnic"), cls="editorial-photo--medium")}
-          {_photo_tile(photos.get("pokemon"), cls="editorial-photo--small")}
+          {_photo_tile(take_about_photo("ghibli_picnic"), cls="editorial-photo--medium")}
+          {_photo_tile(take_about_photo("pokemon"), cls="editorial-photo--small")}
         </div>
       </div>
     </section>
@@ -1223,11 +1240,11 @@ async def public_about() -> HTMLResponse:
         "oscar_window",
     ]
     life_gallery = "".join(
-        _photo_tile(photos.get(key), cls="editorial-photo--small")
+        _photo_tile(take_about_photo(key), cls="editorial-photo--small")
         for key in life_photo_keys[:8]
     )
     cat_gallery = "".join(
-        _photo_tile(photos.get(key), cls="editorial-photo--small")
+        _photo_tile(take_about_photo(key), cls="editorial-photo--small")
         for key in life_photo_keys[8:]
     )
     life_section = f"""
