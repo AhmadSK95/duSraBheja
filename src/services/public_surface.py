@@ -987,7 +987,11 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             "outcomes": narrative_project.get("outcomes") or [],
             "case_study_sections": narrative_project.get("case_study_sections") or [],
             "demo_asset": narrative_project.get("demo_asset") or "",
-            "display_order": narrative_project.get("display_order") or 999,
+            "display_order": (
+                narrative_project["display_order"]
+                if narrative_project.get("display_order") is not None
+                else 999
+            ),
             "highlights": narrative_highlights + highlights,
             "signals": [
                 {
