@@ -92,6 +92,12 @@
   const status = document.querySelector("[data-public-chat-status]");
   const submit = form.querySelector("button[type='submit']");
   const newConvBtn = document.querySelector("[data-new-conversation]");
+  const chatEnabled =
+    typeof pageData.chatEnabled === "boolean" ? pageData.chatEnabled : true;
+  const captchaEnabled =
+    typeof pageData.captchaEnabled === "boolean"
+      ? pageData.captchaEnabled
+      : !!pageData.turnstileConfigured;
 
   let conversationId = null;
 
@@ -118,8 +124,13 @@
     newConvBtn.addEventListener("click", resetConversation);
   }
 
+  if (submit && !chatEnabled) {
+    submit.disabled = true;
+  }
+
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
+    if (!chatEnabled) return;
     const questionField = form.querySelector("textarea[name='question']");
     const turnstileField = form.querySelector(
       "input[name='turnstile_token']"
@@ -135,8 +146,10 @@
     try {
       const body = {
         question: question,
-        turnstile_token: turnstileField ? turnstileField.value : "",
       };
+      if (captchaEnabled) {
+        body.turnstile_token = turnstileField ? turnstileField.value : "";
+      }
       if (conversationId) {
         body.conversation_id = conversationId;
       }
@@ -171,13 +184,13 @@
         false
       );
     } finally {
-      submit.disabled = false;
+      submit.disabled = !chatEnabled;
       if (status) {
-        const remaining =
-          typeof pageData.turnstileConfigured !== "undefined" &&
-          pageData.turnstileConfigured
-            ? "Multi-turn conversation. Ask follow-ups."
-            : "Turnstile isn\u2019t configured yet, so chat will stay locked.";
+        const remaining = !chatEnabled
+          ? "The public clone is temporarily offline."
+          : captchaEnabled
+          ? "Multi-turn conversation. Ask follow-ups."
+          : "Multi-turn conversation. Captcha is disabled for this public session.";
         status.textContent = remaining;
       }
     }

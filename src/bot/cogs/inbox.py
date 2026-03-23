@@ -7,14 +7,25 @@ import re
 from uuid import UUID
 
 import discord
-from redis.asyncio import Redis
 from discord.ext import commands
+from redis.asyncio import Redis
 
 from src.agents.retriever import answer_question
 from src.bot.replay import replay_discord_history
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_artifact, get_review_by_thread, resolve_review, update_artifact, update_retrieval_trace
+from src.lib.store import (
+    get_artifact,
+    get_review_by_thread,
+    resolve_review,
+    update_artifact,
+    update_retrieval_trace,
+)
+from src.models import PublicSurfaceReview
+from src.services.public_surface import (
+    get_public_surface_review_by_thread,
+    resolve_public_surface_review,
+)
 from src.services.secrets import (
     build_secret_inventory,
     capture_secret_drop,
@@ -220,6 +231,32 @@ class InboxCog(commands.Cog):
         thread_id = str(message.channel.id)
 
         async with async_session() as session:
+            public_review = await get_public_surface_review_by_thread(session, thread_id)
+            if public_review:
+                resolved = await resolve_public_surface_review(
+                    session,
+                    public_review.id,
+                    resolution=message.content,
+                    resolved_by=f"discord:{message.author.id}",
+                )
+                if resolved:
+                    from src.worker.main import EVENT_PUBLIC_SURFACE_REVIEW_RESOLVED, publish_event
+
+                    await publish_event(
+                        EVENT_PUBLIC_SURFACE_REVIEW_RESOLVED,
+                        {
+                            "review_id": str(resolved.id),
+                            "review_key": resolved.review_key,
+                            "status": resolved.status,
+                            "subject_type": resolved.subject_type,
+                            "subject_slug": resolved.subject_slug,
+                            "resolution_notes": resolved.resolution_notes or "",
+                        },
+                    )
+                await message.add_reaction("\u2705")
+                log.info("Public surface review %s answered in thread %s", public_review.id, thread_id)
+                return
+
             review = await get_review_by_thread(session, thread_id)
             if not review:
                 return  # Not a tracked review thread
@@ -321,6 +358,10 @@ class InboxCog(commands.Cog):
             "brain:digest_ready",
             "brain:sync_completed",
             "brain:reminder_due",
+            "brain:public_surface_refresh_completed",
+            "brain:public_surface_review_created",
+            "brain:public_surface_review_resolved",
+            "brain:improvement_cycle_completed",
         )
         try:
             while not self._listener_stop.is_set():
@@ -343,6 +384,14 @@ class InboxCog(commands.Cog):
                     await self._handle_sync_completed(payload)
                 elif channel_name == "brain:reminder_due":
                     await self._handle_reminder_due(payload)
+                elif channel_name == "brain:public_surface_refresh_completed":
+                    await self._handle_public_surface_refresh_completed(payload)
+                elif channel_name == "brain:public_surface_review_created":
+                    await self._handle_public_surface_review_created(payload)
+                elif channel_name == "brain:public_surface_review_resolved":
+                    await self._handle_public_surface_review_resolved(payload)
+                elif channel_name == "brain:improvement_cycle_completed":
+                    await self._handle_improvement_cycle_completed(payload)
         except asyncio.CancelledError:
             raise
         finally:
@@ -353,6 +402,10 @@ class InboxCog(commands.Cog):
                 "brain:digest_ready",
                 "brain:sync_completed",
                 "brain:reminder_due",
+                "brain:public_surface_refresh_completed",
+                "brain:public_surface_review_created",
+                "brain:public_surface_review_resolved",
+                "brain:improvement_cycle_completed",
             )
             await pubsub.aclose()
             await redis.aclose()
@@ -385,6 +438,92 @@ class InboxCog(commands.Cog):
 
     async def _handle_review_created(self, payload: dict):
         log.info("Review created for moderation queue: %s", payload.get("review_id"))
+
+    async def _handle_public_surface_refresh_completed(self, payload: dict):
+        embed = discord.Embed(
+            title="Public Surface Refresh",
+            description=payload.get("summary") or "Public surface refresh completed.",
+            color=discord.Color.teal(),
+        )
+        if payload.get("changed_projects"):
+            embed.add_field(
+                name="Projects",
+                value="\n".join(f"- {item}" for item in payload["changed_projects"][:6]),
+                inline=False,
+            )
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.daily_digest_channel_name,
+            embed,
+        )
+
+    async def _handle_public_surface_review_created(self, payload: dict):
+        is_wave_gate = str(payload.get("subject_type") or "") == "campaign-wave"
+        embed = discord.Embed(
+            title="Wave Approval Needed" if is_wave_gate else "Public Surface Review Needed",
+            description=payload.get("diff_summary") or "A staged public-surface rewrite is ready for review.",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="Subject", value=str(payload.get("subject_slug") or "public-surface"), inline=True)
+        embed.add_field(name="Cycle", value=str(payload.get("cycle_number") or ""), inline=True)
+        embed.set_footer(text=str(payload.get("review_key") or ""))
+        message = await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.needs_review_channel_name,
+            embed,
+        )
+        if not message:
+            return
+        thread = await message.create_thread(
+            name=f"review-{payload.get('subject_slug') or 'public-surface'}",
+            auto_archive_duration=1440,
+        )
+        async with async_session() as session:
+            if payload.get("review_id"):
+                review = await session.get(PublicSurfaceReview, payload["review_id"])
+                if review:
+                    review.discord_message_id = str(message.id)
+                    review.discord_thread_id = str(thread.id)
+                    await session.commit()
+
+    async def _handle_public_surface_review_resolved(self, payload: dict):
+        embed = discord.Embed(
+            title="Public Surface Review Resolved",
+            description=payload.get("resolution_notes") or "Review status updated.",
+            color=discord.Color.green() if payload.get("status") == "approved" else discord.Color.orange(),
+        )
+        embed.add_field(name="Subject", value=str(payload.get("subject_slug") or ""), inline=True)
+        embed.add_field(name="Status", value=str(payload.get("status") or ""), inline=True)
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.needs_review_channel_name,
+            embed,
+        )
+
+    async def _handle_improvement_cycle_completed(self, payload: dict):
+        report = dict(payload.get("report") or {})
+        embed = discord.Embed(
+            title=f"Improvement Cycle {payload.get('cycle_number')}",
+            description=payload.get("summary") or "Autonomous improvement cycle completed.",
+            color=discord.Color.blurple(),
+        )
+        if report.get("overview"):
+            embed.add_field(name="Report", value=str(report.get("overview"))[:1024], inline=False)
+        if payload.get("approval_required"):
+            embed.add_field(
+                name="Next step",
+                value="Wave complete. Approval is required before the next 5-cycle wave can begin.",
+                inline=False,
+            )
+        await post_to_channel(
+            self.bot,
+            settings.discord_guild_id,
+            settings.daily_digest_channel_name,
+            embed,
+        )
 
     async def _handle_artifact_failed(self, payload: dict):
         channel_id = payload.get("discord_channel_id")

@@ -10,25 +10,39 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
 from src.api.dashboard_ui import dashboard_url, render_dashboard_shell
+from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
 from src.constants import normalize_category
 from src.database import async_session
 from src.lib import store
-from src.lib.auth import dashboard_credentials_match, dashboard_username, require_api_token, require_dashboard_token
+from src.lib.auth import (
+    dashboard_credentials_match,
+    dashboard_username,
+    require_api_token,
+    require_dashboard_token,
+)
 from src.lib.time import format_display_datetime
+from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
 from src.services.brain_atlas import build_brain_atlas_snapshot
 from src.services.brain_os import build_brain_self_description
-from src.services.boards import daily_board_window, generate_or_refresh_board, weekly_board_window
 from src.services.capture_analysis import normalize_capture_intent, normalize_validation_status
 from src.services.digest import generate_or_refresh_digest
 from src.services.evaluation import run_query_eval
-from src.services.library_cleanup import build_library_cleanup_preview
 from src.services.library import build_final_stored_data, build_library_catalog
+from src.services.library_cleanup import build_library_cleanup_preview
 from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
+from src.services.public_surface import (
+    approve_product_improvement_wave,
+    get_public_surface_ops_status,
+    list_public_facts,
+    refresh_public_snapshots,
+    run_product_improvement_cycle,
+    run_public_surface_refresh,
+    seed_public_facts_from_interview_prep,
+    update_public_fact,
+)
 from src.services.secrets import build_secret_inventory
-from src.services.public_surface import list_public_facts, refresh_public_snapshots, seed_public_facts_from_interview_prep, update_public_fact
 from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_pool
 
 router = APIRouter(tags=["dashboard"])
@@ -1137,6 +1151,75 @@ async def dashboard_public_facts(token: str = Query(default="")) -> HTMLResponse
     return _render_public_facts_page(facts, token=token)
 
 
+@router.get("/dashboard/public-surface", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_public_surface(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        ops = await get_public_surface_ops_status(session)
+    reviews = ops.get("staged_reviews") or []
+    review_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('subject_slug') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('status') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('diff_summary') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('created_at') or ''))}</td>"
+        "</tr>"
+        for item in reviews
+    ) or "<tr><td colspan='4'>No staged reviews yet.</td></tr>"
+    cycle = ops.get("latest_cycle") or {}
+    campaign = ops.get("campaign") or {}
+    report = cycle.get("report") or {}
+    report_items = "".join(
+        "<li>"
+        f"<strong>{html.escape(str(item.get('title') or 'Update'))}</strong>: "
+        f"{html.escape(str(item.get('why') or ''))}"
+        "</li>"
+        for item in list(report.get("improvements") or [])[:4]
+    ) or "<li>No cycle report yet.</li>"
+    stage_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('stage') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('status') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('summary') or ''))}</td>"
+        "</tr>"
+        for item in list(report.get("stages") or [])
+    ) or "<tr><td colspan='3'>No stage data yet.</td></tr>"
+    body = f"""
+    <h1>Public Surface Ops</h1>
+    <p>Morning refreshes, staged review cards, and the autonomous campaign all land here before or alongside Discord visibility. The campaign now pauses every 5 cycles for approval before the next wave can start.</p>
+    <div class="atlas-panel-grid">
+      <section class="atlas-panel-card">
+        <h2>Latest Refresh</h2>
+        <p>Status: {html.escape(str(ops.get("latest_public_run_status") or "never-run"))}</p>
+        <p>Refreshed: {html.escape(str(ops.get("last_public_refresh_at") or "n/a"))}</p>
+        <p>{html.escape(str(ops.get("latest_public_refresh_summary") or ""))}</p>
+      </section>
+      <section class="atlas-panel-card">
+        <h2>Campaign</h2>
+        <p>{html.escape(str(campaign.get("campaign_key") or "missing"))}</p>
+        <p>Status: {html.escape(str(campaign.get("status") or ""))}</p>
+        <p>Cycles: {campaign.get("completed_cycles")}/{campaign.get("target_cycles")}</p>
+        <p>Latest wave: {campaign.get("latest_wave")}</p>
+        <p>Approval gate: {"waiting for approval" if campaign.get("awaiting_approval") else "not blocking"}</p>
+      </section>
+      <section class="atlas-panel-card">
+        <h2>Latest Cycle</h2>
+        <p>Cycle: {html.escape(str(cycle.get("cycle_number") or ""))}</p>
+        <p>Status: {html.escape(str(cycle.get("status") or ""))}</p>
+        <p>{html.escape(str(cycle.get("summary") or ""))}</p>
+        <p>Approval required: {html.escape(str(cycle.get("approval_required") or False))}</p>
+      </section>
+    </div>
+    <h2>Latest Cycle Report</h2>
+    <p>{html.escape(str(report.get("overview") or "No cycle report yet."))}</p>
+    <ul>{report_items}</ul>
+    <h2>Stage Breakdown</h2>
+    <table><thead><tr><th>Stage</th><th>Status</th><th>Summary</th></tr></thead><tbody>{stage_rows}</tbody></table>
+    <h2>Staged Reviews</h2>
+    <table><thead><tr><th>Subject</th><th>Status</th><th>Summary</th><th>Created</th></tr></thead><tbody>{review_rows}</tbody></table>
+    """
+    return _page("Public Surface", body, token=token)
+
+
 @router.get("/dashboard/health", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_health(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
@@ -1263,7 +1346,7 @@ async def dashboard_projects_legacy(token: str = Query(default="")) -> HTMLRespo
                 if facet.get("open_loops")
                 else '<div class="atlas-empty">No explicit blockers or open loops.</div>'
             )
-            + f"<div class=\"atlas-list\">"
+            + "<div class=\"atlas-list\">"
             + "".join(
                 _list_item(
                     evidence.get("title") or "Evidence",
@@ -1653,6 +1736,30 @@ async def refresh_dashboard_public_facts() -> dict:
     async with async_session() as session:
         payload = await refresh_public_snapshots(session, force=True)
     return payload
+
+
+@api_router.get("/public-surface", dependencies=[Depends(require_api_token)])
+async def get_dashboard_public_surface() -> dict:
+    async with async_session() as session:
+        return await get_public_surface_ops_status(session)
+
+
+@api_router.post("/public-surface/refresh", dependencies=[Depends(require_api_token)])
+async def run_dashboard_public_surface_refresh() -> dict:
+    async with async_session() as session:
+        return await run_public_surface_refresh(session, trigger="dashboard", force=True)
+
+
+@api_router.post("/public-surface/cycle", dependencies=[Depends(require_api_token)])
+async def run_dashboard_public_surface_cycle() -> dict:
+    async with async_session() as session:
+        return await run_product_improvement_cycle(session, trigger="dashboard")
+
+
+@api_router.post("/public-surface/cycle/approve", dependencies=[Depends(require_api_token)])
+async def approve_dashboard_public_surface_cycle() -> dict:
+    async with async_session() as session:
+        return await approve_product_improvement_wave(session, approved_by="dashboard-api")
 
 
 @api_router.post("/public-facts/{fact_id}/approve", dependencies=[Depends(require_api_token)])

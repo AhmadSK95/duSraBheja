@@ -16,6 +16,7 @@ NAV_ITEMS = [
     ("timeline", "Timeline", "/dashboard/timeline"),
     ("expertise", "Expertise", "/dashboard/expertise"),
     ("projects", "Projects", "/dashboard/projects"),
+    ("public-surface", "Public Surface", "/dashboard/public-surface"),
     ("sources", "Sources", "/dashboard/sources"),
     ("coverage", "Coverage", "/dashboard/coverage"),
     ("library", "Library", "/dashboard/library"),

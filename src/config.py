@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     public_snapshot_refresh_minutes: int = 240
     public_chat_rate_limit_per_hour: int = 30
     public_chat_session_window_minutes: int = 60
+    public_surface_refresh_hour: int = 8
+    public_surface_refresh_minute: int = 20
+    improvement_cycle_hour: int = 9
+    improvement_cycle_minute: int = 5
+    product_campaign_target_cycles: int = 20
+    product_campaign_wave_size: int = 5
     cloudflare_turnstile_site_key: str = ""
     cloudflare_turnstile_secret_key: str = ""
     cloudflare_turnstile_verify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"

@@ -169,5 +169,5 @@ class SecretRevealRequest(BaseModel):
 
 class PublicChatRequest(BaseModel):
     question: str = Field(min_length=3, max_length=2000)
-    turnstile_token: str = Field(min_length=1)
+    turnstile_token: str | None = None
     conversation_id: str | None = None

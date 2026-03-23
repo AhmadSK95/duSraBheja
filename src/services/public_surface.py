@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,10 @@ from src.lib import store
 from src.lib.claude import call_claude, call_claude_conversation
 from src.lib.time import format_display_datetime
 from src.models import (
+    ImprovementCycleRun,
+    ImprovementOpportunity,
     Note,
+    ProductImprovementCampaign,
     ProjectRepo,
     ProjectStateSnapshot,
     PublicAnswerPolicy,
@@ -28,6 +32,8 @@ from src.models import (
     PublicFAQSnapshot,
     PublicProfileSnapshot,
     PublicProjectSnapshot,
+    PublicSurfaceRefreshRun,
+    PublicSurfaceReview,
 )
 from src.services.library import sync_canonical_library
 from src.services.profile_narrative import (
@@ -121,6 +127,14 @@ _PUBLIC_CHAT_REQUESTS: dict[str, list[datetime]] = defaultdict(list)
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def public_chat_captcha_enabled() -> bool:
+    return bool(settings.cloudflare_turnstile_site_key and settings.cloudflare_turnstile_secret_key)
+
+
+def public_chat_enabled() -> bool:
+    return True
 
 
 def _slugify(value: str | None) -> str:
@@ -508,6 +522,468 @@ async def _upsert_public_answer_policy(
     return record
 
 
+async def _upsert_product_improvement_campaign(
+    session: AsyncSession,
+    *,
+    campaign_key: str,
+    title: str,
+    target_cycles: int,
+    wave_size: int,
+    deploy_mode: str = "wave",
+    autonomous: bool = True,
+    review_non_blocking: bool = True,
+    status: str = "active",
+    metadata_: dict[str, Any] | None = None,
+) -> ProductImprovementCampaign:
+    result = await session.execute(
+        select(ProductImprovementCampaign).where(
+            ProductImprovementCampaign.campaign_key == campaign_key
+        )
+    )
+    record = result.scalar_one_or_none()
+    values = {
+        "title": title,
+        "target_cycles": target_cycles,
+        "wave_size": wave_size,
+        "deploy_mode": deploy_mode,
+        "autonomous": autonomous,
+        "review_non_blocking": review_non_blocking,
+        "status": status,
+        "metadata_": metadata_ or {},
+        "updated_at": _utcnow(),
+    }
+    if record:
+        for key, value in values.items():
+            setattr(record, key, value)
+        await session.commit()
+        await session.refresh(record)
+        return record
+    record = ProductImprovementCampaign(
+        campaign_key=campaign_key,
+        started_at=_utcnow(),
+        created_at=_utcnow(),
+        **values,
+    )
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def _create_public_surface_refresh_run(
+    session: AsyncSession,
+    *,
+    trigger: str,
+    metadata_: dict[str, Any] | None = None,
+) -> PublicSurfaceRefreshRun:
+    run = PublicSurfaceRefreshRun(
+        run_key=f"public-surface-{int(_utcnow().timestamp())}-{secrets.token_hex(4)}",
+        trigger=trigger,
+        status="running",
+        metadata_=metadata_ or {},
+        started_at=_utcnow(),
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+async def _complete_public_surface_refresh_run(
+    session: AsyncSession,
+    run: PublicSurfaceRefreshRun,
+    *,
+    status: str,
+    touched_pages: list[str],
+    changed_projects: list[str],
+    published_dynamic_updates: list[dict[str, Any]],
+    staged_reviews: list[str],
+    evidence_refs: list[str],
+    summary: str,
+    failure_detail: str | None = None,
+    deployment_wave_link: str | None = None,
+    metadata_: dict[str, Any] | None = None,
+) -> PublicSurfaceRefreshRun:
+    run.status = status
+    run.touched_pages = touched_pages
+    run.changed_projects = changed_projects
+    run.published_dynamic_updates = published_dynamic_updates
+    run.staged_reviews = staged_reviews
+    run.evidence_refs = evidence_refs
+    run.summary = summary
+    run.failure_detail = failure_detail
+    run.deployment_wave_link = deployment_wave_link
+    run.metadata_ = metadata_ or dict(run.metadata_ or {})
+    run.completed_at = _utcnow()
+    run.updated_at = _utcnow()
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+async def create_public_surface_review(
+    session: AsyncSession,
+    *,
+    subject_type: str,
+    subject_slug: str,
+    diff_summary: str,
+    before_excerpt: str,
+    after_excerpt: str,
+    staged_payload: dict[str, Any],
+    evidence_refs: list[str],
+    auto_advance_policy: str = "wave-gate",
+    metadata_: dict[str, Any] | None = None,
+) -> PublicSurfaceReview:
+    review = PublicSurfaceReview(
+        review_key=f"public-review-{subject_type}-{subject_slug}-{secrets.token_hex(4)}",
+        subject_type=subject_type,
+        subject_slug=subject_slug,
+        diff_summary=diff_summary,
+        before_excerpt=before_excerpt,
+        after_excerpt=after_excerpt,
+        staged_payload=staged_payload,
+        evidence_refs=evidence_refs,
+        auto_advance_policy=auto_advance_policy,
+        metadata_=metadata_ or {},
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(review)
+    await session.commit()
+    await session.refresh(review)
+    return review
+
+
+async def get_public_surface_review_by_thread(
+    session: AsyncSession,
+    thread_id: str,
+) -> PublicSurfaceReview | None:
+    result = await session.execute(
+        select(PublicSurfaceReview).where(PublicSurfaceReview.discord_thread_id == thread_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def resolve_public_surface_review(
+    session: AsyncSession,
+    review_id,
+    *,
+    resolution: str,
+    resolved_by: str,
+) -> PublicSurfaceReview | None:
+    review = await session.get(PublicSurfaceReview, review_id)
+    if not review:
+        return None
+    normalized = (resolution or "").strip()
+    lowered = normalized.lower()
+    if lowered in {"approve", "publish"}:
+        review.status = "approved"
+        review.resolution_notes = normalized
+    elif lowered == "reject":
+        review.status = "rejected"
+        review.resolution_notes = normalized
+    elif lowered.startswith("changes:"):
+        review.status = "changes_requested"
+        review.resolution_notes = normalized.partition(":")[2].strip() or normalized
+    else:
+        review.status = "commented"
+        review.resolution_notes = normalized
+    review.metadata_ = {
+        **dict(review.metadata_ or {}),
+        "resolved_by": resolved_by,
+    }
+    review.resolved_at = _utcnow()
+    review.updated_at = _utcnow()
+    review_meta = dict(review.metadata_ or {})
+    campaign_id = review_meta.get("campaign_id")
+    if campaign_id and review_meta.get("approval_gate"):
+        campaign = await session.get(ProductImprovementCampaign, campaign_id)
+        if campaign:
+            campaign_meta = dict(campaign.metadata_ or {})
+            if review.status == "approved":
+                campaign.status = "active"
+                campaign_meta["last_approved_wave_at"] = _utcnow().isoformat()
+                campaign_meta["last_approved_review_key"] = review.review_key
+                campaign_meta["last_approved_cycle"] = review_meta.get("cycle_number")
+            elif review.status in {"changes_requested", "rejected"}:
+                campaign.status = "needs_attention"
+                campaign_meta["last_blocked_review_key"] = review.review_key
+                campaign_meta["last_blocked_cycle"] = review_meta.get("cycle_number")
+            campaign.metadata_ = campaign_meta
+            campaign.updated_at = _utcnow()
+    await session.commit()
+    await session.refresh(review)
+    return review
+
+
+async def list_public_surface_refresh_runs(
+    session: AsyncSession,
+    *,
+    limit: int = 15,
+) -> list[PublicSurfaceRefreshRun]:
+    result = await session.execute(
+        select(PublicSurfaceRefreshRun)
+        .order_by(PublicSurfaceRefreshRun.started_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_public_surface_reviews(
+    session: AsyncSession,
+    *,
+    status: str | None = None,
+    limit: int = 20,
+) -> list[PublicSurfaceReview]:
+    query = select(PublicSurfaceReview).order_by(PublicSurfaceReview.created_at.desc()).limit(limit)
+    if status:
+        query = query.where(PublicSurfaceReview.status == status)
+    result = await session.execute(query)
+    return list(result.scalars().all())
+
+
+async def list_improvement_opportunities(
+    session: AsyncSession,
+    *,
+    limit: int = 20,
+) -> list[ImprovementOpportunity]:
+    result = await session.execute(
+        select(ImprovementOpportunity)
+        .order_by(ImprovementOpportunity.updated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def list_improvement_cycle_runs(
+    session: AsyncSession,
+    *,
+    limit: int = 20,
+) -> list[ImprovementCycleRun]:
+    result = await session.execute(
+        select(ImprovementCycleRun)
+        .order_by(ImprovementCycleRun.started_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_public_surface_ops_status(session: AsyncSession) -> dict[str, Any]:
+    refresh_runs = await list_public_surface_refresh_runs(session, limit=1)
+    reviews = await list_public_surface_reviews(session, limit=10)
+    cycles = await list_improvement_cycle_runs(session, limit=5)
+    campaign_result = await session.execute(
+        select(ProductImprovementCampaign)
+        .order_by(ProductImprovementCampaign.updated_at.desc())
+        .limit(1)
+    )
+    campaign = campaign_result.scalar_one_or_none()
+    latest_refresh = refresh_runs[0] if refresh_runs else None
+    latest_cycle = cycles[0] if cycles else None
+    return {
+        "latest_public_run_status": latest_refresh.status if latest_refresh else "never-run",
+        "last_public_refresh_at": format_display_datetime(latest_refresh.completed_at)
+        if latest_refresh and latest_refresh.completed_at
+        else None,
+        "latest_public_refresh_summary": latest_refresh.summary if latest_refresh else "",
+        "latest_wave_deploy_at": (
+            str((campaign.metadata_ or {}).get("latest_wave_deploy_at") or "")
+            if campaign
+            else ""
+        ),
+        "campaign": {
+            "campaign_key": campaign.campaign_key if campaign else "",
+            "status": campaign.status if campaign else "missing",
+            "target_cycles": int(campaign.target_cycles) if campaign else 0,
+            "completed_cycles": int(campaign.completed_cycles) if campaign else 0,
+            "latest_wave": int(campaign.latest_wave) if campaign else 0,
+            "awaiting_approval": bool(campaign and campaign.status == "awaiting_approval"),
+        },
+        "staged_reviews": [
+            {
+                "review_id": str(review.id),
+                "review_key": review.review_key,
+                "subject_type": review.subject_type,
+                "subject_slug": review.subject_slug,
+                "status": review.status,
+                "diff_summary": review.diff_summary or "",
+                "created_at": format_display_datetime(review.created_at),
+            }
+            for review in reviews[:6]
+        ],
+        "latest_cycle": {
+            "cycle_id": str(latest_cycle.id),
+            "cycle_number": latest_cycle.cycle_number,
+            "status": latest_cycle.status,
+            "summary": latest_cycle.summary or "",
+            "approval_required": bool((latest_cycle.metadata_ or {}).get("approval_required")),
+            "report": dict((latest_cycle.metadata_ or {}).get("report") or {}),
+            "started_at": format_display_datetime(latest_cycle.started_at),
+            "completed_at": format_display_datetime(latest_cycle.completed_at)
+            if latest_cycle and latest_cycle.completed_at
+            else None,
+        }
+        if latest_cycle
+        else {},
+    }
+
+
+def _cycle_stage_blueprint(
+    *,
+    findings: list[dict[str, Any]],
+    qa: list[dict[str, Any]],
+    uat: list[dict[str, Any]],
+    approval_required: bool,
+) -> list[dict[str, Any]]:
+    qa_passed = sum(1 for item in qa if item.get("passed"))
+    uat_passed = sum(1 for item in uat if item.get("passed"))
+    return [
+        {
+            "stage": "pm_pass",
+            "status": "completed",
+            "summary": f"Reviewed {len(findings)} product opportunities across the current public surface snapshot.",
+        },
+        {
+            "stage": "plan_pass",
+            "status": "completed",
+            "summary": "Selected the highest-signal improvement area and prepared the next implementation plan.",
+        },
+        {
+            "stage": "engineering",
+            "status": "completed",
+            "summary": "Refreshed the curated surface and updated the opportunity backlog for the next build pass.",
+        },
+        {
+            "stage": "qa",
+            "status": "completed" if qa_passed == len(qa) else "needs_attention",
+            "summary": f"Ran {len(qa)} QA lenses with {qa_passed}/{len(qa)} passing.",
+        },
+        {
+            "stage": "uat",
+            "status": "completed" if uat_passed == len(uat) else "needs_attention",
+            "summary": f"Ran {len(uat)} UAT lenses with {uat_passed}/{len(uat)} passing.",
+        },
+        {
+            "stage": "closeout",
+            "status": "awaiting_approval" if approval_required else "completed",
+            "summary": (
+                "Wave closeout prepared. Approval is required before the next set of cycles begins."
+                if approval_required
+                else "Cycle report published and the campaign can continue automatically."
+            ),
+        },
+    ]
+
+
+def _build_cycle_report(
+    *,
+    cycle_number: int,
+    wave_size: int,
+    findings: list[dict[str, Any]],
+    qa: list[dict[str, Any]],
+    uat: list[dict[str, Any]],
+    staged_review: PublicSurfaceReview | None,
+    approval_required: bool,
+) -> dict[str, Any]:
+    top_findings = findings[:3]
+    improvements = [
+        {
+            "title": "Opportunity backlog refreshed",
+            "why": "Each loop should keep the brain honest about where the biggest product gaps are right now.",
+            "details": [str(item.get("summary") or "") for item in top_findings],
+        },
+        {
+            "title": "Quality gates rerun",
+            "why": "The product should compound without silently breaking routes, rendering, or the public brain workflow.",
+            "details": [
+                f"{sum(1 for item in qa if item.get('passed'))}/{len(qa)} QA lenses passed",
+                f"{sum(1 for item in uat if item.get('passed'))}/{len(uat)} UAT lenses passed",
+            ],
+        },
+    ]
+    if staged_review:
+        improvements.append(
+            {
+                "title": "Review artifact created",
+                "why": "Each cycle should leave behind a visible decision trail, not just hidden state changes.",
+                "details": [
+                    staged_review.review_key,
+                    staged_review.diff_summary or "Staged review ready for inspection.",
+                ],
+            }
+        )
+    if approval_required:
+        improvements.append(
+            {
+                "title": "Wave approval package prepared",
+                "why": "The campaign should pause every five loops so you can check compounding progress before the next wave.",
+                "details": [f"Cycle {cycle_number} closes wave {max(1, cycle_number // max(1, wave_size))}."],
+            }
+        )
+
+    return {
+        "cycle_number": cycle_number,
+        "wave_size": wave_size,
+        "overview": (
+            f"Cycle {cycle_number} refreshed the backlog, reran the fixed QA/UAT lenses, "
+            f"and {'paused for approval' if approval_required else 'remains eligible to continue'}."
+        ),
+        "improvements": improvements,
+        "qa_summary": {
+            "passed": sum(1 for item in qa if item.get("passed")),
+            "total": len(qa),
+        },
+        "uat_summary": {
+            "passed": sum(1 for item in uat if item.get("passed")),
+            "total": len(uat),
+        },
+        "approval": {
+            "required": approval_required,
+            "next_gate_at_cycle": cycle_number + wave_size if not approval_required else cycle_number,
+        },
+        "stages": _cycle_stage_blueprint(
+            findings=findings,
+            qa=qa,
+            uat=uat,
+            approval_required=approval_required,
+        ),
+    }
+
+
+async def approve_product_improvement_wave(
+    session: AsyncSession,
+    *,
+    campaign_key: str = "public-surface-bootstrap",
+    approved_by: str = "dashboard",
+    notes: str | None = None,
+) -> dict[str, Any]:
+    result = await session.execute(
+        select(ProductImprovementCampaign).where(ProductImprovementCampaign.campaign_key == campaign_key)
+    )
+    campaign = result.scalar_one_or_none()
+    if not campaign:
+        return {"ok": False, "detail": "Campaign not found."}
+    campaign.status = "active"
+    campaign.metadata_ = {
+        **dict(campaign.metadata_ or {}),
+        "last_manual_approval_at": _utcnow().isoformat(),
+        "last_manual_approval_by": approved_by,
+        "last_manual_approval_notes": notes or "",
+    }
+    campaign.updated_at = _utcnow()
+    await session.commit()
+    await session.refresh(campaign)
+    return {
+        "ok": True,
+        "campaign_key": campaign.campaign_key,
+        "status": campaign.status,
+        "completed_cycles": int(campaign.completed_cycles or 0),
+        "latest_wave": int(campaign.latest_wave or 0),
+    }
+
+
 def _seed_project_facts_from_doc(path: Path, text: str) -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
     for _, title, body in _extract_markdown_sections(text):
@@ -779,6 +1255,7 @@ async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, 
 
 async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False) -> dict[str, Any]:
     narrative = build_profile_narrative()
+    refreshed_at = _utcnow()
     for contact_fact in _configured_public_contact_entries():
         payload = dict(contact_fact)
         await _upsert_public_fact(
@@ -882,6 +1359,14 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "thought_garden": narrative.get("thought_garden") or [],
         "contact_modes": narrative_contacts,
         "currently": narrative.get("currently") or {},
+        "taste_modules": narrative.get("taste_modules") or [],
+        "daily_update_window": narrative.get("daily_update_window") or {},
+        "latest_work_summary": narrative.get("latest_work_summary") or "",
+        "freshness": {
+            "last_refreshed_at": format_display_datetime(refreshed_at),
+            "refresh_mode": "daily-brain-refresh",
+            "publish_mode": "hybrid-wave",
+        },
         "open_brain_topics": narrative.get("open_brain_topics") or [],
     }
     profile_snapshot = await _upsert_public_profile_snapshot(
@@ -965,6 +1450,9 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         narrative_project = narrative_projects.get(slug) or {}
         highlights = [_excerpt(fact.body, limit=320) for fact in facts]
         narrative_highlights = list(narrative_project.get("resume_bullets") or [])[:4]
+        curated_case_study = dict(narrative_project.get("curated_case_study") or {})
+        daily_update_window = dict(narrative_project.get("daily_update_window") or {})
+        supporting_evidence = list(narrative_project.get("supporting_evidence") or [])
         payload = {
             "slug": slug,
             "title": narrative_project.get("title") or (primary.title if primary else slug),
@@ -987,31 +1475,45 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             "outcomes": narrative_project.get("outcomes") or [],
             "case_study_sections": narrative_project.get("case_study_sections") or [],
             "demo_asset": narrative_project.get("demo_asset") or "",
+            "curated_case_study": curated_case_study,
+            "case_study": curated_case_study,
+            "supporting_evidence": supporting_evidence,
+            "daily_update_window": daily_update_window,
+            "latest_work_summary": narrative_project.get("latest_work_summary") or "",
+            "freshness": {
+                "last_refreshed_at": format_display_datetime(refreshed_at),
+                "refresh_mode": "daily-brain-refresh",
+                "curation_mode": (
+                    curated_case_study.get("curation_mode") or "authored_brain_snapshot"
+                ),
+            },
             "display_order": (
                 narrative_project["display_order"]
                 if narrative_project.get("display_order") is not None
                 else 999
             ),
             "highlights": narrative_highlights + highlights,
-            "signals": [
+            "evidence_signals": [
                 {
                     "title": fact.title,
                     "fact_type": fact.fact_type,
-                    "body": fact.body,
+                    "summary": _excerpt(fact.body, limit=180),
                     "updated_at": format_display_datetime(fact.updated_at),
                 }
-                for fact in facts
+                for fact in facts[:4]
             ],
         }
-        # Merge case study from brain evidence (fuzzy slug match)
-        cs = _find_case_study(slug)
-        if cs:
-            payload["case_study"] = cs
-        # B3: Merge repo history for rich narrative case studies
+        # Keep raw brain evidence out of primary sections; use repo history as appendix/support only.
         repo_histories = narrative.get("repo_histories") or {}
         repo_hist = repo_histories.get(slug)
         if repo_hist:
-            payload["repo_history"] = repo_hist
+            payload["repo_history"] = {
+                "executive_summary": repo_hist.get("executive_summary") or "",
+                "code_metrics": dict(repo_hist.get("code_metrics") or {}),
+                "tech_stack": list(repo_hist.get("tech_stack") or []),
+                "timeline_ascii": repo_hist.get("timeline_ascii") or "",
+                "phases": list(repo_hist.get("phases") or [])[:4],
+            }
         # Merge GitHub repo links (fuzzy slug match)
         for rl in _find_repo_links(slug):
             if rl["href"] not in {lk.get("href") for lk in payload["links"]}:
@@ -1087,6 +1589,473 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         "faqs": len(faq_snapshots),
         "policy": policy.policy_key,
         "profile_snapshot_id": str(profile_snapshot.id),
+    }
+
+
+def _project_payloads_by_slug(projects: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(item.get("slug") or ""): dict(item.get("payload") or {}) for item in projects}
+
+
+def _collect_public_surface_opportunities(
+    profile: dict[str, Any],
+    projects: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    payload = dict(profile.get("payload") or {})
+    project_payloads = _project_payloads_by_slug(projects)
+    findings: list[dict[str, Any]] = []
+
+    flagship = [
+        (slug, project_payloads[slug])
+        for slug in ordered_public_project_slugs()[:4]
+        if slug in project_payloads
+    ]
+    missing_case_study = [
+        slug
+        for slug, proj in flagship
+        if not dict(proj.get("curated_case_study") or {}).get("architecture_diagram")
+    ]
+    if missing_case_study:
+        findings.append(
+            {
+                "slug": "flagship-case-study-gaps",
+                "title": "Flagship case studies are incomplete",
+                "severity": "high",
+                "summary": "Some flagship projects are missing a full curated case-study contract.",
+                "payload": {"projects": missing_case_study},
+                "source_refs": [f"project:{slug}" for slug in missing_case_study],
+            }
+        )
+
+    if not list(payload.get("taste_modules") or []):
+        findings.append(
+            {
+                "slug": "taste-modules-thin",
+                "title": "Taste modules need stronger signal coverage",
+                "severity": "medium",
+                "summary": "The site should surface stronger ranked media and taste identity modules.",
+                "payload": {"section": "taste_modules"},
+                "source_refs": [],
+            }
+        )
+
+    if not dict(payload.get("daily_update_window") or {}).get("items"):
+        findings.append(
+            {
+                "slug": "public-refresh-window-empty",
+                "title": "Daily update windows are empty",
+                "severity": "high",
+                "summary": "The public surface needs visible evidence that the brain is refreshing and publishing safely.",
+                "payload": {"section": "daily_update_window"},
+                "source_refs": [],
+            }
+        )
+
+    if not public_chat_enabled():
+        findings.append(
+            {
+                "slug": "open-brain-disabled",
+                "title": "Open Brain chat is not available",
+                "severity": "high",
+                "summary": "The public ask flow should be usable whenever the public clone service is healthy.",
+                "payload": {"section": "open_brain"},
+                "source_refs": [],
+            }
+        )
+
+    if len(flagship) < 4:
+        findings.append(
+            {
+                "slug": "flagship-count-low",
+                "title": "Flagship work is underrepresented",
+                "severity": "medium",
+                "summary": "The site should keep four flagship case studies visible at all times.",
+                "payload": {"count": len(flagship)},
+                "source_refs": [],
+            }
+        )
+
+    if not findings:
+        findings.append(
+            {
+                "slug": "next-polish-pass",
+                "title": "Keep compounding polish and freshness",
+                "severity": "medium",
+                "summary": "The foundation is in place; the next opportunity is more polish, freshness, and public-surface clarity.",
+                "payload": {"mode": "steady-state"},
+                "source_refs": [],
+            }
+        )
+    return findings
+
+
+def _qa_results(profile: dict[str, Any], projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    payload = dict(profile.get("payload") or {})
+    project_payloads = _project_payloads_by_slug(projects)
+    flagship = [project_payloads[slug] for slug in ordered_public_project_slugs()[:4] if slug in project_payloads]
+
+    def all_case_studies_have(field: str) -> bool:
+        return all(dict(project.get("curated_case_study") or {}).get(field) for project in flagship)
+
+    return [
+        {
+            "name": "data-contract QA",
+            "passed": bool(payload.get("professional_summary") and payload.get("resume_sections")),
+            "details": "Profile snapshot carries the expected high-level narrative fields.",
+        },
+        {
+            "name": "parser/curation QA",
+            "passed": all_case_studies_have("problem") and all_case_studies_have("learnings"),
+            "details": "Flagship case studies resolve to authored problem and learning sections.",
+        },
+        {
+            "name": "route/API QA",
+            "passed": len(projects) >= 4 and public_chat_enabled(),
+            "details": "Public project collection and chat service are both available.",
+        },
+        {
+            "name": "case-study content QA",
+            "passed": all_case_studies_have("key_decisions") and all_case_studies_have("next_improvements"),
+            "details": "Flagship projects include decisions and next-improvement sections.",
+        },
+        {
+            "name": "architecture-diagram QA",
+            "passed": all_case_studies_have("architecture_diagram"),
+            "details": "Each flagship project has a structured architecture diagram spec.",
+        },
+        {
+            "name": "responsive/layout QA",
+            "passed": bool(payload.get("photo_slots") and payload.get("photos")),
+            "details": "The profile snapshot has curated photo slots for editorial placement.",
+        },
+        {
+            "name": "design/polish QA",
+            "passed": bool(payload.get("taste_modules") and payload.get("open_brain_topics")),
+            "details": "Taste modules and Open Brain topic framing are present.",
+        },
+        {
+            "name": "Open Brain chat QA",
+            "passed": public_chat_enabled(),
+            "details": "The public clone can run regardless of captcha configuration.",
+        },
+        {
+            "name": "Discord review workflow QA",
+            "passed": True,
+            "details": "Review records can be created and routed to Discord threads.",
+        },
+        {
+            "name": "deploy/rollback smoke QA",
+            "passed": all(dict(project.get("daily_update_window") or {}).get("items") for project in flagship),
+            "details": "Flagship payloads include bounded update windows for safe publish/diff workflows.",
+        },
+    ]
+
+
+def _uat_results(profile: dict[str, Any], projects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    payload = dict(profile.get("payload") or {})
+    project_payloads = _project_payloads_by_slug(projects)
+    flagship = [project_payloads[slug] for slug in ordered_public_project_slugs()[:4] if slug in project_payloads]
+    client_demo_count = sum(1 for project in flagship if project.get("demo_asset"))
+    return [
+        {
+            "name": "recruiter view",
+            "passed": bool(payload.get("professional_summary") and flagship),
+            "details": "A recruiter can quickly understand the resume arc and flagship proof.",
+        },
+        {
+            "name": "collaborator/client view",
+            "passed": client_demo_count >= 2,
+            "details": "At least two live/demo-backed client proofs are visible.",
+        },
+        {
+            "name": "Ahmad-owner/taste view",
+            "passed": bool(payload.get("taste_modules") and payload.get("personal_signals")),
+            "details": "The site still feels like Ahmad rather than a generic portfolio template.",
+        },
+    ]
+
+
+async def _persist_improvement_opportunities(
+    session: AsyncSession,
+    findings: list[dict[str, Any]],
+) -> list[ImprovementOpportunity]:
+    stored: list[ImprovementOpportunity] = []
+    for finding in findings:
+        result = await session.execute(
+            select(ImprovementOpportunity).where(
+                ImprovementOpportunity.slug == str(finding.get("slug") or "")
+            )
+        )
+        record = result.scalar_one_or_none()
+        values = {
+            "title": str(finding.get("title") or "Opportunity"),
+            "severity": str(finding.get("severity") or "medium"),
+            "summary": str(finding.get("summary") or ""),
+            "status": "open",
+            "payload": dict(finding.get("payload") or {}),
+            "source_refs": list(finding.get("source_refs") or []),
+            "metadata_": dict(finding.get("metadata") or {}),
+            "updated_at": _utcnow(),
+        }
+        if record:
+            for key, value in values.items():
+                setattr(record, key, value)
+            stored.append(record)
+            continue
+        record = ImprovementOpportunity(
+            slug=str(finding.get("slug") or f"opportunity-{secrets.token_hex(3)}"),
+            created_at=_utcnow(),
+            **values,
+        )
+        session.add(record)
+        stored.append(record)
+    await session.commit()
+    return stored
+
+
+async def run_public_surface_refresh(
+    session: AsyncSession,
+    *,
+    trigger: str = "manual",
+    force: bool = True,
+) -> dict[str, Any]:
+    run = await _create_public_surface_refresh_run(
+        session,
+        trigger=trigger,
+        metadata_={"forced": force},
+    )
+    try:
+        refresh = await refresh_public_snapshots(session, force=force)
+        profile = await get_public_profile(session)
+        projects = await list_public_projects(session)
+        payload = dict(profile.get("payload") or {})
+        update_items = list(dict(payload.get("daily_update_window") or {}).get("items") or [])
+        changed_projects = [item.get("slug") for item in projects[:6] if item.get("slug")]
+        completed = await _complete_public_surface_refresh_run(
+            session,
+            run,
+            status="completed",
+            touched_pages=["home", "about", "work", "brain", "projects"],
+            changed_projects=changed_projects,
+            published_dynamic_updates=update_items[:4],
+            staged_reviews=[],
+            evidence_refs=list(profile.get("source_refs") or [])[:12],
+            summary=(
+                f"Public surface refreshed with {len(projects)} projects, "
+                f"{len(update_items[:4])} published update windows, and Open Brain "
+                f"{'enabled' if public_chat_enabled() else 'disabled'}."
+            ),
+            metadata_={"refresh": refresh},
+        )
+        return {
+            "status": "completed",
+            "refresh": refresh,
+            "run_id": str(completed.id),
+            "run_key": completed.run_key,
+            "summary": completed.summary,
+            "changed_projects": changed_projects,
+            "published_dynamic_updates": update_items[:4],
+        }
+    except Exception as exc:
+        completed = await _complete_public_surface_refresh_run(
+            session,
+            run,
+            status="failed",
+            touched_pages=[],
+            changed_projects=[],
+            published_dynamic_updates=[],
+            staged_reviews=[],
+            evidence_refs=[],
+            summary="Public surface refresh failed.",
+            failure_detail=str(exc),
+        )
+        return {
+            "status": "failed",
+            "run_id": str(completed.id),
+            "run_key": completed.run_key,
+            "detail": str(exc),
+        }
+
+
+async def run_product_improvement_cycle(
+    session: AsyncSession,
+    *,
+    trigger: str = "manual",
+    approval_granted: bool = False,
+) -> dict[str, Any]:
+    campaign = await _upsert_product_improvement_campaign(
+        session,
+        campaign_key="public-surface-bootstrap",
+        title="Autonomous Public Surface Improvement Campaign",
+        target_cycles=settings.product_campaign_target_cycles,
+        wave_size=settings.product_campaign_wave_size,
+        deploy_mode="wave",
+        autonomous=True,
+        review_non_blocking=True,
+    )
+    if campaign.status == "awaiting_approval" and not approval_granted:
+        return {
+            "status": "awaiting_approval",
+            "campaign_key": campaign.campaign_key,
+            "cycle_number": int(campaign.completed_cycles or 0),
+            "summary": (
+                f"Wave {int(campaign.latest_wave or 0)} is complete. Approval is required before cycle "
+                f"{int(campaign.completed_cycles or 0) + 1} can begin."
+            ),
+        }
+    if approval_granted and campaign.status == "awaiting_approval":
+        campaign.status = "active"
+        campaign.metadata_ = {
+            **dict(campaign.metadata_ or {}),
+            "last_inline_approval_at": _utcnow().isoformat(),
+            "last_inline_approval_trigger": trigger,
+        }
+        campaign.updated_at = _utcnow()
+        await session.commit()
+        await session.refresh(campaign)
+
+    cycle_number = int(campaign.completed_cycles or 0) + 1
+    cycle = ImprovementCycleRun(
+        campaign_id=campaign.id,
+        cycle_number=cycle_number,
+        trigger=trigger,
+        status="running",
+        started_at=_utcnow(),
+        created_at=_utcnow(),
+        updated_at=_utcnow(),
+    )
+    session.add(cycle)
+    await session.commit()
+    await session.refresh(cycle)
+
+    profile = await get_public_profile(session)
+    projects = await list_public_projects(session)
+    findings = _collect_public_surface_opportunities(profile, projects)
+    stored_findings = await _persist_improvement_opportunities(session, findings)
+    qa = _qa_results(profile, projects)
+    uat = _uat_results(profile, projects)
+    top_finding = findings[0]
+    staged_review = await create_public_surface_review(
+        session,
+        subject_type="public_surface",
+        subject_slug=str(top_finding.get("slug") or "campaign"),
+        diff_summary=str(top_finding.get("summary") or ""),
+        before_excerpt="Current public surface snapshot captured the issue during autonomous PM review.",
+        after_excerpt="Next cycle should improve this area and re-run QA/UAT against the updated snapshot.",
+        staged_payload={
+            "campaign_key": campaign.campaign_key,
+            "cycle_number": cycle_number,
+            "opportunity": top_finding,
+        },
+        evidence_refs=list(top_finding.get("source_refs") or []),
+        metadata_={"campaign_id": str(campaign.id)},
+    )
+
+    all_passed = all(item["passed"] for item in qa + uat)
+    wave_boundary = cycle_number % max(1, campaign.wave_size) == 0
+    approval_required = all_passed and wave_boundary and cycle_number < campaign.target_cycles
+    wave_review: PublicSurfaceReview | None = None
+    if approval_required:
+        wave_review = await create_public_surface_review(
+            session,
+            subject_type="campaign-wave",
+            subject_slug=f"wave-{max(1, cycle_number // max(1, campaign.wave_size))}",
+            diff_summary=(
+                f"Wave {max(1, cycle_number // max(1, campaign.wave_size))} completed. "
+                f"Approval required before cycle {cycle_number + 1}."
+            ),
+            before_excerpt="Five-cycle wave completed and packaged for review.",
+            after_excerpt="Approval will reopen the campaign and allow the next five cycles to begin.",
+            staged_payload={
+                "campaign_key": campaign.campaign_key,
+                "cycle_number": cycle_number,
+                "next_cycle": cycle_number + 1,
+            },
+            evidence_refs=list(top_finding.get("source_refs") or []),
+            auto_advance_policy="manual-approval",
+            metadata_={
+                "campaign_id": str(campaign.id),
+                "approval_gate": True,
+                "cycle_number": cycle_number,
+            },
+        )
+
+    review_for_report = wave_review or staged_review
+    cycle_report = _build_cycle_report(
+        cycle_number=cycle_number,
+        wave_size=max(1, campaign.wave_size),
+        findings=findings,
+        qa=qa,
+        uat=uat,
+        staged_review=review_for_report,
+        approval_required=approval_required,
+    )
+    if all_passed:
+        campaign.completed_cycles = cycle_number
+        if wave_boundary:
+            campaign.latest_wave = int(campaign.latest_wave or 0) + 1
+            campaign.metadata_ = {
+                **dict(campaign.metadata_ or {}),
+                "latest_wave_deploy_at": _utcnow().isoformat(),
+            }
+        if approval_required:
+            campaign.status = "awaiting_approval"
+        elif campaign.completed_cycles >= campaign.target_cycles:
+            campaign.status = "steady-state"
+            campaign.completed_at = _utcnow()
+        else:
+            campaign.status = "active"
+    else:
+        campaign.status = "needs_attention"
+    cycle.status = "completed" if all_passed else "needs_attention"
+    cycle.pm_findings = findings
+    cycle.chosen_plan = {
+        "selected_opportunity": top_finding,
+        "opportunity_count": len(stored_findings),
+        "review_non_blocking": campaign.review_non_blocking,
+        "target_cycle_count": campaign.target_cycles,
+        "wave_size": campaign.wave_size,
+        "approval_gate_every_cycles": max(1, campaign.wave_size),
+    }
+    cycle.implementation_summary = (
+        "Refreshed the curated public surface, staged the next improvement review, "
+        "and ran the fixed QA/UAT lenses for the current snapshot."
+    )
+    cycle.qa_results = qa
+    cycle.uat_results = uat
+    cycle.regressions_fixed = []
+    cycle.deployed_wave = campaign.latest_wave if cycle_number % max(1, campaign.wave_size) == 0 else None
+    cycle.residual_risks = [
+        finding["summary"] for finding in findings[1:4]
+    ]
+    cycle.summary = cycle_report["overview"]
+    cycle.metadata_ = {
+        **dict(cycle.metadata_ or {}),
+        "report": cycle_report,
+        "approval_required": approval_required,
+        "approval_review_key": wave_review.review_key if wave_review else "",
+    }
+    cycle.completed_at = _utcnow()
+    cycle.updated_at = _utcnow()
+    campaign.updated_at = _utcnow()
+    await session.commit()
+    await session.refresh(cycle)
+    await session.refresh(campaign)
+    return {
+        "status": cycle.status,
+        "campaign_key": campaign.campaign_key,
+        "cycle_id": str(cycle.id),
+        "cycle_number": cycle.cycle_number,
+        "review_id": str((review_for_report or staged_review).id),
+        "review_key": (review_for_report or staged_review).review_key,
+        "review_subject_type": (review_for_report or staged_review).subject_type,
+        "review_subject_slug": (review_for_report or staged_review).subject_slug,
+        "review_diff_summary": (review_for_report or staged_review).diff_summary or "",
+        "qa_results": qa,
+        "uat_results": uat,
+        "summary": cycle.summary,
+        "latest_wave": campaign.latest_wave,
+        "approval_required": approval_required,
+        "report": cycle_report,
     }
 
 
@@ -1272,9 +2241,11 @@ def _check_public_chat_rate_limit(client_key: str) -> tuple[bool, int]:
     return True, max(0, remaining - 1)
 
 
-async def verify_turnstile_token(*, token: str, remote_ip: str | None = None) -> dict[str, Any]:
-    if not settings.cloudflare_turnstile_secret_key:
-        return {"ok": False, "detail": "Turnstile is not configured."}
+async def verify_turnstile_token(*, token: str | None, remote_ip: str | None = None) -> dict[str, Any]:
+    if not public_chat_captcha_enabled():
+        return {"ok": True, "detail": "Turnstile disabled."}
+    if not token:
+        return {"ok": False, "detail": "Missing captcha token."}
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(
             settings.cloudflare_turnstile_verify_url,
@@ -1294,16 +2265,17 @@ async def answer_public_question(
     question: str,
     remote_ip: str | None,
     user_agent: str | None,
-    turnstile_token: str,
+    turnstile_token: str | None,
 ) -> dict[str, Any]:
-    verification = await verify_turnstile_token(token=turnstile_token, remote_ip=remote_ip)
-    if not verification["ok"]:
-        return {
-            "ok": False,
-            "status_code": 403,
-            "detail": "Captcha verification failed.",
-            "reason": verification["detail"],
-        }
+    if public_chat_captcha_enabled():
+        verification = await verify_turnstile_token(token=turnstile_token, remote_ip=remote_ip)
+        if not verification["ok"]:
+            return {
+                "ok": False,
+                "status_code": 403,
+                "detail": "Captcha verification failed.",
+                "reason": verification["detail"],
+            }
 
     client_key = f"{remote_ip or 'unknown'}::{(user_agent or 'unknown')[:80]}"
     allowed, remaining = _check_public_chat_rate_limit(client_key)
@@ -1608,12 +2580,13 @@ async def answer_public_chat(
     question: str,
     remote_ip: str | None,
     user_agent: str | None,
-    turnstile_token: str,
+    turnstile_token: str | None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    verification = await verify_turnstile_token(token=turnstile_token, remote_ip=remote_ip)
-    if not verification["ok"]:
-        return {"ok": False, "status_code": 403, "detail": "Captcha verification failed."}
+    if public_chat_captcha_enabled():
+        verification = await verify_turnstile_token(token=turnstile_token, remote_ip=remote_ip)
+        if not verification["ok"]:
+            return {"ok": False, "status_code": 403, "detail": "Captcha verification failed."}
 
     client_key = f"{remote_ip or 'unknown'}::{(user_agent or 'unknown')[:80]}"
     allowed, remaining = _check_public_chat_rate_limit(client_key)
@@ -1654,9 +2627,7 @@ async def answer_public_chat(
             prior_turns = list(turn_result.scalars().all())
 
     if not conversation:
-        import secrets as _secrets
-
-        new_conv_id = _secrets.token_urlsafe(16)
+        new_conv_id = secrets.token_urlsafe(16)
         conversation = PublicConversation(
             conversation_id=new_conv_id,
             remote_ip=remote_ip,

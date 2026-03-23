@@ -907,6 +907,150 @@ class PublicProjectSnapshot(Base):
     )
 
 
+class PublicSurfaceRefreshRun(Base):
+    __tablename__ = "public_surface_refresh_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_key = Column(String, nullable=False)
+    trigger = Column(String, nullable=False, default="manual")
+    status = Column(String, nullable=False, default="running")
+    touched_pages = Column(JSONB, default=list)
+    changed_projects = Column(JSONB, default=list)
+    published_dynamic_updates = Column(JSONB, default=list)
+    staged_reviews = Column(JSONB, default=list)
+    evidence_refs = Column(JSONB, default=list)
+    summary = Column(Text, nullable=True)
+    deployment_wave_link = Column(String, nullable=True)
+    failure_detail = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_key"),
+        Index("idx_public_surface_refresh_runs_status", "status"),
+        Index("idx_public_surface_refresh_runs_started", "started_at"),
+    )
+
+
+class PublicSurfaceReview(Base):
+    __tablename__ = "public_surface_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_key = Column(String, nullable=False)
+    subject_type = Column(String, nullable=False, default="project")
+    subject_slug = Column(String, nullable=False)
+    diff_summary = Column(Text, nullable=True)
+    before_excerpt = Column(Text, nullable=True)
+    after_excerpt = Column(Text, nullable=True)
+    staged_payload = Column(JSONB, default=dict)
+    evidence_refs = Column(JSONB, default=list)
+    status = Column(String, nullable=False, default="staged")
+    auto_advance_policy = Column(String, nullable=False, default="wave-gate")
+    resolution_notes = Column(Text, nullable=True)
+    discord_message_id = Column(String, nullable=True)
+    discord_thread_id = Column(String, nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("review_key"),
+        Index("idx_public_surface_reviews_status", "status"),
+        Index("idx_public_surface_reviews_subject", "subject_type", "subject_slug"),
+        Index("idx_public_surface_reviews_thread", "discord_thread_id"),
+    )
+
+
+class ImprovementOpportunity(Base):
+    __tablename__ = "improvement_opportunities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    severity = Column(String, nullable=False, default="medium")
+    summary = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="open")
+    payload = Column(JSONB, default=dict)
+    source_refs = Column(JSONB, default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("slug"),
+        Index("idx_improvement_opportunities_status", "status"),
+        Index("idx_improvement_opportunities_severity", "severity"),
+    )
+
+
+class ProductImprovementCampaign(Base):
+    __tablename__ = "product_improvement_campaigns"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_key = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    target_cycles = Column(Integer, nullable=False, default=20)
+    completed_cycles = Column(Integer, nullable=False, default=0)
+    wave_size = Column(Integer, nullable=False, default=5)
+    latest_wave = Column(Integer, nullable=False, default=0)
+    deploy_mode = Column(String, nullable=False, default="wave")
+    autonomous = Column(Boolean, nullable=False, default=True)
+    review_non_blocking = Column(Boolean, nullable=False, default=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    cycles = relationship("ImprovementCycleRun", back_populates="campaign")
+
+    __table_args__ = (
+        UniqueConstraint("campaign_key"),
+        Index("idx_product_improvement_campaigns_status", "status"),
+    )
+
+
+class ImprovementCycleRun(Base):
+    __tablename__ = "improvement_cycle_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("product_improvement_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cycle_number = Column(Integer, nullable=False, default=1)
+    trigger = Column(String, nullable=False, default="manual")
+    status = Column(String, nullable=False, default="running")
+    pm_findings = Column(JSONB, default=list)
+    chosen_plan = Column(JSONB, default=dict)
+    implementation_summary = Column(Text, nullable=True)
+    qa_results = Column(JSONB, default=list)
+    uat_results = Column(JSONB, default=list)
+    regressions_fixed = Column(JSONB, default=list)
+    deployed_wave = Column(Integer, nullable=True)
+    residual_risks = Column(JSONB, default=list)
+    summary = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    campaign = relationship("ProductImprovementCampaign", back_populates="cycles")
+
+    __table_args__ = (
+        Index("idx_improvement_cycle_runs_campaign", "campaign_id"),
+        Index("idx_improvement_cycle_runs_status", "status"),
+        Index("idx_improvement_cycle_runs_started", "started_at"),
+    )
+
+
 class PublicFAQSnapshot(Base):
     __tablename__ = "public_faq_snapshots"
 

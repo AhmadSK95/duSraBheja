@@ -8,8 +8,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.config import settings
-from src.services import profile_narrative
-from src.services import public_surface
+from src.services import profile_narrative, public_surface
 
 
 def test_derive_public_facts_from_markdown_finds_profile_and_project_content(tmp_path: Path) -> None:
@@ -94,10 +93,11 @@ def test_admin_alias_redirects_to_dashboard_login() -> None:
 
 @pytest.mark.asyncio
 async def test_answer_public_question_rejects_generic_queries(monkeypatch) -> None:
-    async def fake_verify_turnstile_token(*, token: str, remote_ip: str | None = None) -> dict:
+    async def fake_verify_turnstile_token(*, token: str | None, remote_ip: str | None = None) -> dict:
         return {"ok": True, "detail": "ok"}
 
     monkeypatch.setattr(public_surface, "verify_turnstile_token", fake_verify_turnstile_token)
+    monkeypatch.setattr(public_surface, "public_chat_captcha_enabled", lambda: True)
 
     response = await public_surface.answer_public_question(
         object(),
@@ -115,7 +115,7 @@ async def test_answer_public_question_rejects_generic_queries(monkeypatch) -> No
 async def test_answer_public_question_uses_relevant_approved_facts(monkeypatch) -> None:
     captured: dict[str, str] = {}
 
-    async def fake_verify_turnstile_token(*, token: str, remote_ip: str | None = None) -> dict:
+    async def fake_verify_turnstile_token(*, token: str | None, remote_ip: str | None = None) -> dict:
         return {"ok": True, "detail": "ok"}
 
     async def fake_get_public_profile(_session) -> dict:
@@ -148,6 +148,7 @@ async def test_answer_public_question_uses_relevant_approved_facts(monkeypatch) 
         return {"text": "duSraBheja is Ahmad's second-brain system for evidence-grounded memory and project state."}
 
     monkeypatch.setattr(public_surface, "verify_turnstile_token", fake_verify_turnstile_token)
+    monkeypatch.setattr(public_surface, "public_chat_captcha_enabled", lambda: True)
     monkeypatch.setattr(public_surface, "get_public_profile", fake_get_public_profile)
     monkeypatch.setattr(public_surface, "list_public_projects", fake_list_public_projects)
     monkeypatch.setattr(public_surface, "list_public_faq", fake_list_public_faq)
@@ -167,3 +168,42 @@ async def test_answer_public_question_uses_relevant_approved_facts(monkeypatch) 
     assert "Relevant approved facts" in captured["prompt"]
     assert "duSraBheja" in captured["prompt"]
     assert response["sources"]["facts"] == ["project:dusrabheja:case-study"]
+
+
+@pytest.mark.asyncio
+async def test_answer_public_question_allows_no_captcha_mode(monkeypatch) -> None:
+    async def fake_get_public_profile(_session) -> dict:
+        return {"summary": "Ahmad builds systems.", "payload": {"identity_stack": [], "current_arc": {}, "eras": [], "capabilities": [], "proof_points": []}, "source_refs": []}
+
+    async def fake_list_public_projects(_session) -> list[dict]:
+        return []
+
+    async def fake_list_public_faq(_session) -> list[dict]:
+        return []
+
+    async def fake_get_public_answer_policy(_session) -> dict:
+        return {"instructions": "Stay grounded."}
+
+    async def fake_select_relevant_public_facts(_session, *, question: str, limit: int = 8) -> list:
+        return []
+
+    async def fake_call_claude(*, prompt: str, model: str, max_tokens: int, system: str = "", trace_id=None, temperature: float = 0.0) -> dict:
+        return {"text": "I build systems that connect memory, products, and operations."}
+
+    monkeypatch.setattr(public_surface, "public_chat_captcha_enabled", lambda: False)
+    monkeypatch.setattr(public_surface, "get_public_profile", fake_get_public_profile)
+    monkeypatch.setattr(public_surface, "list_public_projects", fake_list_public_projects)
+    monkeypatch.setattr(public_surface, "list_public_faq", fake_list_public_faq)
+    monkeypatch.setattr(public_surface, "get_public_answer_policy", fake_get_public_answer_policy)
+    monkeypatch.setattr(public_surface, "select_relevant_public_facts", fake_select_relevant_public_facts)
+    monkeypatch.setattr(public_surface, "call_claude", fake_call_claude)
+
+    response = await public_surface.answer_public_question(
+        object(),
+        question="What kind of engineer is Ahmad?",
+        remote_ip="127.0.0.1",
+        user_agent="pytest",
+        turnstile_token=None,
+    )
+
+    assert response["ok"] is True

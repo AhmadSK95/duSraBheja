@@ -64,7 +64,23 @@ def test_build_profile_narrative_exposes_overhaul_fields() -> None:
     assert narrative["currently"]
     assert narrative["open_brain_topics"]
     assert narrative["photo_slots"]
+    assert narrative["taste_modules"]
+    assert narrative["daily_update_window"]["items"]
     assert narrative["personal_signals"]["family"] == ["Annie", "Oscar", "Iris"]
+
+
+def test_flagship_projects_expose_curated_case_study_payloads() -> None:
+    narrative = build_profile_narrative()
+    flagship = [item for item in narrative["projects"] if item["tier"] == "flagship"]
+
+    for project in flagship:
+        curated = dict(project.get("curated_case_study") or {})
+        assert curated["problem"]
+        assert curated["architecture_narrative"]
+        assert curated["architecture_diagram"]["lanes"]
+        assert curated["learnings"]
+        assert project["supporting_evidence"]
+        assert project["daily_update_window"]["items"]
 
 
 def test_public_assets_resolve_for_curated_photo_slots_and_demos() -> None:
@@ -105,12 +121,20 @@ def client(monkeypatch) -> AsyncIterator[TestClient]:
     async def fake_get_public_project(_session, slug: str) -> dict | None:
         return project_map.get(slug)
 
+    async def fake_get_public_surface_ops_status(_session) -> dict:
+        return {
+            "last_public_refresh_at": "Mar 23, 2026 09:00 AM",
+            "latest_public_run_status": "completed",
+            "latest_wave_deploy_at": "",
+        }
+
     monkeypatch.setattr(public_routes, "async_session", _fake_async_session)
     monkeypatch.setattr(public_routes, "get_public_profile", fake_get_public_profile)
     monkeypatch.setattr(public_routes, "list_public_projects", fake_list_public_projects)
     monkeypatch.setattr(public_routes, "list_public_faq", fake_list_public_faq)
     monkeypatch.setattr(public_routes, "get_public_answer_policy", fake_get_public_answer_policy)
     monkeypatch.setattr(public_routes, "get_public_project", fake_get_public_project)
+    monkeypatch.setattr(public_routes, "get_public_surface_ops_status", fake_get_public_surface_ops_status)
 
     yield TestClient(app)
 
@@ -150,3 +174,30 @@ def test_flagship_case_study_routes_render(client: TestClient, slug: str) -> Non
         assert "Role and Ownership" in response.text
         assert "Constraints" in response.text
         assert "Outcomes" in response.text
+        assert "Architecture narrative" in response.text
+        assert "Evidence Appendix" in response.text
+
+
+def test_case_study_routes_do_not_render_raw_dump_markdown(client: TestClient) -> None:
+    response = client.get("/projects/dusrabheja")
+
+    assert response.status_code == 200
+    assert "Resume (3 bullets)" not in response.text
+    assert "LinkedIn (longer form)" not in response.text
+    assert "All approved photos" not in client.get("/about").text
+
+
+def test_about_experience_cards_prefer_bullets_without_duplicate_summary(client: TestClient) -> None:
+    response = client.get("/about")
+
+    assert response.status_code == 200
+    assert response.text.count("Advertising platform team, cross-collaboration expansion team") == 1
+
+
+def test_public_health_reports_chat_and_refresh_state(client: TestClient) -> None:
+    response = client.get("/api/public/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chat_enabled"] is True
+    assert "last_public_refresh_at" in payload

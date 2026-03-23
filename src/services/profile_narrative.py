@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -309,6 +310,10 @@ class ProjectCase:
     case_study_sections: list[str] = field(default_factory=list)
     demo_asset: str = ""
     display_order: int = 999
+    curated_case_study: dict[str, Any] = field(default_factory=dict)
+    daily_update_window: dict[str, Any] = field(default_factory=dict)
+    supporting_evidence: list[dict[str, Any]] = field(default_factory=list)
+    latest_work_summary: str = ""
 
 
 @dataclass(slots=True)
@@ -508,6 +513,504 @@ _OPEN_BRAIN_TOPICS = [
     },
 ]
 
+_FLAGSHIP_CASE_STUDY_OVERRIDES: dict[str, dict[str, Any]] = {
+    "dusrabheja": {
+        "hero_label": "Private Brain, Public Surface",
+        "project_framing": (
+            "duSraBheja exists because my work, ideas, notes, screenshots, PDFs, and session context were "
+            "fragmented across too many tools. I did not want another note app. I wanted a system that could "
+            "absorb raw evidence, turn it into memory, and then make that memory usable both for me and for "
+            "the agents helping me work."
+        ),
+        "problem": (
+            "Manual note-taking systems fail me for the same reason most knowledge systems fail: they depend on "
+            "consistent human organization at the exact moment when I am busy doing something else. The real "
+            "problem was not storage. It was ingestion, promotion, retrieval, and the split between private "
+            "memory and public-safe narrative."
+        ),
+        "why_now": (
+            "Once I started using coding agents seriously, copy-pasting context became the bottleneck. I needed "
+            "my brain to be toolable so the AI could read relevant history mid-session instead of waiting for me "
+            "to reconstruct it manually."
+        ),
+        "architecture_narrative": (
+            "I designed the system as a set of asynchronous lanes instead of one giant chat loop. Discord is the "
+            "capture surface. The bot only acknowledges and enqueues. Workers do the heavy lifting: extraction, "
+            "classification, embeddings, librarian merge, and story/read-model generation. The private brain sits "
+            "behind PostgreSQL, pgvector, and canonical notes. MCP, REST, and the public site all read from "
+            "curated interfaces, not raw intake. That separation is what makes the public clone safe."
+        ),
+        "architecture_diagram": {
+            "title": "Capture to Memory to Public Surface",
+            "caption": "The public site never reads raw intake. It reads curated snapshots published from the private brain.",
+            "lanes": [
+                {
+                    "label": "Capture",
+                    "nodes": [
+                        {"id": "cap_discord", "label": "Discord inbox", "detail": "text, files, voice, links"},
+                        {"id": "cap_collectors", "label": "Collectors", "detail": "repo history, browser, notes"},
+                    ],
+                },
+                {
+                    "label": "Processing",
+                    "nodes": [
+                        {"id": "proc_queue", "label": "ARQ queue", "detail": "bot only enqueues"},
+                        {"id": "proc_agents", "label": "Classifier + librarian", "detail": "extract, classify, merge"},
+                        {"id": "proc_embed", "label": "Embeddings", "detail": "semantic retrieval"},
+                    ],
+                },
+                {
+                    "label": "Brain",
+                    "nodes": [
+                        {"id": "brain_store", "label": "Canonical notes", "detail": "Postgres + pgvector"},
+                        {"id": "brain_models", "label": "Read models", "detail": "projects, story, dashboard"},
+                    ],
+                },
+                {
+                    "label": "Interfaces",
+                    "nodes": [
+                        {"id": "iface_mcp", "label": "MCP + API", "detail": "agent tooling"},
+                        {"id": "iface_public", "label": "Curated public snapshots", "detail": "approved facts only"},
+                    ],
+                },
+            ],
+            "edges": [
+                {"from": "cap_discord", "to": "proc_queue", "label": "enqueue"},
+                {"from": "cap_collectors", "to": "proc_queue", "label": "sync"},
+                {"from": "proc_queue", "to": "proc_agents", "label": "jobs"},
+                {"from": "proc_agents", "to": "proc_embed", "label": "chunk + embed"},
+                {"from": "proc_agents", "to": "brain_store", "label": "promote"},
+                {"from": "proc_embed", "to": "brain_store", "label": "index"},
+                {"from": "brain_store", "to": "brain_models", "label": "materialize"},
+                {"from": "brain_models", "to": "iface_mcp", "label": "tool access"},
+                {"from": "brain_models", "to": "iface_public", "label": "publish safe layer"},
+            ],
+            "callouts": [
+                {
+                    "label": "Safety wall",
+                    "body": "The public clone and website only read approved facts and curated snapshots.",
+                },
+                {
+                    "label": "Async boundary",
+                    "body": "Discord never blocks on LLM or extraction work; workers absorb the cost and latency.",
+                },
+            ],
+        },
+        "key_decisions": [
+            {
+                "title": "Discord as the intake surface",
+                "decision": "Use Discord as the always-open capture layer instead of building a custom UI first.",
+                "rationale": "Capture needed to be frictionless immediately; Discord already matched how I actually drop thoughts and files.",
+                "tradeoff": "I accepted less control over the initial UX to get better ingestion behavior faster.",
+            },
+            {
+                "title": "Public/private split",
+                "decision": "Separate approved public facts and public snapshots from the private brain.",
+                "rationale": "The public clone needed to feel rich without risking leakage from private notes or secrets.",
+                "tradeoff": "It adds curation overhead, but that overhead is what makes the system trustworthy.",
+            },
+            {
+                "title": "Async worker architecture",
+                "decision": "Keep the bot thin and push heavy work onto Redis-backed workers.",
+                "rationale": "That gave me resilience, better cost control, and room for extraction pipelines and retries.",
+                "tradeoff": "More moving parts, but far better operational behavior.",
+            },
+        ],
+        "iterations": [
+            {
+                "title": "TypeScript and WhatsApp origin",
+                "summary": "The first version proved the concept, but it was too heavy and awkward for the always-on loop I wanted.",
+            },
+            {
+                "title": "Python and Discord rewrite",
+                "summary": "I rebuilt the system around Python async, ARQ, FastAPI, and MCP so it matched the workflow and tooling I actually use.",
+            },
+            {
+                "title": "Story-first public surface",
+                "summary": "The latest phase added curated public snapshots, dashboard views, and a public-safe clone instead of exposing raw memory directly.",
+            },
+        ],
+        "struggles": [
+            {
+                "problem": "Structured classification output was inconsistent early on.",
+                "resolution": "I tightened prompts, added confidence-based review thresholds, and treated sub-threshold outputs as reviewable instead of silently trusting them.",
+            },
+            {
+                "problem": "It was easy for public rendering to drift back toward raw dumps.",
+                "resolution": "I introduced curated public payloads and snapshot precedence so the site reads designed narratives instead of raw fact bodies.",
+            },
+            {
+                "problem": "The system kept expanding in scope faster than its interfaces stayed legible.",
+                "resolution": "I split the product into private brain, curated public surface, dashboard ops, and agent interfaces with different contracts.",
+            },
+        ],
+        "learnings": [
+            "Agentic systems live or die on orchestration boundaries, not on the headline model.",
+            "A second brain is only useful if capture is frictionless and retrieval is trustworthy.",
+            "Public AI experiences need a real data contract; otherwise they drift into generic filler or accidental leakage.",
+        ],
+        "next_improvements": [
+            "Expand daily refreshes into more visible freshness windows and publish provenance more clearly.",
+            "Deepen the dashboard review lane so every public rewrite has a tighter before/after diff and evidence mapping.",
+            "Keep improving the autonomous campaign layer so the brain can identify and stage product improvements on its own cadence.",
+        ],
+    },
+    "datagenie": {
+        "hero_label": "Conversational Analytics",
+        "project_framing": (
+            "dataGenie is about lowering the skill barrier to data analysis without flattening the work into toy answers. "
+            "I wanted a system where a non-technical person could ask a question in plain English and still get something "
+            "that feels analytically serious."
+        ),
+        "problem": (
+            "Most internal analytics tools assume one of two extremes: either the user writes SQL or the product gives them "
+            "a shallow dashboard that cannot answer new questions. I wanted a middle path: conversational access to real data "
+            "with enough structure and guardrails to stay useful."
+        ),
+        "why_now": (
+            "The recent wave of LLM tooling made the interface side easier, but it also made me care more about routing, "
+            "fallbacks, and quality boundaries. The interesting work was not 'chat with CSVs'; it was deciding when not to use an agent."
+        ),
+        "architecture_narrative": (
+            "The core architecture is hybrid by design. Uploaded data lands in DuckDB after profiling. A lightweight intent layer "
+            "decides whether the request is simple enough for direct SQL or complex enough to go through an agentic reasoning loop. "
+            "The LLM layer sits behind a provider abstraction with fallbacks so the product can keep answering even when one provider degrades."
+        ),
+        "architecture_diagram": {
+            "title": "Hybrid Query Routing",
+            "caption": "Simple questions should move fast. Complex questions should decompose before they answer.",
+            "lanes": [
+                {
+                    "label": "Input",
+                    "nodes": [
+                        {"id": "dg_user", "label": "User question", "detail": "plain-English analytics"},
+                        {"id": "dg_data", "label": "CSV upload", "detail": "tabular source data"},
+                    ],
+                },
+                {
+                    "label": "Preparation",
+                    "nodes": [
+                        {"id": "dg_profile", "label": "Data profiler", "detail": "schema, nulls, distributions"},
+                        {"id": "dg_router", "label": "Intent router", "detail": "simple vs complex path"},
+                    ],
+                },
+                {
+                    "label": "Execution",
+                    "nodes": [
+                        {"id": "dg_sql", "label": "Direct SQL path", "detail": "fast answers in DuckDB"},
+                        {"id": "dg_agent", "label": "ReAct loop", "detail": "plan, query, synthesize"},
+                        {"id": "dg_llm", "label": "Provider layer", "detail": "Claude, OpenAI, Ollama"},
+                    ],
+                },
+                {
+                    "label": "Output",
+                    "nodes": [
+                        {"id": "dg_answer", "label": "Answer + charts", "detail": "query result, explanation, viz"},
+                    ],
+                },
+            ],
+            "edges": [
+                {"from": "dg_data", "to": "dg_profile", "label": "profile"},
+                {"from": "dg_user", "to": "dg_router", "label": "classify"},
+                {"from": "dg_profile", "to": "dg_router", "label": "shape context"},
+                {"from": "dg_router", "to": "dg_sql", "label": "simple"},
+                {"from": "dg_router", "to": "dg_agent", "label": "complex"},
+                {"from": "dg_agent", "to": "dg_llm", "label": "reason"},
+                {"from": "dg_sql", "to": "dg_answer", "label": "results"},
+                {"from": "dg_agent", "to": "dg_answer", "label": "synthesis"},
+            ],
+            "callouts": [
+                {
+                    "label": "Routing principle",
+                    "body": "One path for every question either slows simple queries down or underpowers complex ones.",
+                },
+                {
+                    "label": "Provider resilience",
+                    "body": "The model layer is abstracted so failures or rate limits do not collapse the product.",
+                },
+            ],
+        },
+        "key_decisions": [
+            {
+                "title": "Hybrid query routing",
+                "decision": "Do not force all questions through an agent loop.",
+                "rationale": "Simple count, filter, and aggregation queries are faster and more reliable when translated directly.",
+                "tradeoff": "The routing layer adds complexity, but it keeps the user experience honest.",
+            },
+            {
+                "title": "DuckDB as the analytics core",
+                "decision": "Use DuckDB instead of a transactional database as the primary query engine.",
+                "rationale": "The product is fundamentally analytical, so columnar execution and local speed matter more than OLTP patterns.",
+                "tradeoff": "It is a narrower fit, but the fit is much better for ad hoc analytics.",
+            },
+            {
+                "title": "Provider abstraction",
+                "decision": "Treat LLM vendors as interchangeable infrastructure rather than as the product itself.",
+                "rationale": "Reliability and cost matter too much to tie the experience to one provider.",
+                "tradeoff": "Slightly more plumbing up front, much better operational control later.",
+            },
+        ],
+        "iterations": [
+            {"title": "Plain-English analytics MVP", "summary": "Started from the user problem: helping non-technical people query data without writing SQL."},
+            {"title": "Routing refinement", "summary": "The architecture matured when I stopped pretending all questions deserved the same execution path."},
+            {"title": "Provider resilience", "summary": "Fallback logic turned the system from a prototype into something that could survive real provider instability."},
+        ],
+        "struggles": [
+            {
+                "problem": "Early agent-heavy designs made easy questions feel slower and more fragile than they should have.",
+                "resolution": "I split the paths so simple questions can stay direct and fast.",
+            },
+            {
+                "problem": "LLMs answered better once they understood dataset shape, but that context was missing at first.",
+                "resolution": "I added profiling ahead of query generation so the model sees schema and quality context before reasoning.",
+            },
+        ],
+        "learnings": [
+            "The smartest architecture is often the one that knows when not to invoke heavy reasoning.",
+            "Data products need quality context before language interfaces can be trusted.",
+            "Provider redundancy is part of product design, not just ops hygiene.",
+        ],
+        "next_improvements": [
+            "Finish the frontend experience so the analysis flow feels as polished as the routing logic underneath it.",
+            "Add richer visualization states and conversational follow-up memory.",
+            "Tighten evaluation around answer quality, not just query success.",
+        ],
+    },
+    "balkan-barbershop-website": {
+        "hero_label": "Full Booking Platform",
+        "project_framing": (
+            "Balkan started as a design-heavy client website but evolved into a much more serious product: a real booking platform "
+            "with operations, payments, reminders, and admin workflows that had to work for an actual shop."
+        ),
+        "problem": (
+            "A barbershop does not just need a pretty homepage. It needs a customer flow that reduces friction for bookings, "
+            "supports staff operations, and does not create more work for the owner. The core problem was operational reliability "
+            "wrapped in a premium brand presentation."
+        ),
+        "why_now": (
+            "This project forced me to move past portfolio aesthetics and deal with the realities of client software: payment states, "
+            "notifications, reschedules, admin visibility, and deployment stability."
+        ),
+        "architecture_narrative": (
+            "The architecture became a classic three-layer product: React frontend for customer and admin surfaces, Node/Express APIs "
+            "for booking/payment/notification logic, and PostgreSQL for bookings, services, users, and operational state. Around that "
+            "core, I iterated on notifications, Stripe payments, and deployment until the product matched how the shop actually runs."
+        ),
+        "architecture_diagram": {
+            "title": "Booking Flow and Shop Operations",
+            "caption": "The experience had to serve both the customer booking path and the owner/admin operating path.",
+            "lanes": [
+                {
+                    "label": "Customer",
+                    "nodes": [
+                        {"id": "bb_customer", "label": "Public site", "detail": "services, barber, schedule"},
+                        {"id": "bb_checkout", "label": "Booking + payment", "detail": "Stripe-backed flow"},
+                    ],
+                },
+                {
+                    "label": "Application",
+                    "nodes": [
+                        {"id": "bb_api", "label": "Node/Express API", "detail": "auth, booking, reminders"},
+                        {"id": "bb_notify", "label": "Notification layer", "detail": "email, SMS, reminders"},
+                    ],
+                },
+                {
+                    "label": "Operations",
+                    "nodes": [
+                        {"id": "bb_admin", "label": "Admin dashboard", "detail": "appointments, analytics, staff ops"},
+                        {"id": "bb_db", "label": "PostgreSQL", "detail": "bookings, services, users, payments"},
+                    ],
+                },
+                {
+                    "label": "Infra",
+                    "nodes": [
+                        {"id": "bb_deploy", "label": "DigitalOcean deploy", "detail": "Docker + Nginx"},
+                    ],
+                },
+            ],
+            "edges": [
+                {"from": "bb_customer", "to": "bb_checkout", "label": "select"},
+                {"from": "bb_checkout", "to": "bb_api", "label": "submit"},
+                {"from": "bb_api", "to": "bb_db", "label": "persist"},
+                {"from": "bb_api", "to": "bb_notify", "label": "confirm"},
+                {"from": "bb_db", "to": "bb_admin", "label": "surface ops"},
+                {"from": "bb_api", "to": "bb_admin", "label": "manage"},
+                {"from": "bb_api", "to": "bb_deploy", "label": "ship"},
+            ],
+            "callouts": [
+                {
+                    "label": "Real business constraint",
+                    "body": "Booking reliability mattered more than novelty because staff and customers depended on it.",
+                },
+                {
+                    "label": "Operational loop",
+                    "body": "The admin surface was part of the product, not an afterthought after the marketing site.",
+                },
+            ],
+        },
+        "key_decisions": [
+            {
+                "title": "Cut the AI-first detour",
+                "decision": "Move away from early AI-heavy concepts and focus on the core booking product.",
+                "rationale": "The business value was in dependable bookings, not novelty features that added maintenance burden.",
+                "tradeoff": "Less flashy, far more useful.",
+            },
+            {
+                "title": "Treat payments and reminders as product fundamentals",
+                "decision": "Integrate Stripe, reminders, rescheduling, and admin workflows into the core system.",
+                "rationale": "That is what turned the work from a brochure site into something operationally meaningful.",
+                "tradeoff": "A much larger implementation surface, but also a much stronger proof point.",
+            },
+            {
+                "title": "Simplify infrastructure",
+                "decision": "Favor the leaner deployment path that the shop could actually live with.",
+                "rationale": "A small business does not need heroically complex infrastructure if the simpler path is more maintainable.",
+                "tradeoff": "Less theoretical scalability, much better owner fit.",
+            },
+        ],
+        "iterations": [
+            {"title": "AI-heavy prototype", "summary": "Started broader and more experimental than the client actually needed."},
+            {"title": "Booking product consolidation", "summary": "The project sharpened once bookings, auth, reminders, and admin tooling became the main arc."},
+            {"title": "Hardening and redesign", "summary": "Later work tightened the UI, operations, and deployment until it felt like a real platform."},
+        ],
+        "struggles": [
+            {
+                "problem": "The early scope was too broad and made the product harder to stabilize.",
+                "resolution": "I cut back to the pieces the business would genuinely use and depend on every week.",
+            },
+            {
+                "problem": "Notification and payment providers shifted over time.",
+                "resolution": "I treated those integrations as replaceable operational components instead of as hard-coded assumptions.",
+            },
+            {
+                "problem": "Aesthetic quality could not come at the cost of the booking flow.",
+                "resolution": "I let the operational path drive the architecture and layered the brand treatment around it.",
+            },
+        ],
+        "learnings": [
+            "Client products get better when the software matches the owner’s real operational rhythm.",
+            "A strong aesthetic is most convincing when the plumbing beneath it is equally serious.",
+            "The best product decision was subtractive: removing complexity the business did not need.",
+        ],
+        "next_improvements": [
+            "Tighten analytics, rebooking flows, and customer retention features.",
+            "Make service and staff operations even easier for a small team to manage without support overhead.",
+            "Continue simplifying the operational stack wherever it reduces fragility.",
+        ],
+    },
+    "kaffa-espresso-bar-website": {
+        "hero_label": "Small-Business Brand + Deployment",
+        "project_framing": (
+            "Kaffa is a smaller software system than Balkan, but it is still serious work because it became a real shop’s public front door. "
+            "The project combines brand translation, static-site craft, and the operational details needed to make a small-business site feel reliable."
+        ),
+        "problem": (
+            "The café needed a web presence that actually matched the space: clear visual identity, mobile-friendly information, discoverability, "
+            "and a deployment path that would not become a maintenance burden."
+        ),
+        "why_now": (
+            "This was a good forcing function for learning how to treat a 'simple site' like production software. Domain migration, HTTPS, SEO, "
+            "release safety, and rollback behavior matter even more when the site is small because the margin for operational mess is tiny."
+        ),
+        "architecture_narrative": (
+            "Kaffa is intentionally simple at the application layer: static frontend assets, custom CSS and JavaScript, and a content structure built "
+            "for discovery and mobile use. The interesting architecture lives in deployment: a git-driven release workflow on a DigitalOcean droplet, "
+            "Nginx routing, Certbot HTTPS, and a safe cutover from legacy domains to the final primary domain."
+        ),
+        "architecture_diagram": {
+            "title": "Static Site with Production Release Flow",
+            "caption": "The product is lightweight, but the deployment path is engineered to be safe for a real business.",
+            "lanes": [
+                {
+                    "label": "Build",
+                    "nodes": [
+                        {"id": "kf_repo", "label": "Git repo", "detail": "HTML, CSS, JS, assets"},
+                        {"id": "kf_script", "label": "Deploy scripts", "detail": "bootstrap, release, rollback"},
+                    ],
+                },
+                {
+                    "label": "Server",
+                    "nodes": [
+                        {"id": "kf_release", "label": "Release directories", "detail": "timestamped deploys"},
+                        {"id": "kf_symlink", "label": "Atomic symlink cutover", "detail": "instant switch"},
+                    ],
+                },
+                {
+                    "label": "Delivery",
+                    "nodes": [
+                        {"id": "kf_nginx", "label": "Nginx", "detail": "domain routing + redirects"},
+                        {"id": "kf_https", "label": "Certbot HTTPS", "detail": "webroot ACME flow"},
+                        {"id": "kf_site", "label": "kaffaespressobar.com", "detail": "live business site"},
+                    ],
+                },
+            ],
+            "edges": [
+                {"from": "kf_repo", "to": "kf_script", "label": "push"},
+                {"from": "kf_script", "to": "kf_release", "label": "stage"},
+                {"from": "kf_release", "to": "kf_symlink", "label": "promote"},
+                {"from": "kf_symlink", "to": "kf_nginx", "label": "serve"},
+                {"from": "kf_nginx", "to": "kf_https", "label": "secure"},
+                {"from": "kf_https", "to": "kf_site", "label": "deliver"},
+            ],
+            "callouts": [
+                {
+                    "label": "Release safety",
+                    "body": "Versioned releases and symlink cutovers make rollback fast and low-risk.",
+                },
+                {
+                    "label": "Small-business fit",
+                    "body": "The system avoids platform sprawl while still handling domains, HTTPS, and redirects cleanly.",
+                },
+            ],
+        },
+        "key_decisions": [
+            {
+                "title": "Static-first product shape",
+                "decision": "Keep the application layer simple and invest effort in brand fidelity and deploy reliability.",
+                "rationale": "The business needed clarity, speed, and maintainability more than a CMS or a heavy stack.",
+                "tradeoff": "Less dynamic tooling, but a tighter and more dependable end result.",
+            },
+            {
+                "title": "Release-based deployment",
+                "decision": "Use release directories and atomic cutover instead of ad hoc file replacement.",
+                "rationale": "That made it safer to update a live customer-facing site.",
+                "tradeoff": "More scripting up front, much better operational confidence later.",
+            },
+            {
+                "title": "Webroot ACME flow",
+                "decision": "Use webroot-based Certbot renewal and domain cutover handling.",
+                "rationale": "It reduces downtime risk and plays better with a live site on the server.",
+                "tradeoff": "Slightly more setup complexity for a cleaner long-term path.",
+            },
+        ],
+        "iterations": [
+            {"title": "Initial static build", "summary": "Started as a clean brand-forward site focused on menu, location, and atmosphere."},
+            {"title": "Deployment tooling", "summary": "The product matured when deployment and rollback became first-class parts of the system."},
+            {"title": "Primary domain cutover", "summary": "Finishing the migration to the final domain turned it into a proper live client delivery."},
+        ],
+        "struggles": [
+            {
+                "problem": "The application itself was simple, but domain, HTTPS, and redirect work were not.",
+                "resolution": "I treated deployment as part of the product, scripted it, and designed for rollback.",
+            },
+            {
+                "problem": "A small site can still break a business’s online presence if release handling is sloppy.",
+                "resolution": "I used release directories, smoke checks, and explicit cutover logic instead of one-shot deploys.",
+            },
+        ],
+        "learnings": [
+            "Small-business web work is product work when the site is the brand’s main digital surface.",
+            "Simple stacks still deserve release safety, HTTPS hygiene, and intentional operational design.",
+            "A polished static site can be a stronger choice than a more complicated stack when the business need is clear.",
+        ],
+        "next_improvements": [
+            "Keep refining performance, discoverability, and content tooling without bloating the stack.",
+            "Package the deploy workflow into a reusable template for future small-business work.",
+            "Continue improving visual storytelling while preserving operational simplicity.",
+        ],
+    },
+}
+
 
 def ordered_public_project_slugs() -> list[str]:
     return list(_PUBLIC_PROJECT_REGISTRY)
@@ -526,6 +1029,190 @@ def canonical_public_project_slug(value: str | None) -> str:
 
 def _project_registry_entry(value: str | None) -> dict[str, Any]:
     return dict(_PUBLIC_PROJECT_REGISTRY.get(canonical_public_project_slug(value), {}))
+
+
+def _load_interest_payload(seed_dir: Path) -> dict[str, Any]:
+    candidates = [seed_dir / "interests.json"]
+    for candidate_root in _public_seed_candidates():
+        candidate = candidate_root / "interests.json"
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            return json.loads(candidate.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def _taste_modules(seed_dir: Path) -> list[dict[str, Any]]:
+    payload = _load_interest_payload(seed_dir)
+    specs = [
+        ("top5_youtubers", "Top YouTubers", "Rabbit holes I keep returning to"),
+        ("top5_anime", "Top Anime", "Story structure and taste signals"),
+        ("top5_shows", "Top Shows", "Comfort rewatches and precision obsessions"),
+        ("top5_artists", "Top Artists", "What is in rotation"),
+    ]
+    modules: list[dict[str, Any]] = []
+    for key, title, eyebrow in specs:
+        items = list(payload.get(key) or [])
+        if not items:
+            continue
+        modules.append(
+            {
+                "slug": _slugify(title),
+                "title": title,
+                "eyebrow": eyebrow,
+                "items": [
+                    {
+                        "rank": index + 1,
+                        "name": _compact(item.get("name")),
+                        "subtitle": _compact(item.get("subtitle")),
+                        "link": _find_url(item.get("link")),
+                    }
+                    for index, item in enumerate(items[:5])
+                    if _compact(item.get("name"))
+                ],
+            }
+        )
+    return modules
+
+
+def _supporting_evidence_for_project(
+    project: ProjectCase,
+    repo_history: dict[str, Any],
+    *,
+    source_refs: list[str],
+) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    if project.summary:
+        evidence.append(
+            {
+                "label": "Curated narrative summary",
+                "kind": "narrative",
+                "summary": project.summary,
+                "source_refs": source_refs[:2],
+            }
+        )
+    if repo_history.get("executive_summary"):
+        evidence.append(
+            {
+                "label": "Repo history executive summary",
+                "kind": "repo_history",
+                "summary": _excerpt(repo_history.get("executive_summary"), limit=220),
+                "source_refs": [f"repo_history:{project.slug}"],
+            }
+        )
+    phases = list(repo_history.get("phases") or [])
+    if phases:
+        latest_phase = phases[-1]
+        evidence.append(
+            {
+                "label": latest_phase.get("title") or "Latest recorded phase",
+                "kind": "phase",
+                "summary": _excerpt(latest_phase.get("narrative"), limit=220),
+                "source_refs": [f"repo_history:{project.slug}:{_slugify(latest_phase.get('title'))}"],
+            }
+        )
+    tech_stack = list(repo_history.get("tech_stack") or [])
+    if tech_stack:
+        evidence.append(
+            {
+                "label": "Technical stack evidence",
+                "kind": "stack",
+                "summary": ", ".join(_dedupe_strings(tech_stack)[:8]),
+                "source_refs": [f"repo_history:{project.slug}:tech-stack"],
+            }
+        )
+    return evidence[:5]
+
+
+def _fallback_daily_update_window(project: ProjectCase, repo_history: dict[str, Any]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for phase in list(repo_history.get("phases") or [])[-3:]:
+        headline = _compact(phase.get("title"))
+        summary = _excerpt(phase.get("narrative"), limit=180)
+        if not headline or not summary:
+            continue
+        items.append(
+            {
+                "headline": headline,
+                "summary": summary,
+                "timestamp_label": _compact(phase.get("date_range")) or "Historical phase",
+                "evidence_refs": [f"repo_history:{project.slug}:{_slugify(headline)}"],
+            }
+        )
+    if not items and project.summary:
+        items.append(
+            {
+                "headline": "Canonical project snapshot",
+                "summary": project.summary,
+                "timestamp_label": "Curated baseline",
+                "evidence_refs": [f"project:{project.slug}:baseline"],
+            }
+        )
+    return {
+        "title": "Latest evolution",
+        "style": "slider",
+        "items": items[:3],
+    }
+
+
+def _curated_case_study_payload(
+    project: ProjectCase,
+    repo_history: dict[str, Any],
+    *,
+    source_refs: list[str],
+) -> dict[str, Any]:
+    override = dict(_FLAGSHIP_CASE_STUDY_OVERRIDES.get(project.slug) or {})
+    if not override:
+        return {}
+
+    decisions = list(override.get("key_decisions") or [])
+    tradeoffs = [
+        {
+            "title": item.get("title") or item.get("decision") or "",
+            "body": item.get("tradeoff") or "",
+        }
+        for item in decisions
+        if _compact(item.get("tradeoff"))
+    ]
+    supporting_evidence = _supporting_evidence_for_project(
+        project,
+        repo_history,
+        source_refs=source_refs,
+    )
+    appendix = {
+        "metrics": dict(repo_history.get("code_metrics") or {}),
+        "timeline_ascii": repo_history.get("timeline_ascii") or "",
+        "tech_stack": _dedupe_strings(
+            list(project.stack) + list(repo_history.get("tech_stack") or [])
+        )[:12],
+    }
+    return {
+        "hero_label": override.get("hero_label") or "Case Study",
+        "project_framing": override.get("project_framing") or project.summary,
+        "problem": override.get("problem") or project.summary,
+        "why_now": override.get("why_now") or "",
+        "role_scope": project.role_scope,
+        "constraints": list(project.constraints or []),
+        "architecture_narrative": override.get("architecture_narrative") or "",
+        "architecture_diagram": dict(override.get("architecture_diagram") or {}),
+        "key_decisions": decisions,
+        "tradeoffs": tradeoffs,
+        "iterations": list(override.get("iterations") or []),
+        "struggles": list(override.get("struggles") or []),
+        "learnings": list(override.get("learnings") or []),
+        "outcomes": list(project.outcomes or []),
+        "next_improvements": list(override.get("next_improvements") or []),
+        "supporting_evidence": supporting_evidence,
+        "appendix": appendix,
+        "case_study_sections": list(_CASE_STUDY_SECTION_ORDER),
+        "last_curated_at": "2026-03-23",
+        "curation_mode": "authored_brain_snapshot",
+    }
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:
@@ -888,6 +1575,16 @@ def _curate_public_projects(
         registry = _project_registry_entry(slug)
         repo_history = _repo_history_for_slug(repo_histories, slug)
         extras = _KNOWN_PROJECT_EXTRAS.get(slug) or {}
+        source_refs = [f"project:{slug}:narrative"]
+        if repo_history:
+            source_refs.append(f"repo_history:{slug}")
+        curated_case_study = _curated_case_study_payload(
+            project,
+            repo_history,
+            source_refs=source_refs,
+        )
+        daily_update_window = _fallback_daily_update_window(project, repo_history)
+        supporting_evidence = list(curated_case_study.get("supporting_evidence") or [])
         indexed[slug] = ProjectCase(
             slug=slug,
             title=str(registry.get("title") or project.title),
@@ -920,6 +1617,20 @@ def _curate_public_projects(
                 int(registry["order"])
                 if registry.get("order") is not None
                 else int(project.display_order)
+            ),
+            curated_case_study=curated_case_study,
+            daily_update_window=daily_update_window,
+            supporting_evidence=supporting_evidence,
+            latest_work_summary=(
+                _excerpt(
+                    (
+                        (daily_update_window.get("items") or [{}])[0].get("summary")
+                        if daily_update_window.get("items")
+                        else ""
+                    )
+                    or project.summary,
+                    limit=200,
+                )
             ),
         )
     curated: list[ProjectCase] = []
@@ -1838,6 +2549,32 @@ def _timeline_highlights(timeline: list[dict[str, str]]) -> list[str]:
     return [f"{item['year']}: {item['event']}" for item in timeline[:8]]
 
 
+def _profile_daily_update_window(projects: list[ProjectCase]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for project in projects:
+        window = dict(project.daily_update_window or {})
+        for item in list(window.get("items") or [])[:1]:
+            headline = _compact(item.get("headline"))
+            summary = _compact(item.get("summary"))
+            if not headline or not summary:
+                continue
+            items.append(
+                {
+                    "project_slug": project.slug,
+                    "project_title": project.title,
+                    "headline": headline,
+                    "summary": summary,
+                    "timestamp_label": _compact(item.get("timestamp_label")) or "Curated update",
+                    "evidence_refs": list(item.get("evidence_refs") or []),
+                }
+            )
+    return {
+        "title": "Latest brain updates",
+        "style": "slider",
+        "items": items[:4],
+    }
+
+
 def _project_match_score(project: dict[str, Any], overlay: dict[str, Any]) -> int:
     project_slug = _slugify(project.get("slug") or project.get("title"))
     overlay_slug = _slugify(overlay.get("slug") or overlay.get("title"))
@@ -2099,6 +2836,16 @@ def build_profile_narrative() -> dict[str, Any]:
     personal_signals = _personal_signals(person, personal_texture, currently)
     resume_sections = _resume_sections(professional_summary, roles, education, skills, projects)
     photo_slots = _photo_slots(photos)
+    taste_modules = _taste_modules(seed_dir)
+    daily_update_window = _profile_daily_update_window(projects)
+    latest_work_summary = _excerpt(
+        " ".join(
+            item.get("summary") or ""
+            for item in list(daily_update_window.get("items") or [])[:2]
+        )
+        or " ".join(project.latest_work_summary for project in projects[:2] if project.latest_work_summary),
+        limit=260,
+    )
 
     faq = [
         {
@@ -2139,10 +2886,13 @@ def build_profile_narrative() -> dict[str, Any]:
         "personal_texture": personal_texture,
         "personal_signals": personal_signals,
         "thought_garden": thought_garden,
+        "taste_modules": taste_modules,
         "photos": photos,
         "photo_slots": photo_slots,
         "faq": faq,
         "currently": currently,
+        "daily_update_window": daily_update_window,
+        "latest_work_summary": latest_work_summary,
         "open_brain_topics": list(_OPEN_BRAIN_TOPICS),
         "repo_histories": repo_histories,
         "source_pack": {

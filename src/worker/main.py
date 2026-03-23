@@ -28,6 +28,8 @@ JOB_GENERATE_KNOWLEDGE_REFRESH = "src.worker.tasks.knowledge.generate_knowledge_
 JOB_REFRESH_VOICE_PROFILE = "src.worker.tasks.voice.refresh_voice_profile_task"
 JOB_RUN_CONTINUOUS_COGNITION = "src.worker.tasks.cognition.run_continuous_cognition_task"
 JOB_REFRESH_WEBSITE_TASTE = "src.worker.tasks.website.refresh_website_taste_task"
+JOB_REFRESH_PUBLIC_SURFACE = "src.worker.tasks.public_surface.refresh_public_surface_task"
+JOB_RUN_PRODUCT_IMPROVEMENT_CYCLE = "src.worker.tasks.public_surface.run_product_improvement_cycle_task"
 
 EVENT_ARTIFACT_PROCESSED = "brain:artifact_processed"
 EVENT_REVIEW_CREATED = "brain:review_created"
@@ -36,6 +38,10 @@ EVENT_BOARD_READY = "brain:board_ready"
 EVENT_DIGEST_READY = "brain:digest_ready"
 EVENT_SYNC_COMPLETED = "brain:sync_completed"
 EVENT_REMINDER_DUE = "brain:reminder_due"
+EVENT_PUBLIC_SURFACE_REFRESH_COMPLETED = "brain:public_surface_refresh_completed"
+EVENT_PUBLIC_SURFACE_REVIEW_CREATED = "brain:public_surface_review_created"
+EVENT_PUBLIC_SURFACE_REVIEW_RESOLVED = "brain:public_surface_review_resolved"
+EVENT_IMPROVEMENT_CYCLE_COMPLETED = "brain:improvement_cycle_completed"
 
 
 async def get_pool() -> ArqRedis:
@@ -123,6 +129,8 @@ class WorkerSettings:
         JOB_REFRESH_VOICE_PROFILE,
         JOB_RUN_CONTINUOUS_COGNITION,
         JOB_REFRESH_WEBSITE_TASTE,
+        JOB_REFRESH_PUBLIC_SURFACE,
+        JOB_RUN_PRODUCT_IMPROVEMENT_CYCLE,
     ]
 
     cron_jobs = [
@@ -151,12 +159,15 @@ class WorkerSettings:
             hour={settings.voice_refresh_hour},
             minute=45,
         ),
-        # Website taste refresh — weekly on Sundays at 3:15 AM
         cron(
-            JOB_REFRESH_WEBSITE_TASTE,
-            weekday={6},
-            hour={3},
-            minute=15,
+            JOB_REFRESH_PUBLIC_SURFACE,
+            hour={settings.public_surface_refresh_hour},
+            minute=settings.public_surface_refresh_minute,
+        ),
+        cron(
+            JOB_RUN_PRODUCT_IMPROVEMENT_CYCLE,
+            hour={settings.improvement_cycle_hour},
+            minute=settings.improvement_cycle_minute,
         ),
     ]
 
@@ -166,6 +177,7 @@ class WorkerSettings:
 
 if __name__ == "__main__":
     import asyncio
+
     from arq import run_worker
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
