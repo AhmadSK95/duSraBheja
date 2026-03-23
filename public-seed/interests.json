@@ -1,0 +1,22 @@
+{
+  "_description": "Top 5 interests for public profile posters. Update via signal pipeline or edit manually. Items render as poster-style cards with links.",
+  "_updated": "2026-03-23",
+  "top5_youtubers": [
+    {"name": "Nate B Jones", "subtitle": "AI News & Strategy Daily", "link": "https://www.youtube.com/@NateBJones"},
+    {"name": "Tried&Refused Productions", "subtitle": "Bollywood & cinema analysis", "link": "https://www.youtube.com/@traboretmul"},
+    {"name": "KVizzing", "subtitle": "Comedy quiz — Members only", "link": "https://www.youtube.com/@KVizzingWithKumarVarun"},
+    {"name": "Kenny Sebastian", "subtitle": "Simple Ken Podcast", "link": "https://www.youtube.com/@KennySebastian"},
+    {"name": "Tanmay Bhat", "subtitle": "Content & comedy", "link": "https://www.youtube.com/@TanmayBhatYouTube"}
+  ],
+  "top5_anime": [
+    {"name": "Naruto Shippuden", "subtitle": "Currently on S9", "link": "https://www.crunchyroll.com/series/GYQ4MW246/naruto-shippuden"},
+    {"name": "My Hero Academia", "subtitle": "S1 binged in one sitting", "link": "https://www.crunchyroll.com/series/G6NQ5DWZ6/my-hero-academia"},
+    {"name": "Skeleton Knight in Another World", "subtitle": "Completed", "link": "https://www.crunchyroll.com/series/G24H1NPPG/skeleton-knight-in-another-world"},
+    {"name": "Trapped in a Dating Sim", "subtitle": "Completed", "link": "https://www.crunchyroll.com/series/GJ0H7QN90/trapped-in-a-dating-sim"}
+  ],
+  "top5_shows": [
+    {"name": "Brooklyn Nine-Nine", "subtitle": "Stress-watch comfort show", "link": "https://www.netflix.com/title/70281562"},
+    {"name": "Orange Is the New Black", "subtitle": "Recently started", "link": "https://www.netflix.com/title/70242311"}
+  ],
+  "top5_artists": []
+}

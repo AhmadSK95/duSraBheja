@@ -81,7 +81,7 @@ Collector (src/collector/) → Local file/browser/agent history ingestion
 | **Worker Tasks** | `src/worker/tasks/` | ARQ async jobs — bot enqueues, worker processes |
 | **Extractors** | `src/worker/extractors/` | File format handlers (router.py dispatches by MIME) |
 | **API Routes** | `src/api/routes/` | brain.py (private API), dashboard.py (private UI), public.py (public site) |
-| **MCP Tools** | `src/mcp/tools/` | search, ask, capture, context, protocol, story |
+| **MCP Tools** | `src/mcp/tools/` | search, ask, capture, context, protocol, story, website |
 | **Bot Cogs** | `src/bot/cogs/` | inbox.py (capture), commands.py (slash commands), admin.py |
 | **Collector** | `src/collector/` | Local scanning — project files, git, Apple Notes, Chrome, life exports |
 | **Lib** | `src/lib/` | store.py (core data access, vector search), claude.py (LLM wrapper), audit.py, crypto.py, embeddings.py |
@@ -102,7 +102,7 @@ async with async_session() as session:
 
 ### Agent Base Layer
 
-All agents route through `src/agents/base.py` → `agent_call()`, which wraps the Claude SDK call and auto-logs to `AuditLog` (agent name, action, model, tokens, cost, duration, trace_id). Individual agents (`classifier.py`, `librarian.py`, `retriever.py`, `clarifier.py`, `storyteller.py`) are just prompt functions calling `agent_call`.
+All agents route through `src/agents/base.py` → `agent_call()`, which wraps the Claude SDK call and auto-logs to `AuditLog` (agent name, action, model, tokens, cost, duration, trace_id). Individual agents (`classifier.py`, `librarian.py`, `retriever.py`, `clarifier.py`, `storyteller.py`, `website_builder.py`) are just prompt functions calling `agent_call`.
 
 ### LLM Calls
 

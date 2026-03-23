@@ -52,6 +52,27 @@
     }
   }
 
+  // ── Decision slider (case study pages) ──
+  document.querySelectorAll("[data-decision-slider]").forEach(function (slider) {
+    var slides = slider.querySelectorAll(".cs-decision-slide");
+    var counter = slider.querySelector("[data-slider-counter]");
+    var prevBtn = slider.querySelector("[data-slider-prev]");
+    var nextBtn = slider.querySelector("[data-slider-next]");
+    if (slides.length === 0) return;
+    var current = 0;
+    slides[0].classList.add("is-active");
+
+    function showSlide(idx) {
+      slides[current].classList.remove("is-active");
+      current = (idx + slides.length) % slides.length;
+      slides[current].classList.add("is-active");
+      if (counter) counter.textContent = (current + 1) + " / " + slides.length;
+    }
+
+    if (prevBtn) prevBtn.addEventListener("click", function () { showSlide(current - 1); });
+    if (nextBtn) nextBtn.addEventListener("click", function () { showSlide(current + 1); });
+  });
+
   // ── Starter prompt chips ──
   const form = document.querySelector("[data-public-chat-form]");
   document.querySelectorAll("[data-starter-prompt]").forEach(function (btn) {

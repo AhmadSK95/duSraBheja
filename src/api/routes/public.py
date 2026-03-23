@@ -7,7 +7,9 @@ falling back to seed-data-driven hardcoded layouts.
 from __future__ import annotations
 
 import html
+import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -214,6 +216,82 @@ def _render_currently_feed(p: dict) -> str:
       <div class="currently-feed">{cards}{moments_html}</div>
     </section>
     """
+
+
+def _load_interests() -> dict:
+    """Load interests data from seed JSON file."""
+    paths = [
+        Path("public-seed/interests.json"),
+        Path("/public-seed/interests.json"),
+    ]
+    for p in paths:
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                pass
+    return {}
+
+
+_INTERESTS_COLORS = {
+    "youtubers": "var(--accent)",
+    "anime": "var(--purple)",
+    "shows": "var(--gold)",
+    "artists": "var(--accent)",
+}
+
+
+def _render_interests_posters() -> str:
+    """Render top-5 interest categories as poster cards."""
+    interests = _load_interests()
+    categories = [
+        ("top5_youtubers", "Top YouTubers", "youtubers"),
+        ("top5_anime", "Top Anime", "anime"),
+        ("top5_shows", "Top Shows", "shows"),
+        ("top5_artists", "Top Artists", "artists"),
+    ]
+    sections: list[str] = []
+    for key, label, cat_cls in categories:
+        items = interests.get(key) or []
+        accent = _INTERESTS_COLORS.get(cat_cls, "var(--accent)")
+        if not items:
+            if key == "top5_artists":
+                sections.append(
+                    f'<div class="interests-category">'
+                    f'<div class="interests-category__label"'
+                    f' style="color:{accent}">{_s(label)}</div>'
+                    f'<div class="poster-placeholder">'
+                    f"<span>Spotify data coming soon</span></div></div>"
+                )
+            continue
+        cards = ""
+        for i, item in enumerate(items[:5]):
+            name = _s(item.get("name", ""))
+            subtitle = _s(item.get("subtitle", ""))
+            link = _s(item.get("link", "#"))
+            cards += (
+                f'<a class="poster-card poster-card--{cat_cls}"'
+                f' href="{link}" target="_blank" rel="noreferrer">'
+                f'<div class="poster-card__rank">{i + 1}</div>'
+                f'<div class="poster-card__name">{name}</div>'
+                f'<div class="poster-card__sub">{subtitle}</div></a>'
+            )
+        sections.append(
+            f'<div class="interests-category">'
+            f'<div class="interests-category__label"'
+            f' style="color:{accent}">{_s(label)}</div>'
+            f'<div class="poster-row">{cards}</div></div>'
+        )
+    if not sections:
+        return ""
+    all_sections = "".join(sections)
+    return (
+        f'<section class="section container reveal">'
+        f'<div class="public-kicker public-kicker--purple">What I\'m Into</div>'
+        f'<h2 class="display-heading display-heading--section">'
+        f"The non-negotiables.</h2>"
+        f'<div class="interests-grid">{all_sections}</div></section>'
+    )
 
 
 def _project_card_html(project: dict, *, featured: bool = False) -> str:
@@ -658,13 +736,6 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     </section>
     """
 
-    # Cinematic photo break after stats
-    wedding_break = _photo_break_full(
-        photos,
-        "wedding",
-        caption="November 2025. Courthouse. The LOVE sign was her idea.",
-    )
-
     about_html = f"""
     <section class="section container reveal">
       <div class="offset-grid offset-grid--60-40">
@@ -721,18 +792,8 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     </section>
     """
 
-    # Captioned photo pair
-    photo_pair_html = f"""
-    <section class="section container reveal">
-      <div class="captioned-photo-pair">
-        {_captioned_photo(photos, "pokemon")}
-        {_captioned_photo(photos, "cycling")}
-      </div>
-    </section>
-    """
-
-    # Skyline photo break — pure visual
-    skyline_break = _photo_break_full(photos, "photo_break")
+    # Interests posters
+    interests_html = _render_interests_posters()
 
     contact_items = list(p.get("contact") or p.get("contact_modes") or [])
     contact_links = ""
@@ -757,13 +818,11 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
     return (
         hero_html
         + stat_html
-        + wedding_break
         + about_html
         + currently_html
         + chatbot_html
         + work_html
-        + photo_pair_html
-        + skyline_break
+        + interests_html
         + contact_html
     )
 
@@ -800,24 +859,20 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    # Cinematic photo break — mood setter
-    waterfront_break = _photo_break_full(photos, "hero")
-
+    # Career arc — 3 acts
     acts = list(current_arc.get("acts") or [])
     act_cards = ""
     for act in acts[:3]:
-        act_cards += f"""
-        <div class="act-card">
-          <div class="public-kicker">{_s(act.get("period", ""))}</div>
-          <h3>{_s(act.get("label", ""))}</h3>
-          <p>{_s(act.get("body", ""))}</p>
-        </div>
-        """
+        act_cards += (
+            f'<div class="act-card">'
+            f'<div class="public-kicker">{_s(act.get("period", ""))}</div>'
+            f'<h3>{_s(act.get("label", ""))}</h3>'
+            f'<p>{_s(act.get("body", ""))}</p></div>'
+        )
     throughline = current_arc.get("throughline") or ""
     throughline_html = ""
     if throughline:
         throughline_html = f'<blockquote class="throughline-quote">{_s(throughline)}</blockquote>'
-
     acts_html = f"""
     <section class="section container reveal">
       <div class="public-kicker">The Arc</div>
@@ -827,35 +882,35 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    # Captioned story block — wedding photo + personal life text
-    wedding_story = f"""
+    # Life facts — condensed, no photos
+    life_html = """
     <section class="section container reveal">
-      <div class="story-block">
-        <div class="story-block__photo">
-          {_captioned_photo(photos, "wedding")}
+      <div class="public-kicker public-kicker--gold">Life</div>
+      <h2 class="display-heading display-heading--section">The human side.</h2>
+      <div class="life-facts">
+        <div class="life-fact">
+          <strong>Home</strong>
+          <span>Jersey City, NJ &mdash; married Annie in 2025, cat dad to Oscar &amp; Iris</span>
         </div>
-        <div class="story-block__text">
-          <div class="public-kicker public-kicker--gold">Life</div>
-          <h2 class="display-heading display-heading--section">
-            The human behind the commits.</h2>
-          <p>Married Annie in 2025 &mdash; courthouse ceremony,
-            LOVE marquee sign, autumn leaves. Cat dad to Oscar
-            (7-year orange tabby) and Iris. Five languages:
-            English, Hindi, Telugu, Urdu, Tamil.</p>
+        <div class="life-fact">
+          <strong>Languages</strong>
+          <span>English, Hindi, Telugu, Urdu, Tamil</span>
+        </div>
+        <div class="life-fact">
+          <strong>After hours</strong>
+          <span>Anime, Indian standup, hip hop, cycling, Pokemon collecting</span>
         </div>
       </div>
     </section>
     """
 
+    # Career table
     role_rows = "".join(
-        f"""
-        <div class="role-row">
-          <span class="role-row__period">{_s(item.get("period"))}</span>
-          <span class="role-row__org">{_s(item.get("organization"))}</span>
-          <span class="role-row__title">{_s(item.get("title"))}</span>
-          <span class="role-row__summary">{_s(item.get("summary"))}</span>
-        </div>
-        """
+        f'<div class="role-row">'
+        f'<span class="role-row__period">{_s(item.get("period"))}</span>'
+        f'<span class="role-row__org">{_s(item.get("organization"))}</span>'
+        f'<span class="role-row__title">{_s(item.get("title"))}</span>'
+        f'<span class="role-row__summary">{_s(item.get("summary"))}</span></div>'
         for item in roles[:6]
     )
     roles_html = f"""
@@ -866,95 +921,10 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    # Captioned photo pair — cycling + home
-    photo_pair_html = f"""
-    <section class="section container reveal">
-      <div class="captioned-photo-pair">
-        {_captioned_photo(photos, "cycling")}
-        {_captioned_photo(photos, "home")}
-      </div>
-    </section>
-    """
+    # Interests posters — top 5s with links
+    interests_html = _render_interests_posters()
 
-    # Full-width photo gallery — the visual soul of the page
-    wedding_photo = photos.get("wedding")
-    couple_photo = photos.get("couple")
-    pokemon_photo = photos.get("pokemon")
-    cycling_photo = photos.get("cycling")
-    gallery_photos = [
-        (wedding_photo, "Ahmad and Annie — LOVE sign, autumn leaves"),
-        (couple_photo, "Waterfront kiss, dramatic sky"),
-        (cycling_photo, "Coming home from a ride — Oscar waiting"),
-        (pokemon_photo, "The OG starters collection"),
-    ]
-    gallery_imgs = ""
-    for photo, alt in gallery_photos:
-        url = _photo_url(photo)
-        if url:
-            gallery_imgs += (
-                f'<div class="life-gallery__item">'
-                f'<img src="{url}" alt="{_s(alt)}" loading="lazy" />'
-                f"</div>"
-            )
-
-    personal_html = f"""
-    <section class="life-section reveal">
-      <div class="container">
-        <div class="public-kicker public-kicker--gold">
-          Life Outside Code</div>
-        <h2 class="display-heading display-heading--section">
-          The gallery.</h2>
-      </div>
-      <div class="life-gallery">{gallery_imgs}</div>
-    </section>
-    """
-
-    # Reversed story block — Pokemon + hobbies
-    hobbies_story = f"""
-    <section class="section container reveal">
-      <div class="story-block story-block--reverse">
-        <div class="story-block__photo">
-          {_captioned_photo(photos, "pokemon")}
-        </div>
-        <div class="story-block__text">
-          <div class="public-kicker public-kicker--purple">Beyond the Code</div>
-          <h2 class="display-heading display-heading--section">
-            The non-negotiables.</h2>
-          <p>Anime watcher &mdash; currently on Naruto Shippuden S9.
-            Indian standup addict &mdash; KVizzing (Members-only),
-            Tanmay Bhat, Rahul Subramanian. Hip hop, Def Jam India
-            on repeat. Cycles around Jersey City, collects Pokemon
-            plushies (the OG starters), stress-watches B99.</p>
-        </div>
-      </div>
-    </section>
-    """
-
-    # Interests chips
-    texture = list(p.get("personal_texture") or [])
-    interests_data = list(p.get("interests") or [])
-    chip_items = texture[:8] if texture else interests_data[:8]
-    interest_chips_html = ""
-    if chip_items:
-        chips = "".join(f'<span class="interests-chip">{_s(item)}</span>' for item in chip_items)
-        interest_chips_html = f"""
-        <section class="section container reveal">
-          {_kicker("Interests")}
-          <div class="interests-bar">{chips}</div>
-        </section>
-        """
-
-    content = (
-        hero_html
-        + waterfront_break
-        + acts_html
-        + wedding_story
-        + roles_html
-        + photo_pair_html
-        + personal_html
-        + hobbies_story
-        + interest_chips_html
-    )
+    content = hero_html + acts_html + life_html + roles_html + interests_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -1065,22 +1035,19 @@ async def public_project_detail(slug: str) -> HTMLResponse:
 
 async def _render_project_detail(slug: str) -> HTMLResponse:
     async with async_session() as session:
-        profile = await get_public_profile(session)
         project = await get_public_project(session, slug)
     if not project:
         raise HTTPException(status_code=404, detail="Public project not found")
-    p = _payload(profile)
-    photos = p.get("photos") or {}
     proj_p = dict(project.get("payload") or {})
     case_study = proj_p.get("case_study") or {}
+    repo_history = proj_p.get("repo_history") or {}
 
-    # Hero with photo accent
-    project_photo = _photo_img_sticker(photos, "work", "right")
+    # ── Hero (clean, no photo) ──
     hero_html = f"""
     <section class="hero-inner">
       <div class="container">
         <div>
-          {_kicker("Project")}
+          {_kicker("Case Study")}
           <h1 class="display-heading display-heading--section">
             {_s(project["title"])}</h1>
           <span class="status-badge">
@@ -1088,132 +1055,178 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
           <p class="mt-2">
             {_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
         </div>
-        <div class="photo-accent--sm">{project_photo}</div>
-      </div>
-    </section>
-    """
-
-    # Case study section (primary content from brain evidence)
-    case_html = ""
-    if case_study:
-        mot = case_study.get("motivation")
-        motivation = f"<p>{_s(mot)}</p>" if mot else ""
-        arch_desc = case_study.get("architecture_description")
-        arch = ""
-        if arch_desc:
-            arch = f'<div class="case-study__architecture">{_s(arch_desc)}</div>'
-        decisions_html = "".join(
-            _card_html(
-                "decision-card",
-                d.get("decision", ""),
-                d.get("context", ""),
-            )
-            for d in (case_study.get("key_decisions") or [])
-        )
-        struggles_html = "".join(
-            _card_html(
-                "struggle-card",
-                st.get("problem", ""),
-                st.get("resolution", ""),
-            )
-            for st in (case_study.get("struggles") or [])
-        )
-        learnings_html = "".join(
-            f'<div class="learning-card"><h4>{_s(lr)}</h4></div>'
-            for lr in (case_study.get("learnings") or [])
-        )
-        arch_block = f"{_kicker('Architecture')}{arch}" if arch else ""
-        dec_block = (
-            f'<div class="case-study__decisions mt-3">'
-            f"{_kicker('Key Decisions')}{decisions_html}</div>"
-            if decisions_html
-            else ""
-        )
-        str_block = (
-            f'<div class="case-study__struggles mt-3">{_kicker("Struggles")}{struggles_html}</div>'
-            if struggles_html
-            else ""
-        )
-        lrn_block = (
-            f'<div class="case-study__learnings mt-3">{_kicker("Learnings")}{learnings_html}</div>'
-            if learnings_html
-            else ""
-        )
-        case_html = f"""
-        <section class="section container">
-          {_kicker("Problem &amp; Motivation")}
-          {motivation}
-          {arch_block}
-          {dec_block}
-          {str_block}
-          {lrn_block}
-        </section>
-        """
-
-    # Sidebar data
-    stack_pills = _pills(list(proj_p.get("stack") or [])[:8])
-    links_html = (
-        "".join(
-            f'<a class="inline-link" href="{_s(item.get("href"))}"'
-            f' target="_blank" rel="noreferrer">'
-            f"{_s(item.get('label') or 'Open')}</a>"
-            for item in list(proj_p.get("links") or [])
-            if item.get("href")
-        )
-        or "<span class='mono-accent'>Links coming soon.</span>"
-    )
-
-    # Clean demonstrates — filter garbage
-    raw_dem = list(proj_p.get("demonstrates") or [])
-    clean_dem = [
-        d for d in raw_dem if d and d.strip() not in {"---", "--", "-", ""} and len(d.strip()) >= 10
-    ]
-    demonstrates_html = _bullet_list(clean_dem[:5])
-
-    # Truncate overview to avoid dump
-    raw_summary = proj_p.get("summary") or project.get("summary") or ""
-    if len(raw_summary) > 400:
-        raw_summary = raw_summary[:397].rstrip() + "..."
-    summary_html = _s(raw_summary)
-
-    framing_html = _bullet_list(list(proj_p.get("resume_bullets") or [])[:5])
-
-    detail_html = f"""
-    <section class="section container">
-      <div class="detail-layout">
-        <div>
-          {_kicker("Overview")}
-          <p>{summary_html}</p>
-          <div class="mt-3">
-            {_kicker("How It Was Framed")}
-            {framing_html}
-          </div>
-        </div>
         <div class="detail-sidebar">
           <div class="detail-sidebar__block">
             <h4>Stack</h4>
-            {stack_pills}
+            {_pills(list(proj_p.get("stack") or [])[:8])}
           </div>
           <div class="detail-sidebar__block">
             <h4>Links</h4>
-            <div class="link-column">{links_html}</div>
-          </div>
-          <div class="detail-sidebar__block">
-            <h4>Demonstrates</h4>
-            {demonstrates_html}
+            <div class="link-column">{
+    "".join(
+        f'<a class="inline-link" href="{_s(item.get("href"))}"'
+        f' target="_blank" rel="noreferrer">'
+        f"{_s(item.get('label') or 'Open')}</a>"
+        for item in list(proj_p.get("links") or [])
+        if item.get("href")
+    ) or "<span class='mono-accent'>Links coming soon.</span>"
+    }</div>
           </div>
         </div>
       </div>
     </section>
     """
 
-    # B4: Rich narrative rendering when repo_history exists
-    repo_history = proj_p.get("repo_history") or {}
-    narrative_html = ""
-    if repo_history:
-        narrative_html = _render_rich_case_study(repo_history)
+    # ── Problem statement ──
+    motivation = case_study.get("motivation") or repo_history.get("executive_summary") or ""
+    problem_html = ""
+    if motivation:
+        problem_html = f"""
+        <section class="section container reveal">
+          {_kicker("The Problem")}
+          <div class="cs-problem"><p>{_s(motivation)}</p></div>
+        </section>
+        """
 
-    content = hero_html + narrative_html + case_html + detail_html
+    # ── Architecture diagram ──
+    arch_html = ""
+    diagrams = repo_history.get("architecture_diagrams") or []
+    arch_desc = case_study.get("architecture_description") or ""
+    if diagrams:
+        diagram_blocks = ""
+        for d in diagrams[:2]:
+            title = d.get("title", "")
+            diag_text = d.get("diagram", "")
+            explanation = d.get("explanation", "")
+            title_html = (
+                f'<div class="cs-arch__title">{_s(title)}</div>' if title else ""
+            )
+            diag_html = (
+                f'<div class="cs-arch__diagram">{_s(diag_text)}</div>'
+                if diag_text
+                else ""
+            )
+            expl_html = (
+                f'<div class="cs-arch__explanation">{_s(explanation)}</div>'
+                if explanation
+                else ""
+            )
+            diagram_blocks += (
+                f'<div class="cs-arch__block">'
+                f"{title_html}{diag_html}{expl_html}</div>"
+            )
+        arch_html = f"""
+        <section class="section container reveal">
+          {_kicker("Architecture")}
+          <div class="cs-arch">{diagram_blocks}</div>
+        </section>
+        """
+    elif arch_desc:
+        arch_html = f"""
+        <section class="section container reveal">
+          {_kicker("Architecture")}
+          <div class="cs-arch">
+            <div class="cs-arch__block">
+              <div class="cs-arch__diagram">{_s(arch_desc)}</div>
+            </div>
+          </div>
+        </section>
+        """
+
+    # ── Decision history slider ──
+    all_decisions = list(case_study.get("key_decisions") or [])
+    arch_decisions = list(repo_history.get("architectural_decisions") or [])
+    for ad in arch_decisions:
+        all_decisions.append(
+            {"decision": ad.get("title", ""), "context": ad.get("rationale", "")}
+        )
+    decisions_html = ""
+    if all_decisions:
+        slides = ""
+        for i, d in enumerate(all_decisions):
+            title = _s(d.get("decision") or d.get("title", ""))
+            context = _s(d.get("context") or d.get("rationale", ""))
+            slides += (
+                f'<div class="cs-decision-slide" data-slide="{i}">'
+                f'<div class="cs-decision-slide__num">#{i + 1}</div>'
+                f'<h4>{title}</h4>'
+                f"<p>{context}</p></div>"
+            )
+        decisions_html = f"""
+        <section class="section container reveal">
+          {_kicker("Key Decisions")}
+          <div class="cs-decision-slider" data-decision-slider>
+            <div class="cs-decision-slider__track">{slides}</div>
+            <div class="cs-decision-slider__controls">
+              <button class="cs-slider-btn" data-slider-prev
+                aria-label="Previous">&larr;</button>
+              <span class="cs-slider-counter" data-slider-counter>
+                1 / {len(all_decisions)}</span>
+              <button class="cs-slider-btn" data-slider-next
+                aria-label="Next">&rarr;</button>
+            </div>
+          </div>
+        </section>
+        """
+
+    # ── Challenges ──
+    all_challenges = list(case_study.get("struggles") or [])
+    repo_challenges = list(repo_history.get("challenges") or [])
+    for rc in repo_challenges:
+        all_challenges.append(
+            {"problem": rc.get("title", ""), "resolution": rc.get("solution", "")}
+        )
+    challenges_html = ""
+    if all_challenges:
+        cards = ""
+        for ch in all_challenges:
+            prob = _s(ch.get("problem") or ch.get("title", ""))
+            resolution = ch.get("resolution") or ch.get("solution") or ""
+            res_html = (
+                f'<div class="cs-challenge__resolution">{_s(resolution)}</div>'
+                if resolution
+                else ""
+            )
+            cards += (
+                f'<div class="cs-challenge">'
+                f"<h4>{prob}</h4>{res_html}</div>"
+            )
+        challenges_html = f"""
+        <section class="section container reveal">
+          {_kicker("Challenges")}
+          <div class="cs-challenges">{cards}</div>
+        </section>
+        """
+
+    # ── Learnings ──
+    raw_learnings = list(case_study.get("learnings") or [])
+    learnings_html = ""
+    if raw_learnings:
+        items = "".join(
+            f'<div class="cs-learning"><span>{_s(lr)}</span></div>'
+            for lr in raw_learnings
+        )
+        learnings_html = f"""
+        <section class="section container reveal">
+          {_kicker("Learnings")}
+          <div class="cs-learnings">{items}</div>
+        </section>
+        """
+
+    # ── Media placeholder ──
+    media_html = """
+    <section class="section container reveal">
+      <div class="cs-media-placeholder">
+        <div class="public-kicker">Media</div>
+        <span>Project videos and screenshots coming soon.</span>
+      </div>
+    </section>
+    """
+
+    content = (
+        hero_html + problem_html + arch_html
+        + decisions_html + challenges_html + learnings_html + media_html
+    )
     return HTMLResponse(
         render_public_shell(
             page_title=_s(project["title"]),
@@ -1223,199 +1236,6 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
             body_class="public-page-project-detail",
             og_description=_s(proj_p.get("tagline") or project.get("summary") or ""),
         )
-    )
-
-
-# ──────────────────────────────────────────────
-# Rich Case Study Helpers (B5)
-# ──────────────────────────────────────────────
-
-
-def _render_rich_case_study(repo_history: dict) -> str:
-    """Render a full rich narrative case study from repo_history data."""
-    parts: list[str] = []
-
-    # Executive summary
-    exec_summary = repo_history.get("executive_summary", "")
-    if exec_summary:
-        parts.append(f"""
-        <section class="section container">
-          {_kicker("The Story")}
-          <div class="narrative-summary"><p>{_s(exec_summary)}</p></div>
-        </section>
-        """)
-
-    # Code metrics
-    metrics = repo_history.get("code_metrics") or {}
-    if metrics:
-        metric_items = "".join(
-            f'<div class="code-metrics__item">'
-            f'<div class="code-metrics__number">{_s(v)}</div>'
-            f'<div class="code-metrics__label">{_s(k)}</div></div>'
-            for k, v in list(metrics.items())[:6]
-        )
-        parts.append(f"""
-        <section class="section container reveal">
-          <div class="code-metrics">{metric_items}</div>
-        </section>
-        """)
-
-    # Timeline ASCII
-    timeline = repo_history.get("timeline_ascii", "")
-    if timeline:
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Timeline")}
-          <div class="timeline-block">{_s(timeline)}</div>
-        </section>
-        """)
-
-    # Phases
-    phases = repo_history.get("phases") or []
-    if phases:
-        phase_sections = "".join(_render_phase_section(phase) for phase in phases)
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Build Phases")}
-          {phase_sections}
-        </section>
-        """)
-
-    # Architecture diagrams
-    diagrams = repo_history.get("architecture_diagrams") or []
-    if diagrams:
-        diagram_blocks = "".join(_render_architecture_diagram(d) for d in diagrams)
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Architecture")}
-          {diagram_blocks}
-        </section>
-        """)
-
-    # Tech oscillations
-    oscillations = repo_history.get("tech_oscillations") or []
-    if oscillations:
-        osc_blocks = "".join(_render_tech_oscillation(o) for o in oscillations)
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Tech Oscillations")}
-          <h2 class="display-heading display-heading--sub">
-            What changed and why.</h2>
-          {osc_blocks}
-        </section>
-        """)
-
-    # Challenges
-    challenges = repo_history.get("challenges") or []
-    if challenges:
-        challenge_blocks = "".join(_render_challenge_narrative(c) for c in challenges)
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Challenges")}
-          {challenge_blocks}
-        </section>
-        """)
-
-    # Architectural decisions
-    decisions = repo_history.get("architectural_decisions") or []
-    if decisions:
-        decision_cards = "".join(
-            f'<div class="decision-card">'
-            f"<h4>{_s(d.get('title', ''))}</h4>"
-            f"<p>{_s(d.get('rationale', ''))}</p>"
-            f"</div>"
-            for d in decisions
-        )
-        parts.append(f"""
-        <section class="section container reveal">
-          {_kicker("Architectural Decisions")}
-          <div class="case-study__decisions">{decision_cards}</div>
-        </section>
-        """)
-
-    return "".join(parts)
-
-
-def _render_phase_section(phase: dict) -> str:
-    date_html = (
-        f'<div class="phase-section__date">{_s(phase.get("date_range", ""))}</div>'
-        if phase.get("date_range")
-        else ""
-    )
-    theme_html = (
-        f'<div class="phase-section__theme">{_s(phase.get("theme", ""))}</div>'
-        if phase.get("theme")
-        else ""
-    )
-    narrative = phase.get("narrative", "")
-    narrative_html = (
-        f'<div class="phase-section__narrative">{_s(narrative)}</div>' if narrative else ""
-    )
-    components = phase.get("key_components") or []
-    components_html = ""
-    if components:
-        pills = "".join(f'<span class="pill">{_s(c)}</span>' for c in components[:6])
-        components_html = f'<div class="phase-section__components">{pills}</div>'
-    pivot = phase.get("pivot", "")
-    pivot_html = ""
-    if pivot:
-        pivot_html = f'<div class="pivot-callout"><strong>Pivot:</strong> {_s(pivot)}</div>'
-    return (
-        f'<div class="phase-section">'
-        f"{date_html}"
-        f'<div class="phase-section__title">{_s(phase.get("title", ""))}</div>'
-        f"{theme_html}{narrative_html}{components_html}{pivot_html}"
-        f"</div>"
-    )
-
-
-def _render_architecture_diagram(diagram: dict) -> str:
-    title = diagram.get("title", "")
-    diag_text = diagram.get("diagram", "")
-    explanation = diagram.get("explanation", "")
-    diag_html = (
-        f'<div class="architecture-block__diagram">{_s(diag_text)}</div>' if diag_text else ""
-    )
-    expl_html = (
-        f'<div class="architecture-block__explanation">{_s(explanation)}</div>'
-        if explanation
-        else ""
-    )
-    return (
-        f'<div class="architecture-block">'
-        f'<div class="architecture-block__title">{_s(title)}</div>'
-        f"{diag_html}{expl_html}</div>"
-    )
-
-
-def _render_tech_oscillation(oscillation: dict) -> str:
-    return (
-        f'<div class="tech-oscillation">'
-        f'<div class="tech-oscillation__original">{_s(oscillation.get("original", ""))}</div>'
-        f'<div class="tech-oscillation__arrow">&rarr;</div>'
-        f'<div class="tech-oscillation__problem">{_s(oscillation.get("problem", ""))}</div>'
-        f'<div class="tech-oscillation__arrow">&rarr;</div>'
-        f'<div class="tech-oscillation__replacement">{_s(oscillation.get("replacement", ""))}</div>'
-        + (
-            f'<div class="tech-oscillation__context">{_s(oscillation.get("context", ""))}</div>'
-            if oscillation.get("context")
-            else ""
-        )
-        + "</div>"
-    )
-
-
-def _render_challenge_narrative(challenge: dict) -> str:
-    solution_html = ""
-    if challenge.get("solution"):
-        solution_html = (
-            f'<div class="challenge-narrative__solution">{_s(challenge.get("solution", ""))}</div>'
-        )
-    return (
-        f'<div class="challenge-narrative">'
-        f'<div class="challenge-narrative__title">{_s(challenge.get("title", ""))}</div>'
-        f'<div class="challenge-narrative__problem">{_s(challenge.get("problem", ""))}</div>'
-        f"{solution_html}</div>"
     )
 
 
