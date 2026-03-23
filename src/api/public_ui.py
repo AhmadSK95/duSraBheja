@@ -99,6 +99,7 @@ def render_public_shell(
         nav_html="".join(nav_html),
         content_html=content_html,
         footer_nav_html=_footer_nav(active_nav),
+        footer_admin_html='<a class="public-footer-admin" href="/admin">Dashboard</a>',
         footer_sig=html.escape(
             f"\u00a9 {settings.public_profile_name} \u00b7 Built with duSraBheja"
         ),

@@ -45,6 +45,8 @@ from src.services.profile_narrative import (
 from src.services.providers import model_for_role, provider_registry_summary
 from src.services.secrets import extract_secret_candidates, redact_secret_candidates
 
+PUBLIC_SNAPSHOT_SCHEMA_VERSION = 4
+
 PUBLIC_TOPIC_HINTS = (
     "ahmad",
     "moenu",
@@ -279,6 +281,8 @@ def _public_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
     snapshot = dict(payload or {})
     photos = dict(snapshot.get("photos") or {})
     current_arc = dict(snapshot.get("current_arc") or {})
+    if int(snapshot.get("schema_version") or 0) < PUBLIC_SNAPSHOT_SCHEMA_VERSION:
+        return True
     if not (snapshot.get("hero_summary") or snapshot.get("identity")):
         return True
     if not dict(photos.get("hero") or {}).get("url"):
@@ -288,6 +292,18 @@ def _public_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
     if not list(snapshot.get("proof_points") or []):
         return True
     if not list(snapshot.get("contact") or snapshot.get("contact_modes") or []):
+        return True
+    return False
+
+
+def _project_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
+    snapshot = dict(payload or {})
+    case_study = dict(snapshot.get("curated_case_study") or snapshot.get("case_study") or {})
+    if int(snapshot.get("schema_version") or 0) < PUBLIC_SNAPSHOT_SCHEMA_VERSION:
+        return True
+    if not dict(case_study.get("product_flow") or {}).get("steps"):
+        return True
+    if not dict(case_study.get("architecture_diagram") or {}).get("lanes"):
         return True
     return False
 
@@ -1335,6 +1351,10 @@ async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, 
     snapshot = result.scalar_one_or_none()
     if snapshot and _public_snapshot_incomplete(snapshot.payload or {}):
         return await refresh_public_snapshots(session, force=True)
+    project_rows = await session.execute(select(PublicProjectSnapshot))
+    projects = list(project_rows.scalars().all())
+    if projects and any(_project_snapshot_incomplete(project.payload or {}) for project in projects):
+        return await refresh_public_snapshots(session, force=True)
     if (
         snapshot
         and snapshot.refreshed_at
@@ -1421,6 +1441,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         if key:
             deduped_contacts[key] = item
     profile_payload = {
+        "schema_version": PUBLIC_SNAPSHOT_SCHEMA_VERSION,
         "name": narrative.get("name") or settings.public_profile_name,
         "short_name": narrative.get("preferred_name") or settings.public_profile_short_name,
         "location": narrative.get("location") or settings.public_profile_location,
@@ -1568,6 +1589,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         daily_update_window = dict(narrative_project.get("daily_update_window") or {})
         supporting_evidence = list(narrative_project.get("supporting_evidence") or [])
         payload = {
+            "schema_version": PUBLIC_SNAPSHOT_SCHEMA_VERSION,
             "slug": slug,
             "title": narrative_project.get("title") or (primary.title if primary else slug),
             "summary": narrative_project.get("summary")

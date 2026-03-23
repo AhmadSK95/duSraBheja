@@ -20,6 +20,7 @@ def test_dashboard_shell_renders_grouped_navigation_and_utility_links() -> None:
     assert "Command Center" in text
     assert "Brain Views" in text
     assert "Deep Ops" in text
+    assert "Automation" in text
     assert "/connect" in text
     assert "Public Surface Ops" in text
 

@@ -96,6 +96,7 @@ def test_flagship_projects_expose_curated_case_study_payloads() -> None:
         curated = dict(project.get("curated_case_study") or {})
         assert curated["problem"]
         assert curated["architecture_narrative"]
+        assert curated["product_flow"]["steps"]
         assert curated["architecture_diagram"]["lanes"]
         assert curated["learnings"]
         assert project["supporting_evidence"]
@@ -174,11 +175,12 @@ def test_public_overhaul_pages_render(client: TestClient, path: str, heading: st
     assert response.status_code == 200
     assert heading in response.text
     if path == "/brain":
-        assert "What this surface is actually good at." in response.text
-        assert "What the brain keeps warm" in response.text
+        assert "Keep it specific." in response.text
+        assert "Will not answer" in response.text
     if path == "/connect":
         assert "Choose the lane that matches the conversation." in response.text
         assert "What helps" in response.text
+        assert "This page is a router." in response.text
 
 
 @pytest.mark.parametrize(
@@ -192,6 +194,7 @@ def test_public_overhaul_pages_render(client: TestClient, path: str, heading: st
 )
 def test_flagship_case_study_routes_render(client: TestClient, slug: str) -> None:
     project = next(item for item in _sample_projects() if item["slug"] == slug)
+    flow_title = project["payload"]["curated_case_study"]["product_flow"]["title"]
 
     for path in (f"/projects/{slug}", f"/work/{slug}"):
         response = client.get(path)
@@ -200,9 +203,9 @@ def test_flagship_case_study_routes_render(client: TestClient, slug: str) -> Non
         assert "Role and Ownership" in response.text
         assert "Constraints" in response.text
         assert "Outcomes" in response.text
+        assert flow_title in response.text
         assert "Architecture narrative" in response.text
-        assert "Architecture diagram" in response.text
-        assert "System flow" in response.text
+        assert "System diagram" in response.text
         assert "Evidence Appendix" in response.text
 
 
@@ -215,6 +218,7 @@ def test_case_study_routes_do_not_render_raw_dump_markdown(client: TestClient) -
     assert "cap_discord" not in response.text
     assert "proc_queue" not in response.text
     assert "All approved photos" not in client.get("/about").text
+    assert "The diagram below is the system view, not the file tree." not in response.text
 
 
 def test_about_experience_cards_prefer_bullets_without_duplicate_summary(client: TestClient) -> None:
@@ -239,3 +243,10 @@ def test_public_health_reports_chat_and_refresh_state(client: TestClient) -> Non
     payload = response.json()
     assert payload["chat_enabled"] is True
     assert "last_public_refresh_at" in payload
+
+
+def test_public_shell_exposes_private_dashboard_entry(client: TestClient) -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/admin"' in response.text

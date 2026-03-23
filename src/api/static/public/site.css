@@ -253,6 +253,12 @@ body.public-body {
   margin-top: 1rem;
 }
 
+.hero-home__subcopy {
+  margin-top: 0.65rem;
+  font-size: 0.98rem;
+  color: var(--muted);
+}
+
 .hero-home__ctas {
   display: flex;
   gap: 0.75rem;
@@ -1132,14 +1138,25 @@ body.public-body {
 }
 
 .public-footer .container {
+  display: block;
+}
+
+.public-footer-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
 }
 
 .public-footer-nav {
   display: flex;
   gap: 1.5rem;
+}
+
+.public-footer-tail {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
 }
 
 .public-footer-link {
@@ -1150,6 +1167,17 @@ body.public-body {
 }
 
 .public-footer-link:hover { color: var(--ink); }
+
+.public-footer-admin {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--ink);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.03);
+}
 
 .public-footer-sig {
   font-family: var(--font-mono);
@@ -3579,6 +3607,23 @@ a.poster-card:visited {
   margin-bottom: 0.45rem;
 }
 
+.brain-mini-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.45rem;
+  color: var(--ink-light);
+}
+
+.brain-mini-list strong {
+  color: var(--ink);
+}
+
+.brain-mini-list span {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .brain-topic-grid--wide {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -3605,6 +3650,11 @@ a.poster-card:visited {
 
 .brain-chat-layout .chat-shell {
   min-height: 100%;
+}
+
+.faq-list--compact {
+  display: grid;
+  gap: 0.8rem;
 }
 
 .detail-sidebar__block p {
@@ -3666,6 +3716,93 @@ a.poster-card:visited {
   color: var(--muted);
 }
 
+.product-flow {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1.15rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(111, 208, 201, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.1), transparent 40%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    var(--panel);
+}
+
+.product-flow__header h3 {
+  margin: 0.35rem 0 0.45rem;
+}
+
+.product-flow__steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.9rem;
+}
+
+.product-flow-step {
+  position: relative;
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem 1rem 1rem 3.4rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.product-flow-step__count {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.product-flow-step h4,
+.product-flow-branch strong {
+  margin: 0;
+}
+
+.product-flow-step p,
+.product-flow-branch p {
+  margin: 0;
+  color: var(--ink-light);
+  line-height: 1.65;
+}
+
+.product-flow__branches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.product-flow-branch {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.product-flow__outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  padding-top: 0.2rem;
+  color: var(--ink-light);
+}
+
+.product-flow__outcome span {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 @media (max-width: 1100px) {
   .about-photo-story {
     grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -3689,6 +3826,10 @@ a.poster-card:visited {
   .connect-path-grid,
   .connect-brief-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .connect-brief-grid--split {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -3716,5 +3857,11 @@ a.poster-card:visited {
   .connect-path-grid,
   .connect-brief-grid {
     grid-template-columns: 1fr;
+  }
+
+  .public-footer-main,
+  .public-footer-tail {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

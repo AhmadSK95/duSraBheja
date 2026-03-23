@@ -74,6 +74,14 @@ def test_build_daily_digest_payload_uses_latest_daily_board(monkeypatch) -> None
     async def fake_list_improvement_opportunities(session, limit=20):
         return []
 
+    async def fake_get_public_surface_ops_status(session):
+        return {
+            "latest_public_refresh_summary": "Public surface refreshed cleanly.",
+            "last_public_refresh_at": "Mar 13, 2026 08:20 AM",
+            "latest_cycle": {"summary": "Cycle 4 tightened the public copy.", "cycle_number": 4},
+            "campaign": {"status": "active"},
+        }
+
     monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
     monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
     monkeypatch.setattr(digest_service.store, "get_note", fake_get_note)
@@ -82,6 +90,7 @@ def test_build_daily_digest_payload_uses_latest_daily_board(monkeypatch) -> None
     monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
     monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
     monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
+    monkeypatch.setattr(digest_service, "get_public_surface_ops_status", fake_get_public_surface_ops_status)
 
     payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
 
@@ -92,6 +101,7 @@ def test_build_daily_digest_payload_uses_latest_daily_board(monkeypatch) -> None
     assert payload["possible_tasks"][1]["title"] == "Verify the moderation dashboard"
     assert payload["priority_moves"][0]["lane"] == "project"
     assert payload["reminders_due_today"][0]["title"] == "Call Annie"
+    assert payload["automation_watch"][0]["title"] == "Public refresh"
 
 
 def test_build_daily_digest_payload_generates_missing_board(monkeypatch) -> None:
@@ -124,6 +134,14 @@ def test_build_daily_digest_payload_generates_missing_board(monkeypatch) -> None
     async def fake_list_improvement_opportunities(session, limit=20):
         return []
 
+    async def fake_get_public_surface_ops_status(session):
+        return {
+            "latest_public_refresh_summary": "Refresh complete.",
+            "last_public_refresh_at": "Mar 13, 2026 08:20 AM",
+            "latest_cycle": {"summary": "Cycle complete.", "cycle_number": 1},
+            "campaign": {"status": "active"},
+        }
+
     monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
     monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
     monkeypatch.setattr(digest_service.store, "list_reminders", fake_list_reminders)
@@ -132,6 +150,7 @@ def test_build_daily_digest_payload_generates_missing_board(monkeypatch) -> None
     monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
     monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
     monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
+    monkeypatch.setattr(digest_service, "get_public_surface_ops_status", fake_get_public_surface_ops_status)
 
     payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
 
@@ -212,6 +231,14 @@ def test_daily_digest_review_queue_filters_internal_cycle_reviews(monkeypatch) -
     async def fake_list_improvement_opportunities(session, limit=20):
         return []
 
+    async def fake_get_public_surface_ops_status(session):
+        return {
+            "latest_public_refresh_summary": "Refresh complete.",
+            "last_public_refresh_at": "Mar 13, 2026 08:20 AM",
+            "latest_cycle": {"summary": "Cycle complete.", "cycle_number": 1},
+            "campaign": {"status": "active"},
+        }
+
     monkeypatch.setattr(digest_service.store, "get_latest_board", fake_get_latest_board)
     monkeypatch.setattr(digest_service.store, "list_project_state_snapshots", fake_list_project_state_snapshots)
     monkeypatch.setattr(digest_service.store, "list_reminders", fake_list_reminders)
@@ -219,6 +246,7 @@ def test_daily_digest_review_queue_filters_internal_cycle_reviews(monkeypatch) -
     monkeypatch.setattr(digest_service, "recompute_project_states", fake_recompute_project_states)
     monkeypatch.setattr(digest_service, "list_public_surface_reviews", fake_list_public_surface_reviews)
     monkeypatch.setattr(digest_service, "list_improvement_opportunities", fake_list_improvement_opportunities)
+    monkeypatch.setattr(digest_service, "get_public_surface_ops_status", fake_get_public_surface_ops_status)
 
     payload = asyncio.run(digest_service.build_daily_digest_payload(object(), digest_date=date(2026, 3, 13)))
 

@@ -540,6 +540,33 @@ _FLAGSHIP_CASE_STUDY_OVERRIDES: dict[str, dict[str, Any]] = {
             "behind PostgreSQL, pgvector, and canonical notes. MCP, REST, and the public site all read from "
             "curated interfaces, not raw intake. That separation is what makes the public clone safe."
         ),
+        "product_flow": {
+            "title": "What duSraBheja does",
+            "caption": "Capture something once, turn it into durable memory, then let the right surface read the safe version of it.",
+            "steps": [
+                {
+                    "eyebrow": "Capture",
+                    "title": "Drop text, files, screenshots, or session context into the brain",
+                    "detail": "Discord and the collectors are the intake surfaces because they match the way I actually work.",
+                },
+                {
+                    "eyebrow": "Process",
+                    "title": "The worker extracts, classifies, and merges the evidence",
+                    "detail": "The bot stays thin while workers do extraction, embeddings, and librarian merge work asynchronously.",
+                },
+                {
+                    "eyebrow": "Store",
+                    "title": "The private brain promotes it into canonical notes and retrieval state",
+                    "detail": "Postgres, pgvector, and read models hold the durable memory layer behind the scenes.",
+                },
+                {
+                    "eyebrow": "Use",
+                    "title": "Agents, dashboards, and the public site read the right view of that memory",
+                    "detail": "MCP and the private dashboard can use richer context. The public site only reads curated public snapshots.",
+                },
+            ],
+            "outcome": "One capture path feeds private memory, agent workflows, and a public-safe story without raw dump leakage.",
+        },
         "architecture_diagram": {
             "title": "Capture to Memory to Public Surface",
             "caption": "The public site never reads raw intake. It reads curated snapshots published from the private brain.",
@@ -676,6 +703,43 @@ _FLAGSHIP_CASE_STUDY_OVERRIDES: dict[str, dict[str, Any]] = {
             "decides whether the request is simple enough for direct SQL or complex enough to go through an agentic reasoning loop. "
             "The LLM layer sits behind a provider abstraction with fallbacks so the product can keep answering even when one provider degrades."
         ),
+        "product_flow": {
+            "title": "What dataGenie does",
+            "caption": "A user brings tabular data, asks in plain English, and the product chooses the lightest reliable path to an answer.",
+            "steps": [
+                {
+                    "eyebrow": "Input",
+                    "title": "Upload a CSV and ask a question in plain English",
+                    "detail": "The product starts from raw tabular data and the exact question the user wants answered.",
+                },
+                {
+                    "eyebrow": "Prepare",
+                    "title": "Profile the dataset before reasoning",
+                    "detail": "Schema, nulls, and shape context are captured so the system knows what kind of data it is handling.",
+                },
+                {
+                    "eyebrow": "Route",
+                    "title": "Decide whether the question is simple or complex",
+                    "detail": "Easy asks should go straight to SQL; harder asks earn a multi-step reasoning loop.",
+                },
+                {
+                    "eyebrow": "Answer",
+                    "title": "Return the result with explanation and charts",
+                    "detail": "The user gets an answer that feels analytical rather than like a generic chat response.",
+                },
+            ],
+            "branches": [
+                {
+                    "title": "Simple path",
+                    "detail": "Direct SQL in DuckDB handles fast counts, filters, and aggregations.",
+                },
+                {
+                    "title": "Complex path",
+                    "detail": "A ReAct loop plans, queries, and synthesizes when the question needs more reasoning.",
+                },
+            ],
+            "outcome": "Non-technical users can interrogate real data without writing SQL and without forcing every question through an overbuilt agent loop.",
+        },
         "architecture_diagram": {
             "title": "Hybrid Query Routing",
             "caption": "Simple questions should move fast. Complex questions should decompose before they answer.",
@@ -796,6 +860,33 @@ _FLAGSHIP_CASE_STUDY_OVERRIDES: dict[str, dict[str, Any]] = {
             "for booking/payment/notification logic, and PostgreSQL for bookings, services, users, and operational state. Around that "
             "core, I iterated on notifications, Stripe payments, and deployment until the product matched how the shop actually runs."
         ),
+        "product_flow": {
+            "title": "What Balkan does",
+            "caption": "A customer books a service, the shop gets a reliable operational record, and the owner can run the business without extra manual cleanup.",
+            "steps": [
+                {
+                    "eyebrow": "Discover",
+                    "title": "The customer picks a service, barber, and time slot",
+                    "detail": "The public site needs to feel premium, but the flow still has to stay clear and quick.",
+                },
+                {
+                    "eyebrow": "Commit",
+                    "title": "The booking and payment are captured in one transaction path",
+                    "detail": "The product handles the operational moment where intent becomes a real appointment.",
+                },
+                {
+                    "eyebrow": "Coordinate",
+                    "title": "The system confirms, reminds, and keeps the admin side in sync",
+                    "detail": "Notifications and dashboard visibility reduce no-shows and owner confusion.",
+                },
+                {
+                    "eyebrow": "Operate",
+                    "title": "The owner manages appointments, staff, and business flow from the admin surface",
+                    "detail": "The admin dashboard is part of the product, not an afterthought behind the marketing site.",
+                },
+            ],
+            "outcome": "The site behaves like a real booking product for a live shop instead of a pretty brochure that creates more admin work later.",
+        },
         "architecture_diagram": {
             "title": "Booking Flow and Shop Operations",
             "caption": "The experience had to serve both the customer booking path and the owner/admin operating path.",
@@ -917,6 +1008,33 @@ _FLAGSHIP_CASE_STUDY_OVERRIDES: dict[str, dict[str, Any]] = {
             "for discovery and mobile use. The interesting architecture lives in deployment: a git-driven release workflow on a DigitalOcean droplet, "
             "Nginx routing, Certbot HTTPS, and a safe cutover from legacy domains to the final primary domain."
         ),
+        "product_flow": {
+            "title": "What Kaffa does",
+            "caption": "It gives a real café a reliable public front door: customers get the information they need fast, and the business gets a safe release path when the site changes.",
+            "steps": [
+                {
+                    "eyebrow": "Discover",
+                    "title": "A customer lands on the site to decide whether to visit",
+                    "detail": "The site needs to answer the practical questions first: brand, menu, hours, and location.",
+                },
+                {
+                    "eyebrow": "Decide",
+                    "title": "The customer gets enough clarity to choose the café quickly on mobile",
+                    "detail": "The interface is intentionally simple because the product goal is confidence, not novelty.",
+                },
+                {
+                    "eyebrow": "Update",
+                    "title": "New site changes are prepared as safe releases instead of risky live edits",
+                    "detail": "Deployment is part of the product because the business depends on the site staying up and current.",
+                },
+                {
+                    "eyebrow": "Deliver",
+                    "title": "Nginx, HTTPS, and atomic cutover keep the live domain stable",
+                    "detail": "The user sees a small site; the business gets a dependable public surface.",
+                },
+            ],
+            "outcome": "A small-business website that is easy to use, easy to trust, and safer to maintain than an ad hoc static site.",
+        },
         "architecture_diagram": {
             "title": "Static Site with Production Release Flow",
             "caption": "The product is lightweight, but the deployment path is engineered to be safe for a real business.",
@@ -1201,6 +1319,7 @@ def _curated_case_study_payload(
         "role_scope": project.role_scope,
         "constraints": list(project.constraints or []),
         "architecture_narrative": override.get("architecture_narrative") or "",
+        "product_flow": dict(override.get("product_flow") or {}),
         "architecture_diagram": dict(override.get("architecture_diagram") or {}),
         "key_decisions": decisions,
         "tradeoffs": tradeoffs,

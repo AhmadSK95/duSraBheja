@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from src.api.dashboard_ui import dashboard_url, render_dashboard_shell
 from src.api.schemas import ArtifactModerationRequest, BoardRegenerateRequest, EvalRunRequest
+from src.config import settings
 from src.constants import normalize_category
 from src.database import async_session
 from src.lib import store
@@ -36,7 +37,10 @@ from src.services.project_state import recompute_project_states
 from src.services.public_surface import (
     approve_product_improvement_wave,
     get_public_surface_ops_status,
+    list_improvement_cycle_runs,
     list_public_facts,
+    list_public_surface_refresh_runs,
+    list_public_surface_reviews,
     refresh_public_snapshots,
     run_product_improvement_cycle,
     run_public_surface_refresh,
@@ -120,7 +124,19 @@ def _strip_tags(value: str) -> str:
     return " ".join(re.sub(r"<[^>]+>", " ", value).split()).strip()
 
 
+def _daily_schedule(hour: int, minute: int) -> str:
+    return f"Daily · {hour:02d}:{minute:02d} {settings.digest_timezone}"
+
+
+def _hourly_schedule(interval_hours: int, *, offset_minute: int) -> str:
+    return f"Every {max(1, interval_hours)}h · :{offset_minute:02d} {settings.digest_timezone}"
+
+
 _DASHBOARD_PAGE_META: dict[str, dict[str, str]] = {
+    "Automation": {
+        "active_page": "automation",
+        "hero_kicker": "Autonomous Brain Ops",
+    },
     "Public Surface": {
         "active_page": "public-surface",
         "hero_kicker": "Autonomous Surface",
@@ -256,6 +272,7 @@ def _render_overview_page(
     ) or '<div class="atlas-empty">No open product watch items right now.</div>'
     utility_html = "".join(
         [
+            f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/automation", token)}"><span>Automation</span></a>',
             f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/public-surface", token)}"><span>Public Surface Ops</span></a>',
             f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/review", token)}"><span>Review Queue</span></a>',
             f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/boards", token)}"><span>Boards</span></a>',
@@ -320,6 +337,16 @@ def _render_overview_page(
           {_list_item('Latest refresh', str(ops.get('latest_public_refresh_summary') or 'No public refresh summary yet.'), meta=[str(ops.get('last_public_refresh_at') or 'n/a')])}
           {_list_item('Latest cycle', str((ops.get('latest_cycle') or {}).get('summary') or 'No product cycle has run yet.'), meta=[f"cycle {(ops.get('latest_cycle') or {}).get('cycle_number') or 'n/a'}"])}
           {_list_item('Wave gate', 'Wave approvals stay in chat. Discord review is reserved for actual content proposals.', meta=['policy'])}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-12">
+        <h2>Automation rhythm</h2>
+        <div class="atlas-list">
+          {_list_item('Daily digest', 'Morning brief, action memo, and review pressure update.', meta=[_daily_schedule(settings.digest_cron_hour, 0)])}
+          {_list_item('Public refresh', 'Refreshes the public surface and stages content proposals when the brain finds meaningful changes.', meta=[_daily_schedule(settings.public_surface_refresh_hour, settings.public_surface_refresh_minute)])}
+          {_list_item('Product cycle', 'Runs the next autonomous improvement cycle once the current wave is clear to continue.', meta=[_daily_schedule(settings.improvement_cycle_hour, settings.improvement_cycle_minute)])}
+          {_list_item('Knowledge refresh', 'Keeps project state, notes, and long-lived signals warm for retrieval.', meta=[_hourly_schedule(settings.knowledge_refresh_hours, offset_minute=15)])}
+          {_list_item('Continuous cognition', 'Revisits active context and nudges the brain toward next useful actions.', meta=[_hourly_schedule(settings.cognition_refresh_hours, offset_minute=35)])}
         </div>
       </section>
     </div>
@@ -1200,6 +1227,178 @@ async def dashboard_overview(token: str = Query(default="")) -> HTMLResponse:
         ops=ops,
         digest=digest,
         health=dict(atlas.get("health") or {}),
+    )
+
+
+@router.get("/dashboard/automation", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
+async def dashboard_automation(token: str = Query(default="")) -> HTMLResponse:
+    async with async_session() as session:
+        ops = await get_public_surface_ops_status(session)
+        digest = await build_daily_digest_payload(session, digest_date=date.today(), trigger="dashboard-automation")
+        refresh_runs = await list_public_surface_refresh_runs(session, limit=5)
+        cycle_runs = await list_improvement_cycle_runs(session, limit=5)
+        reviews = [
+            review
+            for review in await list_public_surface_reviews(session, status="staged", limit=12)
+            if review.subject_type not in {"campaign-wave", "internal-cycle"}
+        ]
+        daily_board = await store.get_latest_board(session, board_type="daily")
+        weekly_board = await store.get_latest_board(session, board_type="weekly")
+        today_digest = await store.get_digest_by_date(session, date.today())
+
+    schedule_items = [
+        ("Daily digest", _daily_schedule(settings.digest_cron_hour, 0), "Morning operating brief and action memo."),
+        (
+            "Public refresh",
+            _daily_schedule(settings.public_surface_refresh_hour, settings.public_surface_refresh_minute),
+            "Refreshes public snapshots and stages reviewable content proposals.",
+        ),
+        (
+            "Product cycle",
+            _daily_schedule(settings.improvement_cycle_hour, settings.improvement_cycle_minute),
+            "Runs the next autonomous improvement pass once the current wave is clear to proceed.",
+        ),
+        (
+            "Knowledge refresh",
+            _hourly_schedule(settings.knowledge_refresh_hours, offset_minute=15),
+            "Re-warms project state, canonical notes, and retrieval context.",
+        ),
+        (
+            "Continuous cognition",
+            _hourly_schedule(settings.cognition_refresh_hours, offset_minute=35),
+            "Revisits active context and surfaces next useful moves.",
+        ),
+        (
+            "Voice refresh",
+            _daily_schedule(settings.voice_refresh_hour, 45),
+            "Updates the voice layer the brain uses in summaries and output style.",
+        ),
+    ]
+    schedule_html = "".join(
+        _list_item(title, summary, meta=[schedule])
+        for title, schedule, summary in schedule_items
+    )
+    output_html = "".join(
+        [
+            _list_item(
+                "Daily board",
+                "Latest validated operating board.",
+                meta=[
+                    str(getattr(daily_board, "generated_for_date", "") or "missing"),
+                    str(getattr(daily_board, "status", "") or "missing"),
+                ],
+            ),
+            _list_item(
+                "Daily digest",
+                str((today_digest.payload or {}).get("summary") if today_digest else digest.get("summary") or "No digest yet."),
+                meta=[str(getattr(today_digest, "digest_date", "") or date.today().isoformat())],
+            ),
+            _list_item(
+                "Public refresh",
+                str(ops.get("latest_public_refresh_summary") or "No public refresh summary yet."),
+                meta=[str(ops.get("last_public_refresh_at") or "n/a"), str(ops.get("latest_public_run_status") or "unknown")],
+            ),
+            _list_item(
+                "Product cycle",
+                str((ops.get("latest_cycle") or {}).get("summary") or "No product cycle has completed yet."),
+                meta=[f"cycle {(ops.get('latest_cycle') or {}).get('cycle_number') or 'n/a'}", str((ops.get("campaign") or {}).get("status") or "missing")],
+            ),
+            _list_item(
+                "Weekly board",
+                "Longer-range planning board.",
+                meta=[
+                    str(getattr(weekly_board, "generated_for_date", "") or "missing"),
+                    str(getattr(weekly_board, "status", "") or "missing"),
+                ],
+            ),
+        ]
+    )
+    review_html = "".join(
+        _list_item(
+            review.subject_slug or "proposal",
+            review.diff_summary or "",
+            meta=[review.subject_type or "public-content", _fmt_dt(review.created_at)],
+        )
+        for review in reviews[:6]
+    ) or '<div class="atlas-empty">No staged content proposals waiting right now.</div>'
+    latest_runs_html = "".join(
+        _list_item(
+            run.trigger or "refresh",
+            run.summary or run.status,
+            meta=[run.status or "unknown", _fmt_dt(run.completed_at or run.started_at)],
+        )
+        for run in refresh_runs[:4]
+    ) or '<div class="atlas-empty">No refresh history yet.</div>'
+    cycle_history_html = "".join(
+        _list_item(
+            f"Cycle {run.cycle_number}",
+            run.summary or run.status,
+            meta=[run.status or "unknown", _fmt_dt(run.completed_at or run.started_at)],
+        )
+        for run in cycle_runs[:4]
+    ) or '<div class="atlas-empty">No cycle history yet.</div>'
+    action_html = "".join(
+        _list_item(
+            item.get("title") or "Priority move",
+            item.get("why") or "",
+            meta=[item.get("lane") or "brain"],
+        )
+        for item in list(digest.get("priority_moves") or [])[:6]
+    ) or '<div class="atlas-empty">No action memo items yet.</div>'
+
+    utility_html = "".join(
+        [
+            f'<a class="atlas-utility-chip atlas-utility-chip--warm" href="{dashboard_url("/dashboard/overview", token)}"><span>Command Center</span></a>',
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/public-surface", token)}"><span>Public Surface Ops</span></a>',
+            f'<a class="atlas-utility-chip" href="{dashboard_url("/dashboard/review", token)}"><span>Review Queue</span></a>',
+        ]
+    )
+    content_html = f"""
+    <div class="atlas-grid">
+      <section class="atlas-card atlas-card--span-12">
+        <div class="atlas-stat-row">
+          {_metric('Routines', str(len(schedule_items)))}
+          {_metric('Refresh Status', str(ops.get('latest_public_run_status') or 'unknown'))}
+          {_metric('Staged Reviews', str(len(reviews)))}
+          {_metric('Current Wave', str((ops.get('campaign') or {}).get('latest_wave') or 0))}
+        </div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Recurring routines</h2>
+        <div class="atlas-list">{schedule_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Latest outputs</h2>
+        <div class="atlas-list">{output_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Action memo</h2>
+        <div class="atlas-list">{action_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Content review lane</h2>
+        <p>This is the actual review queue for brain-generated public content proposals. Wave approvals stay in chat.</p>
+        <div class="atlas-list">{review_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Refresh history</h2>
+        <div class="atlas-list">{latest_runs_html}</div>
+      </section>
+      <section class="atlas-card atlas-card--span-6">
+        <h2>Cycle history</h2>
+        <div class="atlas-list">{cycle_history_html}</div>
+      </section>
+    </div>
+    """
+    return render_dashboard_shell(
+        title="Automation",
+        token=token,
+        active_page="automation",
+        hero_kicker="Autonomous Brain Ops",
+        hero_title="Automation Control",
+        hero_subtitle="The recurring routines, their latest outputs, and the review pressure they create for the rest of the system.",
+        content_html=content_html,
+        utility_html=utility_html,
     )
 
 

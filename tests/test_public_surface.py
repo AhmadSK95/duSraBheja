@@ -83,6 +83,25 @@ def test_public_seed_path_falls_back_to_container_mount(monkeypatch, tmp_path: P
     assert path == mounted
 
 
+def test_public_snapshot_contract_requires_current_schema_and_product_flow() -> None:
+    assert public_surface._public_snapshot_incomplete({"schema_version": 0}) is True
+    assert public_surface._project_snapshot_incomplete(
+        {
+            "schema_version": public_surface.PUBLIC_SNAPSHOT_SCHEMA_VERSION,
+            "curated_case_study": {"architecture_diagram": {"lanes": [{"label": "lane", "nodes": []}]}},
+        }
+    ) is True
+    assert public_surface._project_snapshot_incomplete(
+        {
+            "schema_version": public_surface.PUBLIC_SNAPSHOT_SCHEMA_VERSION,
+            "curated_case_study": {
+                "product_flow": {"steps": [{"title": "step"}]},
+                "architecture_diagram": {"lanes": [{"label": "lane", "nodes": []}]},
+            },
+        }
+    ) is False
+
+
 def test_admin_alias_redirects_to_dashboard_login() -> None:
     client = TestClient(app)
     response = client.get("/admin", follow_redirects=False)

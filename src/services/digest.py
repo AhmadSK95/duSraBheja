@@ -10,7 +10,11 @@ from src.lib import store
 from src.lib.time import human_datetime_text
 from src.services.boards import daily_board_window, generate_or_refresh_board
 from src.services.project_state import recompute_project_states
-from src.services.public_surface import list_improvement_opportunities, list_public_surface_reviews
+from src.services.public_surface import (
+    get_public_surface_ops_status,
+    list_improvement_opportunities,
+    list_public_surface_reviews,
+)
 
 
 def _shorten(value: str | None, limit: int = 220) -> str:
@@ -151,6 +155,33 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         for item in await list_improvement_opportunities(session, limit=6)
         if item.status == "open"
     ][:4]
+    ops = await get_public_surface_ops_status(session)
+    automation_watch = [
+        {
+            "title": "Public refresh",
+            "summary": _shorten(
+                str(ops.get("latest_public_refresh_summary") or "No public refresh summary yet."),
+                180,
+            ),
+            "meta": str(ops.get("last_public_refresh_at") or "n/a"),
+        },
+        {
+            "title": "Product cycle",
+            "summary": _shorten(
+                str((ops.get("latest_cycle") or {}).get("summary") or "No product cycle has completed yet."),
+                180,
+            ),
+            "meta": f"cycle {(ops.get('latest_cycle') or {}).get('cycle_number') or 'n/a'}",
+        },
+        {
+            "title": "Review pressure",
+            "summary": _shorten(
+                f"{len(review_queue)} public content proposal(s) currently staged for review.",
+                180,
+            ),
+            "meta": str((ops.get("campaign") or {}).get("status") or "unknown"),
+        },
+    ]
 
     summary = board_payload.get("story") or "Morning operating brief grounded in the latest daily board."
     return {
@@ -163,6 +194,7 @@ async def build_daily_digest_payload(session, *, digest_date: date, trigger: str
         "priority_moves": priority_moves,
         "review_queue": review_queue,
         "improvement_watchlist": watchlist,
+        "automation_watch": automation_watch,
         "reminders_due_today": reminders_due_today,
         "trigger": trigger,
     }

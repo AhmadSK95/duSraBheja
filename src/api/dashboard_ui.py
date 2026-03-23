@@ -16,6 +16,7 @@ NAV_GROUPS = [
         "Command Center",
         [
             ("overview", "Overview", "/dashboard/overview"),
+            ("automation", "Automation", "/dashboard/automation"),
             ("public-surface", "Public Surface", "/dashboard/public-surface"),
             ("health", "Health", "/dashboard/health"),
             ("review", "Review Queue", "/dashboard/review"),
