@@ -24,6 +24,9 @@ OG_DEFAULTS = {
     "og:type": "website",
     "og:site_name": settings.public_site_title,
 }
+DEFAULT_SOCIAL_IMAGE = "buildwithmoenu_og_linkedin.jpg"
+DEFAULT_SOCIAL_IMAGE_WIDTH = "1200"
+DEFAULT_SOCIAL_IMAGE_HEIGHT = "630"
 
 
 def _og_meta_tags(
@@ -37,12 +40,23 @@ def _og_meta_tags(
         **OG_DEFAULTS,
         "og:title": title,
         "og:description": description,
+        "twitter:card": "summary_large_image",
+        "twitter:title": title,
+        "twitter:description": description,
     }
     if url:
         tags["og:url"] = url
     if image:
         tags["og:image"] = image
-    lines = [f'<meta property="{k}" content="{html.escape(v)}" />' for k, v in tags.items() if v]
+        tags["og:image:width"] = DEFAULT_SOCIAL_IMAGE_WIDTH
+        tags["og:image:height"] = DEFAULT_SOCIAL_IMAGE_HEIGHT
+        tags["twitter:image"] = image
+    lines = []
+    for key, value in tags.items():
+        if not value:
+            continue
+        attr = "name" if key.startswith("twitter:") else "property"
+        lines.append(f'<meta {attr}="{key}" content="{html.escape(value)}" />')
     lines.append(f'<meta name="description" content="{html.escape(description)}" />')
     return "\n    ".join(lines)
 
@@ -80,7 +94,7 @@ def render_public_shell(
 
     base_url = (settings.public_base_url or "").rstrip("/")
     default_og_image = (
-        f"{base_url}/public-assets/profile/05_nov2025_waterfront_fullbody_portrait.jpg"
+        f"{base_url}/public-assets/profile/{DEFAULT_SOCIAL_IMAGE}"
         if base_url
         else ""
     )

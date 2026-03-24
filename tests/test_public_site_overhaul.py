@@ -250,3 +250,13 @@ def test_public_shell_exposes_private_dashboard_entry(client: TestClient) -> Non
 
     assert response.status_code == 200
     assert 'href="/admin"' in response.text
+
+
+def test_public_shell_uses_wide_social_card_image(client: TestClient) -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "buildwithmoenu_og_linkedin.jpg" in response.text
+    assert 'content="1200"' in response.text
+    assert 'content="630"' in response.text
+    assert 'twitter:card' in response.text
