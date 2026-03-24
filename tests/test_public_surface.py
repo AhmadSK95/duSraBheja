@@ -102,12 +102,70 @@ def test_public_snapshot_contract_requires_current_schema_and_product_flow() -> 
     ) is False
 
 
+def test_secondary_project_snapshots_do_not_require_flagship_case_study_fields() -> None:
+    assert public_surface._project_snapshot_incomplete(
+        {
+            "schema_version": public_surface.PUBLIC_SNAPSHOT_SCHEMA_VERSION,
+            "tier": "secondary",
+            "curated_case_study": {},
+        }
+    ) is False
+
+
 def test_admin_alias_redirects_to_dashboard_login() -> None:
     client = TestClient(app)
     response = client.get("/admin", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard/login"
+
+
+@pytest.mark.asyncio
+async def test_refresh_public_snapshots_if_stale_uses_session_cache() -> None:
+    class _FakeResult:
+        def __init__(self, one=None, many=None):
+            self._one = one
+            self._many = many or []
+
+        def scalar_one_or_none(self):
+            return self._one
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: list(self._many))
+
+    class _FakeSession:
+        def __init__(self):
+            self.info = {}
+            self.calls = 0
+
+        async def execute(self, _query):
+            self.calls += 1
+            if self.calls == 1:
+                return _FakeResult(
+                    one=SimpleNamespace(
+                        payload={
+                            "schema_version": public_surface.PUBLIC_SNAPSHOT_SCHEMA_VERSION,
+                            "hero_summary": "Builder.",
+                            "photos": {"hero": {"url": "/hero.jpg"}},
+                            "current_arc": {"summary": "Building."},
+                            "proof_points": ["proof"],
+                            "contact": [{"label": "email"}],
+                        },
+                        refreshed_at=public_surface._utcnow(),
+                    )
+                )
+            if self.calls == 2:
+                return _FakeResult(many=[])
+            raise AssertionError("refresh_public_snapshots_if_stale should only query once per session")
+
+    session = _FakeSession()
+
+    first = await public_surface.refresh_public_snapshots_if_stale(session)
+    second = await public_surface.refresh_public_snapshots_if_stale(session)
+
+    assert first["status"] == "fresh"
+    assert second["status"] == "fresh"
+    assert session.calls == 2
 
 
 @pytest.mark.asyncio

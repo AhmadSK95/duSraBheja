@@ -46,6 +46,7 @@ from src.services.providers import model_for_role, provider_registry_summary
 from src.services.secrets import extract_secret_candidates, redact_secret_candidates
 
 PUBLIC_SNAPSHOT_SCHEMA_VERSION = 4
+PUBLIC_SNAPSHOT_SESSION_CACHE_KEY = "public_surface_snapshot_status"
 
 PUBLIC_TOPIC_HINTS = (
     "ahmad",
@@ -298,9 +299,12 @@ def _public_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
 
 def _project_snapshot_incomplete(payload: dict[str, Any] | None) -> bool:
     snapshot = dict(payload or {})
+    tier = str(snapshot.get("tier") or "flagship").lower()
     case_study = dict(snapshot.get("curated_case_study") or snapshot.get("case_study") or {})
     if int(snapshot.get("schema_version") or 0) < PUBLIC_SNAPSHOT_SCHEMA_VERSION:
         return True
+    if tier != "flagship":
+        return False
     if not dict(case_study.get("product_flow") or {}).get("steps"):
         return True
     if not dict(case_study.get("architecture_diagram") or {}).get("lanes"):
@@ -1343,24 +1347,35 @@ async def _refresh_live_project_public_facts(session: AsyncSession) -> int:
 
 
 async def refresh_public_snapshots_if_stale(session: AsyncSession) -> dict[str, Any]:
+    cached = session.info.get(PUBLIC_SNAPSHOT_SESSION_CACHE_KEY)
+    if cached:
+        return dict(cached)
     result = await session.execute(
         select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main")
     )
     snapshot = result.scalar_one_or_none()
     if snapshot and _public_snapshot_incomplete(snapshot.payload or {}):
-        return await refresh_public_snapshots(session, force=True)
+        refreshed = await refresh_public_snapshots(session, force=True)
+        session.info[PUBLIC_SNAPSHOT_SESSION_CACHE_KEY] = dict(refreshed)
+        return refreshed
     project_rows = await session.execute(select(PublicProjectSnapshot))
     projects = list(project_rows.scalars().all())
     if projects and any(_project_snapshot_incomplete(project.payload or {}) for project in projects):
-        return await refresh_public_snapshots(session, force=True)
+        refreshed = await refresh_public_snapshots(session, force=True)
+        session.info[PUBLIC_SNAPSHOT_SESSION_CACHE_KEY] = dict(refreshed)
+        return refreshed
     if (
         snapshot
         and snapshot.refreshed_at
         and snapshot.refreshed_at
         >= _utcnow() - timedelta(minutes=settings.public_snapshot_refresh_minutes)
     ):
-        return {"status": "fresh", "refreshed_at": snapshot.refreshed_at.isoformat()}
-    return await refresh_public_snapshots(session, force=False)
+        fresh = {"status": "fresh", "refreshed_at": snapshot.refreshed_at.isoformat()}
+        session.info[PUBLIC_SNAPSHOT_SESSION_CACHE_KEY] = dict(fresh)
+        return fresh
+    refreshed = await refresh_public_snapshots(session, force=False)
+    session.info[PUBLIC_SNAPSHOT_SESSION_CACHE_KEY] = dict(refreshed)
+    return refreshed
 
 
 async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False) -> dict[str, Any]:
@@ -1729,7 +1744,7 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         ),
         payload={"provider_registry": provider_registry_summary()},
     )
-    return {
+    result = {
         "status": "refreshed",
         "facts": len(approved_facts),
         "projects": len(project_snapshots),
@@ -1747,6 +1762,8 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
             for review in staged_reviews
         ],
     }
+    session.info[PUBLIC_SNAPSHOT_SESSION_CACHE_KEY] = dict(result)
+    return result
 
 
 def _project_payloads_by_slug(projects: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
