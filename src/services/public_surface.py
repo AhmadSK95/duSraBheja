@@ -489,14 +489,12 @@ async def _upsert_public_faq_snapshot(
         for key, value in values.items():
             setattr(record, key, value)
         await session.commit()
-        await session.refresh(record)
         return record
     record = PublicFAQSnapshot(
         question_key=question_key, created_at=_utcnow(), metadata_={}, **values
     )
     session.add(record)
     await session.commit()
-    await session.refresh(record)
     return record
 
 

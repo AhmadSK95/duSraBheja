@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from src.database import async_session
 from src.services.public_surface import run_product_improvement_cycle, run_public_surface_refresh
-from src.worker.main import (
-    EVENT_IMPROVEMENT_CYCLE_COMPLETED,
-    EVENT_PUBLIC_SURFACE_REFRESH_COMPLETED,
-    EVENT_PUBLIC_SURFACE_REVIEW_CREATED,
-    publish_event,
-)
 
 DISCORD_REVIEW_SUBJECT_TYPES = {"home", "about", "brain", "work", "project", "public-content"}
 
 
 async def refresh_public_surface_task(ctx) -> dict:
+    from src.worker.main import (
+        EVENT_PUBLIC_SURFACE_REFRESH_COMPLETED,
+        EVENT_PUBLIC_SURFACE_REVIEW_CREATED,
+        publish_event,
+    )
+
     async with async_session() as session:
         result = await run_public_surface_refresh(session, trigger="scheduled", force=True)
     await publish_event(EVENT_PUBLIC_SURFACE_REFRESH_COMPLETED, result)
@@ -35,6 +35,12 @@ async def refresh_public_surface_task(ctx) -> dict:
 
 
 async def run_product_improvement_cycle_task(ctx) -> dict:
+    from src.worker.main import (
+        EVENT_IMPROVEMENT_CYCLE_COMPLETED,
+        EVENT_PUBLIC_SURFACE_REVIEW_CREATED,
+        publish_event,
+    )
+
     async with async_session() as session:
         result = await run_product_improvement_cycle(session, trigger="scheduled")
     await publish_event(EVENT_IMPROVEMENT_CYCLE_COMPLETED, result)
