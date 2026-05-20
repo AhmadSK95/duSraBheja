@@ -1,29 +1,32 @@
-"""OpenAI embeddings wrapper for text-embedding-3-small."""
+"""Embeddings wrapper — NVIDIA NIM (free-tier, OpenAI-compatible).
+
+Uses the same NIM async client as src.lib.llm. Default model is
+`nvidia/nv-embedqa-e5-v5` (1024-dim, retrieval-tuned).
+"""
+
+from __future__ import annotations
 
 from src.config import settings
-from src.lib.provider_clients import openai_client_for_role
-from src.services.providers import model_for_role
+from src.lib.llm import _client
 
 
 async def embed_text(text: str) -> list[float]:
-    """Embed a single text string. Returns 1536-dim vector."""
-    client = openai_client_for_role("embed")
-    response = await client.embeddings.create(
-        model=model_for_role("embed"),
-        input=text,
-        dimensions=settings.embedding_dimensions,
+    """Embed a single text string. Returns a `settings.embedding_dimensions`-dim vector."""
+    response = await _client().embeddings.create(
+        model=settings.embedding_model,
+        input=text or " ",
     )
-    return response.data[0].embedding
+    return list(response.data[0].embedding)
 
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Embed multiple texts in one API call. Max ~8000 tokens per batch."""
+    """Embed multiple texts in one API call."""
     if not texts:
         return []
-    client = openai_client_for_role("embed")
-    response = await client.embeddings.create(
-        model=model_for_role("embed"),
-        input=texts,
-        dimensions=settings.embedding_dimensions,
+    cleaned = [t or " " for t in texts]
+    response = await _client().embeddings.create(
+        model=settings.embedding_model,
+        input=cleaned,
     )
-    return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+    ordered = sorted(response.data, key=lambda item: item.index)
+    return [list(item.embedding) for item in ordered]

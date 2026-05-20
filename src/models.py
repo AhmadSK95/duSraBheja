@@ -134,7 +134,8 @@ class Chunk(Base):
     chunk_index = Column(Integer, nullable=False, default=0)
     content = Column(Text, nullable=False)
     token_count = Column(Integer, nullable=True)
-    embedding = Column(Vector(1536), nullable=True)
+    embedding = Column(Vector(1024), nullable=True)
+    embedding_model = Column(String, nullable=True)
     metadata_ = Column("metadata", JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
@@ -1392,3 +1393,20 @@ class PublicConversationTurn(Base):
         Index("idx_public_conversation_turns_conv", "conversation_id"),
         Index("idx_public_conversation_turns_created", "created_at"),
     )
+
+
+class DashboardViewState(Base):
+    __tablename__ = "dashboard_view_state"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username = Column(String, nullable=False, unique=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+class BrainCounter(Base):
+    __tablename__ = "brain_counters"
+
+    key = Column(String, primary_key=True)
+    value = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)

@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.lib import store
-from src.agents.storyteller import extract_story_event
 from src.services.identity import ensure_project_aliases, resolve_project
-from src.services.indexing import index_artifact
 from src.services.project_state import recompute_project_states
 from src.services.source_ingest import ingest_source_entries
 from src.services.story import publish_story_entry
@@ -346,16 +344,7 @@ async def _extract_story_fields(
             "tags": [],
         }
 
-    try:
-        return await extract_story_event(
-            session,
-            title=title,
-            body_markdown=body_markdown,
-            project_ref=project_ref,
-            actor_name=actor_name,
-        )
-    except Exception:
-        return {
+    return {
             "subject_type": "project" if project_ref else "topic",
             "subject_ref": project_ref,
             "entry_type": "conversation_session",

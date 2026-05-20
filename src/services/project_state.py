@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.agents.storyteller import assess_project_state
 from src.lib import store
 from src.lib.time import human_datetime_text
 from src.services.identity import is_low_signal_project_name
@@ -636,18 +635,6 @@ async def recompute_project_states(
     for metrics in metrics_by_project:
         assessment = _fallback_project_assessment(metrics)
         state_hints = _derive_recent_state_hints(metrics)
-        if str(metrics.project.id) in assess_ids:
-            try:
-                assessment = {
-                    **assessment,
-                    **(await assess_project_state(
-                        session,
-                        project_name=metrics.project.title,
-                        context_text=_build_project_assessment_context(metrics),
-                    )),
-                }
-            except Exception:
-                pass
         if state_hints["fresh_direct_signal"]:
             if state_hints["implemented"]:
                 assessment["implemented"] = state_hints["implemented"]
@@ -741,43 +728,22 @@ async def generate_case_study(
     use_opus: bool = False,
     trace_id: uuid.UUID | None = None,
 ) -> dict | None:
-    """Generate a case study for a project from brain evidence and store it in metadata."""
-    from src.agents.storyteller import synthesize_project_case_study
-
+    """Build a deterministic case study from project + snapshot data and store it."""
     project = await store.get_note(session, project_note_id)
     if not project:
         return None
 
     snapshot = await store.get_project_state_snapshot(session, project_note_id)
-    story_entries = await store.list_story_events(
-        session, subject_ref=project.title, limit=20
-    )
 
-    evidence_lines = [f"Project: {project.title}"]
-    if snapshot:
-        evidence_lines.extend([
-            f"Implemented: {snapshot.implemented or 'unknown'}",
-            f"Remaining: {snapshot.remaining or 'unknown'}",
-            f"Blockers: {', '.join(snapshot.blockers or []) or 'none'}",
-            f"Holes: {', '.join(snapshot.holes or []) or 'none'}",
-            f"What changed: {snapshot.what_changed or 'unknown'}",
-        ])
-    for entry in story_entries[:15]:
-        summary = entry.summary or entry.body_markdown or ""
-        evidence_lines.append(
-            f"[{entry.entry_type}] {entry.title}: {summary}"[:300]
-        )
+    case_study = {
+        "title": project.title,
+        "summary": (project.content or "").strip()[:600],
+        "implemented": getattr(snapshot, "implemented", None) if snapshot else None,
+        "remaining": getattr(snapshot, "remaining", None) if snapshot else None,
+        "blockers": list(getattr(snapshot, "blockers", None) or []) if snapshot else [],
+        "what_changed": getattr(snapshot, "what_changed", None) if snapshot else None,
+    }
 
-    evidence_text = "\n".join(evidence_lines)
-    case_study = await synthesize_project_case_study(
-        session,
-        project_name=project.title,
-        evidence_text=evidence_text,
-        use_opus=use_opus,
-        trace_id=trace_id,
-    )
-
-    # Store in snapshot metadata
     if snapshot:
         meta = dict(snapshot.metadata_ or {})
         meta["case_study"] = case_study

@@ -4,7 +4,7 @@ from mcp.server.fastmcp import FastMCP
 
 from src.database import async_session
 from src.lib.embeddings import embed_text
-from src.lib.store import vector_search, get_artifact, get_note
+from src.lib.store import get_artifact, get_note, vector_search
 
 
 def register(mcp: FastMCP):

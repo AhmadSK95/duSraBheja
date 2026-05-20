@@ -1,12 +1,11 @@
-"""Base agent — shared Claude call wrapper with audit logging."""
+"""Base agent — shared LLM call wrapper with audit logging."""
 
 import uuid
-from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.lib.audit import log_event
-from src.lib.claude import call_claude, call_claude_vision
+from src.lib.llm import call_llm, call_llm_vision
 
 
 async def agent_call(
@@ -28,7 +27,7 @@ async def agent_call(
     trace_id = trace_id or uuid.uuid4()
 
     try:
-        result = await call_claude(
+        result = await call_llm(
             prompt=prompt,
             system=system,
             model=model,
@@ -79,7 +78,7 @@ async def agent_vision_call(
     trace_id = trace_id or uuid.uuid4()
 
     try:
-        result = await call_claude_vision(
+        result = await call_llm_vision(
             image_data=image_data,
             media_type=media_type,
             prompt=prompt,

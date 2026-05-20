@@ -1,11 +1,10 @@
 """MIME type → extractor dispatcher."""
 
-from src.worker.extractors.text import extract_text
-from src.worker.extractors.pdf import extract_pdf
-from src.worker.extractors.image import extract_image
-from src.worker.extractors.audio import extract_audio
-from src.worker.extractors.excel import extract_excel
 from src.worker.extractors.docx import extract_docx
+from src.worker.extractors.excel import extract_excel
+from src.worker.extractors.image import extract_image
+from src.worker.extractors.pdf import extract_pdf
+from src.worker.extractors.text import extract_text
 
 MIME_MAP = {
     "text/plain": extract_text,
@@ -18,12 +17,6 @@ MIME_MAP = {
     "image/jpeg": extract_image,
     "image/gif": extract_image,
     "image/webp": extract_image,
-    "audio/mpeg": extract_audio,
-    "audio/mp4": extract_audio,
-    "audio/ogg": extract_audio,
-    "audio/wav": extract_audio,
-    "audio/webm": extract_audio,
-    "audio/x-m4a": extract_audio,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": extract_excel,
     "application/vnd.ms-excel": extract_excel,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": extract_docx,

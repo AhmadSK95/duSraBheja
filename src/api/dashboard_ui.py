@@ -13,39 +13,12 @@ SHELL_TEMPLATE = Template((TEMPLATE_DIR / "dashboard_shell.html").read_text(enco
 
 NAV_GROUPS = [
     (
-        "Command Center",
+        "Atlas",
         [
-            ("overview", "Overview", "/dashboard/overview"),
-            ("automation", "Automation", "/dashboard/automation"),
-            ("public-surface", "Public Surface", "/dashboard/public-surface"),
-            ("health", "Health", "/dashboard/health"),
-            ("review", "Review Queue", "/dashboard/review"),
-            ("boards", "Boards", "/dashboard/boards"),
-        ],
-    ),
-    (
-        "Brain Views",
-        [
+            ("home", "What's New", "/dashboard/"),
+            ("inbox", "Inbox", "/dashboard/inbox"),
             ("library", "Library", "/dashboard/library"),
-            ("cognitive-map", "Cognitive Map", "/dashboard/cognitive-map"),
-            ("story-river", "Story River", "/dashboard/story-river"),
-            ("timeline", "Timeline", "/dashboard/timeline"),
             ("projects", "Projects", "/dashboard/projects"),
-            ("expertise", "Expertise", "/dashboard/expertise"),
-            ("sources", "Sources", "/dashboard/sources"),
-            ("coverage", "Coverage", "/dashboard/coverage"),
-        ],
-    ),
-    (
-        "Deep Ops",
-        [
-            ("artifacts", "Artifacts", "/dashboard/artifacts"),
-            ("notes", "Notes", "/dashboard/notes"),
-            ("chrome-signals", "Chrome Signals", "/dashboard/chrome-signals"),
-            ("query-traces", "Query Traces", "/dashboard/query-traces"),
-            ("evals", "Evals", "/dashboard/evals"),
-            ("sync-health", "Sync Health", "/dashboard/sync-health"),
-            ("brain-os", "Brain OS", "/dashboard/brain-os"),
             ("public-facts", "Public Facts", "/dashboard/public-facts"),
         ],
     ),

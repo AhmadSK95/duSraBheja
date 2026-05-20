@@ -63,7 +63,6 @@ def test_ingest_source_entries_backfills_conversation_session_for_unchanged_sour
     async def fake_trigger_story_pulse(reason, metadata=None):
         touched["story_pulse"] = reason
 
-    import types
 
     source_ingest_module_sync = __import__("src.services.sync", fromlist=["_publish_sync_event"])
     monkeypatch.setattr(source_ingest_module_sync, "_publish_sync_event", fake_publish_sync_event)

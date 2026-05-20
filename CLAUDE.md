@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-duSraBheja — a Discord-based Brain OS. Captures text/images/audio/links from Discord `#inbox`, promotes raw evidence into canonical memory (evidence → observations → episodes → threads → entities → syntheses), exposes everything to agents via MCP/HTTP/CLI, and serves a public profile site from an approved-facts allowlist.
+duSraBheja — Ahmad's personal "open brain." Discord `#inbox` captures text/images/links, the worker pipeline classifies + stores + canonicalizes them, and "ask my brain" answers via RAG. A lean public site (about, projects, contact, chatbox) exposes only owner-approved facts. Runs entirely on NVIDIA NIM free-tier models.
 
 ## Commands
 
@@ -33,6 +33,11 @@ uv run pytest tests/test_classifier.py   # Single file
 uv run pytest -k "test_name"             # Single test by name
 uv run pytest -x                         # Stop on first failure
 
+# Embeddings — reindex chunks after switching the NIM embedding model
+uv run python scripts/reindex_embeddings.py                  # full reindex
+uv run python scripts/reindex_embeddings.py --batch 64        # tune batch
+uv run python scripts/reindex_embeddings.py --dry-run         # count only
+
 # Docker (production)
 docker compose up -d                     # Start all services
 docker compose logs -f brain-bot         # Follow logs
@@ -44,14 +49,14 @@ docker compose logs -f brain-bot         # Follow logs
 Discord #inbox → Bot (cogs/inbox.py) → ARQ Job Queue (Redis)
                                              ↓
                                         Worker Process
-                                        ├── Extract (PDF/image/audio/excel/link)
-                                        ├── Classify (Haiku 4.5 → structured JSON)
-                                        ├── Embed (OpenAI text-embedding-3-small, 1536d)
-                                        ├── Librarian merge (Sonnet 4.6 → canonical Note)
-                                        └── Route to Discord channel
+                                        ├── Extract (PDF/image/excel/docx/link)
+                                        ├── Classify (Llama 3.1 8B → structured JSON)
+                                        ├── Embed (NIM nv-embedqa-e5-v5, 1024d)
+                                        ├── Librarian merge (Llama 3.3 70B → canonical Note)
+                                        └── Cognition (every N=20 merges, on-demand)
 
-FastAPI Server (src/api/) → Private dashboard + public profile site + REST API
-MCP Server (FastMCP)      → Exposes brain tools to Claude Code / Codex
+FastAPI (src/api/) → 5-page Atlas dashboard + lean public site + REST API
+MCP Server (FastMCP) → Brain tools for Claude Code / Codex
 Collector (src/collector/) → Local file/browser/agent history ingestion
 ```
 
@@ -65,12 +70,14 @@ Collector (src/collector/) → Local file/browser/agent history ingestion
 
 ### Continuous Background Jobs
 
-- **Daily/Weekly Boards** — narrative summaries posted to Discord
-- **Daily Digest** — morning operating brief (cron at hour 8)
-- **Knowledge Refresh** — project state recomputation (every 6h)
-- **Cognition** — synthesis of observations (every 4h)
-- **Voice Refresh** — persona packet update (every 5h)
-- **Reminders** — fire due reminders
+Only two crons remain (`src/worker/main.py:WorkerSettings.cron_jobs`):
+
+- **Reminders** — fires due reminders (every minute)
+- **Public Surface Refresh** — rebuilds the public-fact snapshot once a day at `public_surface_refresh_hour`:`public_surface_refresh_minute`
+
+Cognition (synthesis across signals) is **not** on a cron. It triggers on-demand from `worker/tasks/librarian.py` after every `cognition_trigger_threshold` (default 20) successful merges, tracked via the `brain_counters` table.
+
+Boards, digest, voice/persona refresh, knowledge refresh, and the product-improvement cycle were removed in the lean redesign.
 
 ## Key Layers
 
@@ -85,6 +92,7 @@ Collector (src/collector/) → Local file/browser/agent history ingestion
 | **Bot Cogs** | `src/bot/cogs/` | inbox.py (capture), commands.py (slash commands), admin.py |
 | **Collector** | `src/collector/` | Local scanning — project files, git, Apple Notes, Chrome, life exports |
 | **Lib** | `src/lib/` | store.py (core data access, vector search), claude.py (LLM wrapper), audit.py, crypto.py, embeddings.py |
+| **Core modules** | `src/` (top level) | `models.py` (all SQLAlchemy ORM models), `database.py` (async engine + session factory), `config.py` (Pydantic Settings), `constants.py` (canonical categories, sources, query modes) |
 
 ## Code Patterns
 
@@ -125,9 +133,10 @@ def register(mcp: FastMCP):
 
 ### API Authentication
 
-- **Dashboard:** session-based auth (SessionMiddleware with secure cookies) + Bearer token fallback
+- **Dashboard:** session-based auth (SessionMiddleware with secure cookies) + Bearer token fallback. Five pages — `/dashboard/` (What's New since `DashboardViewState.last_seen_at`), `/dashboard/inbox`, `/dashboard/library`, `/dashboard/projects`, `/dashboard/public-facts` (approval queue). No on-render LLM calls; every page is one or two indexed SQL queries.
 - **Private API (`/api/*`):** Bearer token via `Authorization: Bearer {api_token}`
-- **Public routes (`/`, `/about`, `/projects`, `/open-brain`):** no auth, reads from `PublicFactRecord` allowlist only
+- **Public routes (`/`, `/about`, `/projects`, `/projects/{slug}`, `/contact`):** no auth, read from `PublicFactRecord` allowlist (only `approved=True` rows) and `PublicProjectSnapshot`. Architecture, repo links, file paths, hosting details are scrubbed before save.
+- **Public chatbot (`/api/public/chat`):** rate-limited per IP, optional Cloudflare Turnstile, `_hard_reject` blocks architecture/infra/secret probes via `PUBLIC_REJECT_HINTS`, output scrubbed for GitHub URLs / IPs / SSNs.
 
 ## Memory Model (Canonical Library)
 
@@ -144,22 +153,28 @@ All linked by provenance IDs (evidence_ids, thread_ids, entity_ids) for traceabi
 
 ## Public / Private Split
 
-- **Public** pages (`/`, `/about`, `/projects`, `/open-brain`) read from `PublicFactRecord` allowlist only
-- **Private** (`/dashboard/*`, `/api/*`, MCP/CLI) accesses the full brain
-- **Secrets** encrypted in vault with Discord OTP verification (`ProtectedContent`, `PermissionGrant`)
+- **Public** pages (`/`, `/about`, `/projects`, `/projects/{slug}`, `/contact`, `/api/public/chat`) read from `PublicFactRecord` (`approved=True` only) and `PublicProjectSnapshot`.
+- **Private** (`/dashboard/*`, `/api/*`, MCP/CLI) accesses the full brain.
+- **Secrets** encrypted in vault with Discord OTP verification (`ProtectedContent`, `PermissionGrant`).
 
 ## LLM Model Routing
 
-| Task | Model | Why |
-|------|-------|-----|
-| Classification | `claude-haiku-4-5-20251001` | Fast, cheap, structured JSON |
-| Clarification | `claude-sonnet-4-6` | Nuanced question generation |
-| Librarian (merge) | `claude-sonnet-4-6` | Intelligent info merging |
-| Storyteller (boards, digest, project state) | `claude-sonnet-4-6` | Narrative generation |
-| RAG synthesis | `claude-sonnet-4-6` / `claude-opus-4-6` | Best reasoning |
-| Image OCR | `claude-haiku-4-5-20251001` (vision) | Cheap, no Tesseract |
+All chat, vision, and embedding calls go to NVIDIA NIM (OpenAI-compatible) via `src/lib/llm.py` and `src/lib/embeddings.py`. The single async client lives in `nim_client()` / `_client()` and points at `settings.nvidia_base_url` (default `https://integrate.api.nvidia.com/v1`).
 
-Every LLM call must log model, tokens, cost to `AuditLog` via `src/lib/audit.py`.
+Per-role defaults (override in `providers.yaml`):
+
+| Role | Model | Why |
+|------|-------|-----|
+| Classifier | `meta/llama-3.1-8b-instruct` | Fast, cheap, structured JSON |
+| Vision (image OCR) | `meta/llama-3.2-11b-vision-instruct` | Cheapest vision on NIM free tier |
+| Librarian (merge) | `meta/llama-3.3-70b-instruct` | Strong general reasoning |
+| RAG / public chat | `meta/llama-3.3-70b-instruct` | One model kept warm for query path |
+| Reasoning heavy (rare) | `nvidia/llama-3.1-nemotron-70b-instruct` | Slightly better reasoning |
+| Embedding | `nvidia/nv-embedqa-e5-v5` (1024d) | Retrieval-tuned, on free tier |
+
+NIM free-tier has no per-token cost, so `cost_usd` is always `Decimal("0")` in AuditLog. Token counts and model names are still logged for quota visibility.
+
+Anthropic + OpenAI integrations were removed in the lean redesign. Audio transcription (Whisper) was dropped — voice notes captured in Discord are stored but not transcribed.
 
 ## Categories
 
@@ -167,14 +182,16 @@ task, project, people, idea, note, resource, reminder, daily_planner, weekly_pla
 
 ## Key Rules
 
-- **Async everywhere.** Use `async`/`await` throughout. Never mix sync and async in a call path. SQLAlchemy AsyncSession, httpx.AsyncClient, ARQ async jobs.
-- **Agents are prompt functions.** Each agent is a module with a function wrapping a Claude API call. Not separate processes.
+- **Async everywhere.** Use `async`/`await` throughout. SQLAlchemy AsyncSession, httpx.AsyncClient, ARQ async jobs.
+- **Agents are prompt functions.** Each agent is a module wrapping a NIM chat call via `src/lib/llm.py`. Not separate processes.
 - **Bot enqueues, worker processes.** The Discord bot never blocks on LLM calls or file parsing.
 - **Separate DB.** Use `brain_db` with `brain_user`. Never touch barbershop database.
 - **Structured classification.** Classifier returns strict JSON: `{category, confidence, capture_intent, entities[], tags[], priority, suggested_action, summary}`.
 - **Confidence threshold = 0.75.** Below → needs-review flow with max 2 clarification attempts.
-- **All config via pydantic-settings** (`src/config.py`). Secrets in `.env`, never in code.
-- **Cost tracking.** Every LLM call logs to audit_log with model, tokens, cost_usd.
+- **All config via pydantic-settings** (`src/config.py`). Secrets in `.env`, never in code. NVIDIA NIM key in `NVIDIA_API_KEY`.
+- **Public surface = approved facts only.** Daily refresh stages new `PublicFactRecord` rows with `approved=False`; owner approves via `/dashboard/public-facts`. The chatbot retrieves only `approved=True` rows.
+- **No architecture leaks publicly.** Tech stack chips, repo URLs, file paths, hostnames, IPs, deploy details — none of these reach `/projects`, `/about`, or chatbot output. Hardened in `_scrub_public_output`, `PUBLIC_REJECT_HINTS`, and `CLONE_SYSTEM_PROMPT_TEMPLATE`.
+- **Audit logging.** Every LLM call logs to audit_log with model + tokens. NIM is free-tier so `cost_usd` is always 0.
 
 ## Config
 

@@ -3,49 +3,57 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.api.schemas import (
-    AgentSessionStoryRequest,
     AgentSessionBootstrapRequest,
     AgentSessionCloseoutRequest,
+    AgentSessionStoryRequest,
     CollectorIngestRequest,
     ManualIngestRequest,
     ProjectManualStateRequest,
     ProjectStateRefreshRequest,
     QueryRequest,
+    ReminderCreateRequest,
     SecretChallengeRequest,
     SecretRevealRequest,
     SecretVerifyRequest,
-    ReminderCreateRequest,
     SyncReportRequest,
     SyncRunResponse,
 )
 from src.constants import PROJECT_MANUAL_STATES
 from src.database import async_session
+from src.lib import store
 from src.lib.auth import require_api_token, require_dashboard_token
 from src.lib.embeddings import embed_text
-from src.lib.time import human_datetime_payload
 from src.lib.store import get_note, vector_search
-from src.lib import store
-from src.services.brain_os import build_brain_self_description
-from src.services.digest import generate_or_refresh_digest
+from src.lib.time import human_datetime_payload
 from src.services.identity import resolve_project
-from src.services.library import build_final_stored_data, build_library_catalog, sync_canonical_library
+from src.services.library import (
+    build_final_stored_data,
+    build_library_catalog,
+    sync_canonical_library,
+)
+from src.services.project_state import recompute_project_states
 from src.services.query import query_brain
 from src.services.reminders import store_reminder
-from src.services.project_state import recompute_project_states
-from src.services.secrets import build_secret_inventory, request_secret_challenge, reveal_secret_once, verify_secret_challenge
+from src.services.secrets import (
+    build_secret_inventory,
+    request_secret_challenge,
+    reveal_secret_once,
+    verify_secret_challenge,
+)
 from src.services.session_bootstrap import (
     build_session_bootstrap,
     publish_curated_session_story,
     record_session_closeout,
 )
-from src.services.story import build_project_brief_payload, build_project_latest_closeout_payload, build_project_story_payload
-from src.services.voice import refresh_voice_profile
+from src.services.story import (
+    build_project_brief_payload,
+    build_project_latest_closeout_payload,
+    build_project_story_payload,
+)
 from src.services.sync import import_collector_payload, record_sync_report, run_github_sync
 from src.worker.main import enqueue_ingest
 
@@ -62,12 +70,6 @@ def _requester_identity(request: Request) -> str:
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
-
-
-@router.get("/brain/self", dependencies=[Depends(require_api_token)])
-async def brain_self_route() -> dict:
-    async with async_session() as session:
-        return await build_brain_self_description(session)
 
 
 @router.get("/library", dependencies=[Depends(require_api_token)])
@@ -483,20 +485,6 @@ async def list_due_reminders_route() -> list[dict]:
         }
         for item in reminders
     ]
-
-
-@router.post("/digest/morning", dependencies=[Depends(require_api_token)])
-async def generate_morning_digest_route() -> dict:
-    digest_date = datetime.now(ZoneInfo("America/New_York")).date()
-    async with async_session() as session:
-        payload = await generate_or_refresh_digest(session, digest_date=digest_date, trigger="manual")
-    return payload
-
-
-@router.post("/voice/refresh", dependencies=[Depends(require_api_token)])
-async def refresh_voice_profile_route() -> dict:
-    async with async_session() as session:
-        return await refresh_voice_profile(session)
 
 
 @router.post("/agent/session/bootstrap", dependencies=[Depends(require_api_token)])

@@ -3,8 +3,8 @@
 import logging
 import uuid
 
-from src.database import async_session
 from src.agents.clarifier import generate_question
+from src.database import async_session
 from src.lib.store import create_review, get_artifact
 
 log = logging.getLogger("brain-worker.clarify")
@@ -27,7 +27,6 @@ async def ask_clarification(ctx, artifact_id: str, classification_id: str):
             return
 
         # Get classification data for context
-        from src.lib.store import get_final_classification
 
         classification = await session.get(
             __import__("src.models", fromlist=["Classification"]).Classification,

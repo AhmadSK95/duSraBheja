@@ -3,12 +3,12 @@
 import logging
 import uuid
 
+from src.agents.classifier import classify, reclassify
 from src.config import settings
 from src.database import async_session
-from src.agents.classifier import classify, reclassify
 from src.lib.store import (
-    get_artifact,
     create_classification,
+    get_artifact,
 )
 
 log = logging.getLogger("brain-worker.classify")
@@ -88,10 +88,10 @@ async def classify_artifact(ctx, artifact_id: str, force_category: str | None = 
 
             # Route based on confidence
             from src.worker.main import (
-                get_pool,
                 JOB_ASK_CLARIFICATION,
                 JOB_GENERATE_EMBEDDINGS,
                 JOB_PROCESS_LIBRARIAN,
+                get_pool,
             )
 
             pool = await get_pool()
@@ -184,7 +184,7 @@ async def reclassify_artifact(ctx, artifact_id: str, user_answer: str):
             await session.commit()
 
             # Route to embed + librarian
-            from src.worker.main import get_pool, JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN
+            from src.worker.main import JOB_GENERATE_EMBEDDINGS, JOB_PROCESS_LIBRARIAN, get_pool
 
             pool = await get_pool()
             if result.get("validation_status", "validated") == "validated":

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.base import agent_call
 from src.config import settings
-from src.lib.llm_json import LLMJSONError, parse_json_object
 from src.lib import store
+from src.lib.llm_json import LLMJSONError, parse_json_object
 
 WEEKDAY_TO_INDEX = {
     "monday": 0,
@@ -126,7 +126,7 @@ async def parse_reminder_request(
             action="parse_reminder",
             prompt=text,
             system=REMINDER_SYSTEM_PROMPT,
-            model=settings.opus_model,
+            model=settings.reasoning_heavy_model,
             max_tokens=600,
             temperature=0.0,
             trace_id=trace_id,

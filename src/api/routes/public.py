@@ -19,7 +19,6 @@ from src.api.schemas import PublicChatRequest
 from src.config import settings
 from src.database import async_session
 from src.models import WebsiteSection
-from src.services.profile_narrative import public_asset_path
 from src.services.public_surface import (
     answer_public_chat,
     get_public_answer_policy,
@@ -34,6 +33,32 @@ from src.services.public_surface import (
 
 router = APIRouter(tags=["public"])
 log = logging.getLogger("brain.public")
+
+
+def _public_seed_candidates() -> list[Path]:
+    configured = Path(settings.public_profile_seed_path).expanduser()
+    mounted = Path("/public-seed")
+    repo_local = Path(__file__).resolve().parents[3] / "public-seed"
+    candidates: list[Path] = []
+    for candidate in (configured, mounted, repo_local):
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def public_asset_path(filename: str) -> Path | None:
+    """Resolve a public asset filename to an on-disk path under the seed dirs."""
+    safe_name = Path(filename).name
+    if not safe_name or safe_name != filename:
+        return None
+    for seed_dir in _public_seed_candidates():
+        if not seed_dir.exists():
+            continue
+        for subdir in ("website_photos", "demo_videos"):
+            candidate = seed_dir / subdir / safe_name
+            if candidate.exists():
+                return candidate
+    return None
 
 
 # ──────────────────────────────────────────────
@@ -1123,13 +1148,11 @@ _RESUME_SKILLS = [
     ),
     (
         "Data",
-        ["PostgreSQL", "pgvector", "DuckDB", "Redis",
-         "ARQ", "Elasticsearch", "SQLAlchemy", "Alembic"],
+        ["Databases", "Vector search", "Caches", "Queues", "SQL"],
     ),
     (
         "Tools",
-        ["Git", "GitHub", "Discord.py", "Ollama",
-         "npm", "pip", "Linux/macOS"],
+        ["Version control", "Containers", "Linux/macOS"],
     ),
 ]
 

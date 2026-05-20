@@ -1,4 +1,9 @@
-"""Provider registry and model-role bindings."""
+"""Provider registry and model-role bindings.
+
+The brain runs entirely on NVIDIA NIM free-tier endpoints (chat, vision, embeddings)
+through an OpenAI-compatible client. Roles map to per-task model defaults that can
+be overridden in providers.yaml.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from src.config import settings
 
 class ProviderSpec(BaseModel):
     name: str
-    kind: str = Field(description="anthropic, openai, openai_compatible, or ollama")
+    kind: str = Field(description="nvidia_nim or openai_compatible")
     api_key_env: str | None = None
     base_url: str | None = None
     models: dict[str, str] = Field(default_factory=dict)
@@ -46,48 +51,31 @@ def _providers_config_path() -> Path:
 
 
 def _default_registry() -> ProviderRegistry:
-    providers = [
-        ProviderSpec(
-            name="anthropic",
-            kind="anthropic",
-            api_key_env="ANTHROPIC_API_KEY",
-            models={
-                "classifier": settings.classifier_model,
-                "reasoning": settings.sonnet_model,
-                "merge": settings.sonnet_model,
-                "public_chat": settings.sonnet_model,
-            },
-        ),
-        ProviderSpec(
-            name="openai",
-            kind="openai",
-            api_key_env="OPENAI_API_KEY",
-            base_url=settings.default_openai_base_url or None,
-            models={
-                "embed": settings.embedding_model,
-                "transcribe": settings.whisper_model,
-                "web_research": settings.openai_web_search_model,
-            },
-        ),
-    ]
+    nim = ProviderSpec(
+        name="nvidia_nim",
+        kind="nvidia_nim",
+        api_key_env="NVIDIA_API_KEY",
+        base_url=settings.nvidia_base_url,
+        models={
+            "classifier": settings.classifier_model,
+            "reasoning": settings.reasoning_model,
+            "merge": settings.merge_model,
+            "public_chat": settings.public_chat_model,
+            "reasoning_heavy": settings.reasoning_heavy_model,
+            "vision": settings.vision_model,
+            "embed": settings.embedding_model,
+        },
+    )
     roles = [
-        ModelRoleBinding(role="classifier", provider="anthropic", model=settings.classifier_model),
-        ModelRoleBinding(role="reasoning", provider="anthropic", model=settings.sonnet_model),
-        ModelRoleBinding(role="merge", provider="anthropic", model=settings.sonnet_model),
-        ModelRoleBinding(role="embed", provider="openai", model=settings.embedding_model),
-        ModelRoleBinding(role="transcribe", provider="openai", model=settings.whisper_model),
-        ModelRoleBinding(role="public_chat", provider="anthropic", model=settings.sonnet_model, visibility="public"),
-        ModelRoleBinding(role="web_research", provider="openai", model=settings.openai_web_search_model),
+        ModelRoleBinding(role="classifier", provider="nvidia_nim", model=settings.classifier_model),
+        ModelRoleBinding(role="reasoning", provider="nvidia_nim", model=settings.reasoning_model),
+        ModelRoleBinding(role="merge", provider="nvidia_nim", model=settings.merge_model),
+        ModelRoleBinding(role="public_chat", provider="nvidia_nim", model=settings.public_chat_model, visibility="public"),
+        ModelRoleBinding(role="reasoning_heavy", provider="nvidia_nim", model=settings.reasoning_heavy_model),
+        ModelRoleBinding(role="vision", provider="nvidia_nim", model=settings.vision_model),
+        ModelRoleBinding(role="embed", provider="nvidia_nim", model=settings.embedding_model),
     ]
-    if settings.opus_model:
-        roles.append(
-            ModelRoleBinding(
-                role="reasoning_heavy",
-                provider="anthropic",
-                model=settings.opus_model,
-            )
-        )
-    return ProviderRegistry(providers=providers, roles=roles)
+    return ProviderRegistry(providers=[nim], roles=roles)
 
 
 def _registry_from_file(path: Path) -> ProviderRegistry | None:
@@ -115,8 +103,7 @@ def binding_for_role(role: str) -> ModelRoleBinding:
     binding = registry.role_map().get(role)
     if binding:
         return binding
-    fallback_role = "reasoning" if role not in {"embed", "transcribe", "web_research"} else role
-    fallback = registry.role_map().get(fallback_role)
+    fallback = registry.role_map().get("reasoning")
     if fallback:
         return fallback
     raise KeyError(f"Model role binding not found for role '{role}'")

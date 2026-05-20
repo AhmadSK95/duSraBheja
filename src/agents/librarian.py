@@ -79,7 +79,7 @@ Create a new canonical note for this."""
         action="merge" if existing_note_content else "create",
         prompt=prompt,
         system=SYSTEM_PROMPT,
-        model=settings.sonnet_model,
+        model=settings.merge_model,
         max_tokens=4096,
         temperature=0.1,
         trace_id=trace_id,

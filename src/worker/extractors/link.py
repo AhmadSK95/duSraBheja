@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 
-from src.worker.extractors.audio import extract_audio
 from src.worker.extractors.docx import extract_docx
 from src.worker.extractors.excel import extract_excel
 from src.worker.extractors.pdf import extract_pdf
@@ -51,7 +50,7 @@ def _extract_html_metadata(html: str, url: str) -> str:
     description = unescape(desc_match.group(1).strip()) if desc_match else ""
     body = _strip_html(html)[:MAX_LINK_TEXT_CHARS]
 
-    sections = [f"# Linked Resource", f"URL: {url}", f"Title: {title}"]
+    sections = ["# Linked Resource", f"URL: {url}", f"Title: {title}"]
     if description:
         sections.extend(["", "Description:", description])
     if body:
@@ -101,7 +100,7 @@ async def extract_url(url: str) -> str:
         elif "excel" in content_type or "spreadsheet" in content_type:
             extracted = await extract_excel(str(temp_path))
         elif content_type.startswith("audio/"):
-            extracted = await extract_audio(str(temp_path))
+            extracted = "[audio attachment — transcription disabled]"
         else:
             extracted = await extract_text(str(temp_path))
     finally:

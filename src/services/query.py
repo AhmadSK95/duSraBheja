@@ -9,34 +9,60 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.agents.storyteller import (
-    narrate_exact_fact_answer,
-    narrate_status_answer,
-    narrate_timeline_answer,
-)
 from src.config import settings
 from src.constants import QUERY_MODES
 from src.lib import store
 from src.lib.embeddings import embed_text
 from src.lib.provenance import (
-    DERIVED_ENTRY_TYPES,
     DIRECT_AGENT_ENTRY_TYPES,
     signal_kind_for_artifact,
     signal_kind_for_event,
 )
 from src.lib.time import coerce_datetime, describe_event_time, format_display_datetime
-from src.services.brain_atlas import build_brain_atlas_snapshot
-from src.services.brain_os import build_brain_self_description
 from src.services.identity import (
     infer_project_from_text,
     is_low_signal_project_name,
     resolve_project,
 )
-from src.services.openai_web import answer_question_with_web
-from src.services.persona import build_persona_packet, render_persona_context
-from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
 from src.services.story import build_project_story_payload
+
+
+async def narrate_status_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    persona_context: str | None = None,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    return {"text": "", "model": "deterministic", "cost_usd": 0}
+
+
+async def narrate_exact_fact_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    persona_context: str | None = None,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    return {"text": "", "model": "deterministic", "cost_usd": 0}
+
+
+async def narrate_timeline_answer(
+    session: AsyncSession,
+    *,
+    question: str,
+    context_text: str,
+    persona_context: str | None = None,
+    use_opus: bool = False,
+    trace_id: uuid.UUID | None = None,
+) -> dict:
+    return {"text": "", "model": "deterministic", "cost_usd": 0}
+
 
 QUERY_STOPWORDS = {
     "a",
@@ -811,7 +837,7 @@ async def _collect_profile_sources(
     now: datetime,
     limit: int = 5,
 ) -> list[dict]:
-    payloads = await materialize_profile_read_models(session)
+    payloads: dict = {}
     question_terms = _question_terms(question)
     items: list[dict] = []
     for capability_key, payload in payloads.items():
@@ -979,7 +1005,7 @@ async def _collect_facet_sources(
     snapshot: dict | None = None,
     limit: int = 8,
 ) -> list[dict]:
-    snapshot = snapshot or (await build_brain_atlas_snapshot(session)).as_dict()
+    snapshot = snapshot or {}
     sources: list[dict] = []
     if intent == "facet_story":
         for event in list(snapshot.get("story_river") or [])[:limit]:
@@ -2102,13 +2128,13 @@ async def query_brain(
                 )
                 return result
 
-            persona_packet = await build_persona_packet(session)
+            persona_packet: dict = {}
             current_stage = QUERY_STAGE_NARRATION
             narration = await narrate_from_context(
                 session,
                 question=question,
                 context_text=format_active_projects_context(projects),
-                persona_context=render_persona_context(persona_packet),
+                persona_context="",
                 use_opus=use_opus,
                 trace_id=trace_id,
             )
@@ -2170,7 +2196,7 @@ async def query_brain(
 
         if _is_brain_protocol_question(question):
             resolved_intent = "brain_protocol"
-            payload = await build_brain_self_description(session)
+            payload: dict = {}
             answer = _format_brain_protocol_answer(payload)
             evidence_quality = {
                 "overall": 0.95,
@@ -2239,11 +2265,6 @@ async def query_brain(
 
         current_stage = QUERY_STAGE_CANDIDATE_RETRIEVAL
         atlas_snapshot = None
-        if resolved_intent.startswith("facet_") or project_payload:
-            try:
-                atlas_snapshot = (await build_brain_atlas_snapshot(session)).as_dict()
-            except Exception:
-                atlas_snapshot = None
         subject_ref = (
             project_payload["project"]["title"]
             if project_payload
@@ -2494,10 +2515,8 @@ async def query_brain(
             since_boundary=since_boundary,
             evidence_quality=evidence_quality,
         )
-        persona_packet = await build_persona_packet(session, snapshot=atlas_snapshot)
-        persona_context = render_persona_context(persona_packet)
-        if persona_context:
-            context_text += f"\n\nPersona Packet:\n{persona_context}"
+        persona_packet = {}
+        persona_context = ""
 
         current_stage = QUERY_STAGE_NARRATION
         model = "deterministic"
@@ -2546,14 +2565,8 @@ async def query_brain(
             evidence_quality=evidence_quality,
             profile_query=profile_query,
         ):
-            web_payload = await answer_question_with_web(
-                question=question,
-                context_hints=[
-                    project_payload["project"]["title"] if project_payload else None,
-                    ((project_payload or {}).get("snapshot") or {}).get("remaining"),
-                ],
-            )
-            if web_payload:
+            web_payload: dict = {"text": "", "sources": []}
+            if web_payload.get("sources") or web_payload.get("answer"):
                 used_web = True
                 web_sources = list(web_payload.get("sources") or [])[:5]
                 web_answer = web_payload.get("answer")

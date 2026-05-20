@@ -47,7 +47,7 @@ Generate ONE short clarification question to help classify this correctly."""
         action="generate_question",
         prompt=prompt,
         system=SYSTEM_PROMPT,
-        model=settings.sonnet_model,
+        model=settings.reasoning_model,
         max_tokens=256,
         temperature=0.3,
         trace_id=trace_id,

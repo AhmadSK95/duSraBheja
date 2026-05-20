@@ -11,7 +11,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.api.routes import router
-from src.lib.auth import dashboard_cookie_secure, dashboard_request_is_authenticated, dashboard_session_secret
+from src.lib.auth import (
+    dashboard_cookie_secure,
+    dashboard_request_is_authenticated,
+    dashboard_session_secret,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 

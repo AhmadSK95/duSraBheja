@@ -3,7 +3,10 @@
 import logging
 import uuid
 
+from sqlalchemy import text
+
 from src.agents.librarian import process_artifact
+from src.config import settings
 from src.constants import MERGEABLE_CATEGORIES, normalize_category
 from src.database import async_session
 from src.lib.store import (
@@ -21,7 +24,43 @@ from src.models import Classification
 from src.services.library import promote_single_artifact
 from src.services.planner import build_planner_payload
 from src.services.reminders import store_reminder
-from src.worker.main import EVENT_ARTIFACT_PROCESSED, publish_event
+from src.worker.main import (
+    EVENT_ARTIFACT_PROCESSED,
+    JOB_RUN_CONTINUOUS_COGNITION,
+    get_pool,
+    publish_event,
+)
+
+COGNITION_COUNTER_KEY = "librarian_since_last_cognition"
+
+
+async def _bump_cognition_counter_and_maybe_trigger(session) -> None:
+    """Increment the librarian-merge counter. When it crosses the configured
+    threshold, reset it to 0 and enqueue an on-demand cognition run."""
+    threshold = max(1, settings.cognition_trigger_threshold)
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO brain_counters (key, value, updated_at)
+            VALUES (:key, 1, now())
+            ON CONFLICT (key) DO UPDATE
+              SET value = brain_counters.value + 1,
+                  updated_at = now()
+            RETURNING value
+            """
+        ),
+        {"key": COGNITION_COUNTER_KEY},
+    )
+    current = result.scalar_one()
+    if current >= threshold:
+        await session.execute(
+            text("UPDATE brain_counters SET value = 0, updated_at = now() WHERE key = :key"),
+            {"key": COGNITION_COUNTER_KEY},
+        )
+        await session.commit()
+        pool = await get_pool()
+        await pool.enqueue_job(JOB_RUN_CONTINUOUS_COGNITION)
+        log.info("Cognition triggered: %s merges since last run (threshold=%s)", current, threshold)
 
 log = logging.getLogger("brain-worker.librarian")
 
@@ -164,6 +203,11 @@ async def process_librarian(ctx, artifact_id: str, classification_id: str):
                     ),
                 },
             )
+
+            try:
+                await _bump_cognition_counter_and_maybe_trigger(session)
+            except Exception:
+                log.warning("Failed to bump cognition counter (non-fatal)", exc_info=True)
         except Exception as exc:
             from src.worker.main import EVENT_ARTIFACT_FAILED
 

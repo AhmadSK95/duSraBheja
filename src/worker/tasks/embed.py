@@ -6,7 +6,7 @@ import uuid
 from src.config import settings
 from src.database import async_session
 from src.lib.embeddings import embed_batch
-from src.lib.store import get_artifact, create_chunks
+from src.lib.store import create_chunks, get_artifact
 
 log = logging.getLogger("brain-worker.embed")
 

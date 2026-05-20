@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.lib import store
 from src.lib.provenance import DERIVED_ENTRY_TYPES, signal_kind_for_artifact, signal_kind_for_event
 from src.lib.time import describe_event_time, format_display_datetime
-from src.models import Artifact, Board, ConversationSession, JournalEntry, Note, SourceItem
+from src.models import Artifact, Board, ConversationSession, Note, SourceItem
 
 LOW_SIGNAL_ENTRY_TYPES = {
     "context_dump",

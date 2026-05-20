@@ -2,6 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def capture_thought(

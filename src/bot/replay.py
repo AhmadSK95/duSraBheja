@@ -10,7 +10,11 @@ from discord.ext import commands
 
 from src.config import settings
 from src.database import async_session
-from src.lib.store import get_artifact_by_discord_id, get_latest_classification, reset_artifact_processing
+from src.lib.store import (
+    get_artifact_by_discord_id,
+    get_latest_classification,
+    reset_artifact_processing,
+)
 from src.worker.main import enqueue_classify, enqueue_ingest
 
 log = logging.getLogger("brain-bot.replay")

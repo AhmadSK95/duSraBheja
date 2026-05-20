@@ -29,18 +29,17 @@ class Settings(BaseSettings):
         "Write like Ahmad: direct, thoughtful, low-fluff, builder-operator energy."
     )
 
-    # Anthropic (Claude)
-    anthropic_api_key: str = ""
-    classifier_model: str = "claude-haiku-4-5-20251001"
-    sonnet_model: str = "claude-sonnet-4-6"
-    opus_model: str = "claude-opus-4-6"
-
-    # OpenAI (embeddings + Whisper)
-    openai_api_key: str = ""
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
-    whisper_model: str = "whisper-1"
-    openai_web_search_model: str = "gpt-4.1"
+    # NVIDIA NIM (OpenAI-compatible — covers chat, vision, embeddings)
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+    classifier_model: str = "meta/llama-3.1-8b-instruct"
+    reasoning_model: str = "meta/llama-3.3-70b-instruct"
+    merge_model: str = "meta/llama-3.3-70b-instruct"
+    public_chat_model: str = "meta/llama-3.3-70b-instruct"
+    reasoning_heavy_model: str = "nvidia/llama-3.1-nemotron-70b-instruct"
+    vision_model: str = "meta/llama-3.2-11b-vision-instruct"
+    embedding_model: str = "nvidia/nv-embedqa-e5-v5"
+    embedding_dimensions: int = 1024
 
     # Classification
     confidence_threshold: float = 0.75
@@ -141,9 +140,10 @@ class Settings(BaseSettings):
 
     # Provider topology
     providers_config_path: str = "providers.yaml"
-    default_reasoning_provider: str = "anthropic"
-    default_openai_base_url: str = ""
-    default_local_openai_base_url: str = ""
+    default_reasoning_provider: str = "nvidia_nim"
+
+    # Cognition trigger — fire JOB_RUN_CONTINUOUS_COGNITION after this many librarian merges
+    cognition_trigger_threshold: int = 20
 
     # GitHub
     github_api_token: str = ""

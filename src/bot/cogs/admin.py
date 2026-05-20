@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from src.bot.cleanup import collect_target_channels, purge_bot_messages
 from src.bot.replay import replay_discord_history
 from src.database import async_session
-from src.models import Artifact, Classification, Note, AuditLog, ReviewQueue
+from src.models import Artifact, AuditLog, Classification, Note, ReviewQueue
 
 log = logging.getLogger("brain-bot.admin")
 

@@ -5,7 +5,9 @@ Requires DISCORD_TOKEN and DISCORD_GUILD_ID in .env
 """
 
 import asyncio
+
 import discord
+
 from src.config import settings
 
 CHANNELS = [
@@ -37,7 +39,7 @@ async def main():
         category = discord.utils.get(guild.categories, name="BRAIN")
         if not category:
             category = await guild.create_category("BRAIN")
-            print(f"Created category: BRAIN")
+            print("Created category: BRAIN")
 
         for name, topic in CHANNELS:
             if name in existing:

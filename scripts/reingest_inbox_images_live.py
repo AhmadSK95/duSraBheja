@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+import src.worker.tasks.librarian as librarian_task
 from src.agents.classifier import classify
 from src.config import settings
 from src.database import async_session
@@ -28,7 +29,6 @@ from src.worker.extractors.router import extract
 from src.worker.tasks.clarify import ask_clarification
 from src.worker.tasks.embed import generate_embeddings
 from src.worker.tasks.ingest import _content_type_to_category, _download_attachment
-import src.worker.tasks.librarian as librarian_task
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp"}
 

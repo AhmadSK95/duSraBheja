@@ -8,7 +8,10 @@ import asyncio
 import json
 
 from src.database import async_session
-from src.services.public_surface import refresh_public_snapshots, seed_public_facts_from_interview_prep
+from src.services.public_surface import (
+    refresh_public_snapshots,
+    seed_public_facts_from_interview_prep,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

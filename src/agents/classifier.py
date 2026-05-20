@@ -9,8 +9,33 @@ from src.agents.base import agent_call
 from src.config import settings
 from src.constants import normalize_category, normalize_tags
 from src.lib.llm_json import LLMJSONError, parse_json_object
-from src.services.capture_analysis import infer_capture_intent, validate_capture
 from src.services.planner import detect_planner_scope, extract_planner_dates
+
+_VALID_INTENTS = {
+    "thought",
+    "idea",
+    "question",
+    "critique",
+    "plan_capture",
+    "status_update",
+    "reference",
+    "reminder_request",
+}
+
+
+def _infer_capture_intent(suggested: str | None, category: str) -> tuple[str, float]:
+    """Lightweight default: trust LLM-suggested intent if valid, else derive from category."""
+    if suggested and suggested in _VALID_INTENTS:
+        return suggested, 0.7
+    if category == "reminder":
+        return "reminder_request", 0.6
+    if category in {"daily_planner", "weekly_planner"}:
+        return "plan_capture", 0.6
+    if category == "idea":
+        return "idea", 0.6
+    if category == "task":
+        return "status_update", 0.6
+    return "thought", 0.5
 
 SYSTEM_PROMPT = """You are a personal knowledge classifier for a second brain system.
 
@@ -159,16 +184,9 @@ def _parse_classifier_response(response_text: str, original_text: str, *, conten
             category = planner_scope
             confidence = max(confidence, 0.76)
 
-    capture_intent, intent_confidence = infer_capture_intent(
-        original_text,
+    capture_intent, intent_confidence = _infer_capture_intent(
+        parsed.get("capture_intent"),
         category=category,
-        suggested_intent=parsed.get("capture_intent"),
-    )
-    validation = validate_capture(
-        text=original_text,
-        category=category,
-        entities=entities,
-        content_type=content_type,
     )
 
     return {
@@ -181,10 +199,10 @@ def _parse_classifier_response(response_text: str, original_text: str, *, conten
         "priority": str(parsed.get("priority") or "medium").lower(),
         "suggested_action": parsed.get("suggested_action"),
         "summary": str(parsed.get("summary") or original_text[:200]).strip(),
-        "validation_status": validation["validation_status"],
-        "quality_issues": validation["quality_issues"],
-        "eligible_for_boards": validation["eligible_for_boards"],
-        "eligible_for_project_state": validation["eligible_for_project_state"],
+        "validation_status": "validated",
+        "quality_issues": [],
+        "eligible_for_boards": True,
+        "eligible_for_project_state": True,
     }
 
 

@@ -6,19 +6,18 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.bot.cogs.inbox import build_answer_embed
 from src.constants import BRAIN_CATEGORIES
-from src.bot.cogs.inbox import build_answer_embed, build_digest_embeds
 from src.database import async_session
+from src.lib import store
 from src.lib.store import get_pending_reviews
 from src.lib.time import human_datetime_text
-from src.services.digest import generate_or_refresh_digest
 from src.services.identity import resolve_project
-from src.services.session_bootstrap import build_session_bootstrap
-from src.services.reminders import store_reminder
-from src.services.query import query_brain
 from src.services.project_state import recompute_project_states
+from src.services.query import query_brain
+from src.services.reminders import store_reminder
+from src.services.session_bootstrap import build_session_bootstrap
 from src.services.story import build_project_story_payload
-from src.lib import store
 
 log = logging.getLogger("brain-bot.commands")
 
@@ -348,21 +347,6 @@ class CommandsCog(commands.Cog):
                 inline=False,
             )
         await interaction.followup.send(embed=embed)
-
-    @app_commands.command(name="digest", description="Generate or refresh today's digest")
-    async def digest(self, interaction: discord.Interaction):
-        await interaction.response.defer(thinking=True)
-
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-
-        now = datetime.now(ZoneInfo("America/New_York")).date()
-        async with async_session() as session:
-            payload = await generate_or_refresh_digest(session, digest_date=now, trigger="manual")
-
-        embeds = build_digest_embeds({**payload, "trigger": "manual"})
-        await interaction.followup.send(embeds=embeds)
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(CommandsCog(bot))

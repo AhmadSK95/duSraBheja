@@ -15,7 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.bot.cleanup import collect_target_channels, default_brain_channel_names, purge_bot_messages  # noqa: E402
+from src.bot.cleanup import (  # noqa: E402
+    collect_target_channels,
+    default_brain_channel_names,
+    purge_bot_messages,
+)
 from src.config import settings  # noqa: E402
 
 

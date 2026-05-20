@@ -60,3 +60,11 @@ tmp/
 public-seed/website_photos/
 public-seed/demo_videos/
 myInput/website_photos/
+
+# Local-only media (videos, large attachments) — never push to GitHub
+myInput/*.mov
+myInput/*.mp4
+myInput/*.MOV
+myInput/*.MP4
+*.mov
+*.mp4

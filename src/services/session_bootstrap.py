@@ -8,14 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.lib import store
 from src.services.identity import resolve_project
-from src.services.openai_web import research_topic_brief
-from src.services.persona import build_persona_packet
-from src.services.profile_narrative import materialize_profile_read_models
 from src.services.project_state import recompute_project_states
 from src.services.query import collect_sources
 from src.services.source_ingest import ingest_source_entries
 from src.services.story import build_project_story_payload, publish_story_entry
-
 
 BOOTSTRAP_LOW_SIGNAL_ENTRY_TYPES = {
     "context_dump",
@@ -167,18 +163,11 @@ async def build_session_bootstrap(
     subject = project_payload["project"]["title"] if project_payload else (project_hint or cwd or task_hint or "current work")
     brain_sources = await collect_sources(session, subject, category="project" if project_payload else None, limit=6)
     voice_profile = await store.get_voice_profile(session, "ahmad-default")
-    persona_packet = await build_persona_packet(session)
-    profile_models = await materialize_profile_read_models(session) if not project_payload else {}
+    persona_packet: dict = {}
+    profile_models: dict = {}
     self_bootstrap_mode = _detect_self_bootstrap_mode(task_hint, cwd) if not project_payload else "project"
 
     web_brief = None
-    if include_web and subject:
-        questions = []
-        snapshot = (project_payload or {}).get("snapshot") or {}
-        for item in (snapshot.get("remaining"), *(snapshot.get("holes") or []), task_hint):
-            if item:
-                questions.append(str(item))
-        web_brief = await research_topic_brief(topic=subject, questions=questions[:4])
 
     snapshot = (project_payload or {}).get("snapshot") or {}
     relevant_activity = _relevant_bootstrap_activity(project_payload)

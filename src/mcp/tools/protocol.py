@@ -6,18 +6,28 @@ import uuid
 
 from mcp.server.fastmcp import FastMCP
 
+from src.constants import BRAIN_CATEGORIES
 from src.database import async_session
-from src.services.brain_os import build_brain_self_description
 from src.services.library import build_library_catalog
-from src.services.secrets import request_secret_challenge, reveal_secret_once as reveal_secret_once_service
+from src.services.secrets import request_secret_challenge
+from src.services.secrets import reveal_secret_once as reveal_secret_once_service
 
 
 def register(mcp: FastMCP):
     @mcp.tool()
     async def describe_brain_protocol() -> dict:
         """Describe how an external AI agent should connect to and use the brain."""
-        async with async_session() as session:
-            return await build_brain_self_description(session)
+        return {
+            "name": "duSraBheja",
+            "purpose": "Ahmad's personal brain — captures Discord inbox, classifies, stores canonically, answers questions via RAG.",
+            "tools": [
+                "search_brain", "ask_brain", "capture", "get_project_context",
+                "get_full_brain_dump", "list_brain_notes", "get_brain_note",
+                "update_brain_note", "query_library",
+            ],
+            "categories": list(BRAIN_CATEGORIES),
+            "session_protocol": "Call bootstrap_session at start, publish_session_closeout at end.",
+        }
 
     @mcp.tool()
     async def query_library(

@@ -1,32 +1,27 @@
-"""Provider-aware API client helpers."""
+"""NVIDIA NIM client factory (OpenAI-compatible).
+
+Single client across chat, vision, and embeddings. Kept here for callers that
+expect a `*_client_for_role(role)` helper; under the hood it's just the same
+NIM-pointed AsyncOpenAI instance used by src.lib.llm.
+"""
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 import openai
 
 from src.config import settings
-from src.services.providers import provider_for_role
 
 
-def _provider_api_key(role: str) -> str:
-    provider = provider_for_role(role)
-    env_key = provider.api_key_env or ""
-    env_value = os.getenv(env_key, "").strip() if env_key else ""
-    if env_value:
-        return env_value
-    if provider.name == "openai":
-        return settings.openai_api_key
-    return settings.openai_api_key
-
-
-@lru_cache(maxsize=16)
-def openai_client_for_role(role: str) -> openai.AsyncOpenAI:
-    provider = provider_for_role(role)
-    base_url = (provider.base_url or "").strip() or None
+@lru_cache(maxsize=1)
+def nim_client() -> openai.AsyncOpenAI:
     return openai.AsyncOpenAI(
-        api_key=_provider_api_key(role) or "unused-local-key",
-        base_url=base_url,
+        api_key=settings.nvidia_api_key or "unused",
+        base_url=settings.nvidia_base_url,
     )
+
+
+def openai_client_for_role(role: str) -> openai.AsyncOpenAI:  # noqa: ARG001 — kept for back-compat
+    """Back-compat alias. Role is ignored; NIM serves every role."""
+    return nim_client()
