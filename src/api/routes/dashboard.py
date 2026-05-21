@@ -356,31 +356,26 @@ async def dashboard_library(token: str = Query(default=""), q: str = Query(defau
 @router.get("/dashboard/projects", dependencies=[Depends(require_dashboard_token)], response_class=HTMLResponse)
 async def dashboard_projects(token: str = Query(default="")) -> HTMLResponse:
     async with async_session() as session:
-        snapshots = (
-            (
-                await session.execute(
-                    select(ProjectStateSnapshot)
-                    .order_by(ProjectStateSnapshot.last_signal_at.desc().nullslast())
-                    .limit(50)
-                )
-            )
-            .scalars()
-            .all()
+        result = await session.execute(
+            select(ProjectStateSnapshot, Note.title)
+            .join(Note, Note.id == ProjectStateSnapshot.project_note_id)
+            .order_by(ProjectStateSnapshot.last_signal_at.desc().nullslast())
+            .limit(50)
         )
+        rows_data: list[tuple[ProjectStateSnapshot, str | None]] = list(result.all())
 
-    if not snapshots:
+    if not rows_data:
         body = _section("Projects", _empty_state("No project snapshots yet."))
     else:
-        rows = []
-        for snap in snapshots:
-            rows.append(
-                [
-                    _esc(snap.project_title or "Untitled"),
-                    _pill(snap.status or "uncertain"),
-                    _esc((snap.what_changed or snap.implemented or "")[:200]),
-                    _esc(_fmt_dt(snap.last_signal_at)),
-                ]
-            )
+        rows = [
+            [
+                _esc(title or "Untitled"),
+                _pill(snap.status or "uncertain"),
+                _esc((snap.what_changed or snap.implemented or "")[:200]),
+                _esc(_fmt_dt(snap.last_signal_at)),
+            ]
+            for snap, title in rows_data
+        ]
         body = _section(
             f"Projects ({len(rows)})",
             _table(rows, ["title", "status", "last update", "last signal"]),
