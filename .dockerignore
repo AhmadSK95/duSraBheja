@@ -1,0 +1,56 @@
+# Never bake secrets or local state into the image
+.env
+.env.*
+!.env.example
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual envs
+.venv/
+.venv.py39.bak/
+venv/
+env/
+
+# IDE / OS junk
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Test / cache
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Large local media (videos, big binaries) — these should never end up in an image
+myInput/
+public-seed/website_photos/
+public-seed/demo_videos/
+*.mov
+*.mp4
+
+# Runtime data
+data/blobs/
+tmp/
+
+# Misc
+*.log
+*.pid
+.agent/
+.agents/
+.claude/
+Users/
