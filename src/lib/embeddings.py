@@ -36,6 +36,9 @@ async def _embed(inputs: list[str], *, input_type: str) -> list[list[float]]:
             "model": settings.embedding_model,
             "input": cleaned,
             "input_type": input_type,
+            # NIM caps nv-embedqa-e5-v5 at 512 tokens; truncate server-side
+            # rather than reject the whole batch.
+            "truncate": "END",
         },
     )
     response.raise_for_status()
