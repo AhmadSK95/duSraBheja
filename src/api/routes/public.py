@@ -628,15 +628,16 @@ def _project_card_html(project: dict, *, featured: bool = False) -> str:
     tier = str(p.get("tier") or "flagship")
     proof = list(p.get("proof") or [])[:3]
     proof_html = "".join(f"<li>{_s(item)}</li>" for item in proof if item)
+    safe_links = _safe_contact_links(list(p.get("links") or []))
     link_items = [
         f'<a class="inline-link" href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">'
         f"{_s(item.get('label') or 'Open')}</a>"
-        for item in (p.get("links") or [])
+        for item in safe_links
         if item.get("href")
     ]
     if tier == "flagship":
         link_items.insert(0, f'<a class="inline-link" href="/projects/{_s(slug)}">Read case study</a>')
-    elif p.get("links"):
+    elif safe_links:
         link_items.insert(0, '<span class="mono-accent">Secondary proof</span>')
     demo_link = ""
     if p.get("demo_asset"):
