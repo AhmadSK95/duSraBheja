@@ -31,7 +31,7 @@ def _http_client() -> httpx.AsyncClient:
 async def _embed(inputs: list[str], *, input_type: str) -> list[list[float]]:
     cleaned = [t or " " for t in inputs]
     response = await _http_client().post(
-        "/embeddings",
+        "embeddings",
         json={
             "model": settings.embedding_model,
             "input": cleaned,
