@@ -1,26 +1,47 @@
-"""Embeddings wrapper — NVIDIA NIM (free-tier, OpenAI-compatible).
+"""Embeddings wrapper — NVIDIA NIM (free-tier).
 
-NIM's retrieval-tuned models (e.g. `nvidia/nv-embedqa-e5-v5`) are asymmetric
-and require an `input_type` field: "passage" when indexing a document chunk,
-"query" when embedding a search input. We pass that via the OpenAI SDK's
-`extra_body` parameter.
+We call NIM's embeddings endpoint directly via httpx rather than through the
+OpenAI SDK. NIM accepts the OpenAI request shape plus an `input_type` field
+that the retrieval-tuned models (e.g. `nvidia/nv-embedqa-e5-v5`) require
+("passage" when indexing chunks, "query" when embedding a search input).
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
+
+import httpx
+
 from src.config import settings
-from src.lib.llm import _client
+
+
+@lru_cache(maxsize=1)
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=settings.nvidia_base_url,
+        headers={
+            "Authorization": f"Bearer {settings.nvidia_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        timeout=60.0,
+    )
 
 
 async def _embed(inputs: list[str], *, input_type: str) -> list[list[float]]:
     cleaned = [t or " " for t in inputs]
-    response = await _client().embeddings.create(
-        model=settings.embedding_model,
-        input=cleaned,
-        extra_body={"input_type": input_type},
+    response = await _http_client().post(
+        "/embeddings",
+        json={
+            "model": settings.embedding_model,
+            "input": cleaned,
+            "input_type": input_type,
+        },
     )
-    ordered = sorted(response.data, key=lambda item: item.index)
-    return [list(item.embedding) for item in ordered]
+    response.raise_for_status()
+    data = response.json()
+    items = sorted(data.get("data") or [], key=lambda item: item.get("index", 0))
+    return [list(item["embedding"]) for item in items]
 
 
 async def embed_text(text: str) -> list[float]:
