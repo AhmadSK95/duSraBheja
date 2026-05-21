@@ -130,9 +130,56 @@ def _photo_img_sticker(photos: dict, key: str | None, tilt: str | None = None) -
     )
 
 
+_LEAKY_PILL_TERMS = {
+    "github",
+    "git",
+    "bitbucket",
+    "gitlab",
+    "docker",
+    "kubernetes",
+    "k8s",
+    "alembic",
+    "pgvector",
+    "arq",
+    "ollama",
+    "redis",
+    "postgresql",
+    "postgres",
+    "fastapi",
+    "discord.py",
+    "elasticsearch",
+    "sqlalchemy",
+    "duckdb",
+    "ec2",
+    "digitalocean",
+    "droplet",
+}
+
+
+def _pill_is_safe(item: str) -> bool:
+    normalized = (item or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized not in _LEAKY_PILL_TERMS
+
+
 def _pills(items: list[str], *, cls: str = "pill-list") -> str:
-    tags = "".join(f'<span class="pill">{_s(item)}</span>' for item in items if item)
+    safe = [item for item in items if _pill_is_safe(item)]
+    tags = "".join(f'<span class="pill">{_s(item)}</span>' for item in safe)
     return f'<div class="{cls}">{tags}</div>' if tags else ""
+
+
+def _safe_contact_links(items: list[dict]) -> list[dict]:
+    """Drop any contact link that points to a code-host (GitHub/GitLab/Bitbucket)."""
+    blocked = ("github.com", "gitlab.com", "bitbucket.org", "bitbucket.com")
+    out: list[dict] = []
+    for item in items or []:
+        href = (item.get("href") or "").lower()
+        label = (item.get("label") or "").lower()
+        if any(b in href for b in blocked) or "github" in label or "gitlab" in label or "bitbucket" in label:
+            continue
+        out.append(item)
+    return out
 
 
 def _numbered_list(items: list[str]) -> str:
@@ -1093,7 +1140,7 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
 
     currently_html = _render_currently_feed(p)
 
-    contact_items = list(p.get("contact") or p.get("contact_modes") or [])
+    contact_items = _safe_contact_links(list(p.get("contact") or p.get("contact_modes") or []))
     contact_links = "".join(
         f'<a href="{_s(item.get("href"))}" target="_blank" rel="noreferrer">{_s(item.get("label") or "Contact")}</a>'
         for item in contact_items
@@ -1987,7 +2034,7 @@ def _render_connect_fallback(
     chat_live: bool,
     captcha_enabled: bool,
 ) -> str:
-    contact_items = list(p.get("contact") or p.get("contact_modes") or [])
+    contact_items = _safe_contact_links(list(p.get("contact") or p.get("contact_modes") or []))
     refresh_label = str(ops.get("last_public_refresh_at") or "n/a")
     hero_photo = photos.get("work") or photos.get("hero") or photos.get("contact")
     location = p.get("location") or settings.public_profile_location
