@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -1410,3 +1411,191 @@ class BrainCounter(Base):
     key = Column(String, primary_key=True)
     value = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Vault — secret storage with asymmetric envelope encryption.
+# See src/lib/vault_crypto.py for the crypto layer.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class VaultMaterial(Base):
+    """Singleton — at-rest material that lets the owner unlock the vault.
+
+    None of these columns are sensitive on their own. They require the
+    owner's passphrase (held only in the owner's head) to be useful.
+    """
+
+    __tablename__ = "vault_material"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Singleton enforcer: a unique boolean defaulting to True means at most
+    # one row can exist. Stops accidental shadow vaults.
+    singleton = Column(Boolean, nullable=False, default=True)
+    salt = Column(LargeBinary, nullable=False)
+    kdf_params = Column(JSONB, nullable=False)
+    vault_public_key = Column(LargeBinary, nullable=False)
+    encrypted_vault_private_key = Column(LargeBinary, nullable=False)
+    private_key_nonce = Column(LargeBinary, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("singleton", name="uq_vault_material_singleton"),
+    )
+
+
+class VaultUnlockSession(Base):
+    """Per-device unlock metadata. The actual unwrapped private key lives
+    only in process memory; this row records the intent + TTL + audit info.
+
+    To decrypt, the API checks both: this row exists & isn't expired, AND
+    the process has the UnlockedVault keyed by `session_id` in memory. A
+    process restart drops the in-memory state, so on next request the owner
+    is prompted to re-unlock — even though the DB row still exists.
+    """
+
+    __tablename__ = "vault_unlock_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(String, nullable=False, unique=True)
+    device_label = Column(String, nullable=True)  # owner-given, e.g. "MacBook Pro"
+    device_fingerprint = Column(String, nullable=False)
+    ip = Column(String, nullable=True)
+    unlocked_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    last_active_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_vault_unlock_session", "session_id"),
+        Index("idx_vault_unlock_expires", "expires_at"),
+    )
+
+
+class VaultSecret(Base):
+    """Owner-confirmed secrets. Encrypted at rest with the vault public key.
+
+    The envelope dict is exactly what `vault_crypto.encrypt_for_vault()`
+    returns — JSONB so the envelope format can evolve forward without a
+    schema migration.
+
+    Distinct from the older ``SecretRecord`` (line ~676) which is a
+    canonical-library identity tracker using the shared-master-key crypto
+    pattern. Vault is parallel infrastructure; we may migrate the older
+    table to use the vault later, but Phase 1 leaves it untouched.
+    """
+
+    __tablename__ = "vault_secrets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    label = Column(String, nullable=False)
+    envelope = Column(JSONB, nullable=False)
+    # Free-form context the owner may want alongside the secret — rotation
+    # date, which environment, etc. Encrypted-in-envelope; the column here
+    # is just for "redacted preview" support if we ever surface it.
+    preview_text = Column(String, nullable=True)
+    source_ref = Column(String, nullable=True)
+    project_slug = Column(String, nullable=True)
+    tags = Column(ARRAY(String), default=list)
+    metadata_ = Column("metadata", JSONB, default=dict)
+    last_revealed_at = Column(DateTime(timezone=True), nullable=True)
+    reveal_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    audits = relationship("VaultRevealAudit", back_populates="secret", cascade="all, delete")
+
+    __table_args__ = (
+        Index("idx_vault_secrets_label", "label"),
+        Index("idx_vault_secrets_project", "project_slug"),
+        Index("idx_vault_secrets_created", "created_at"),
+    )
+
+
+class VaultSecretCandidate(Base):
+    """Pre-classifier or retro-scan hits awaiting owner approval.
+
+    Already encrypted with the vault public key — safe at rest even before
+    the owner has reviewed. On confirm, the candidate's envelope gets copied
+    into a ``VaultSecret`` and ``promoted_to_secret_id`` is set. On dismiss,
+    the candidate stays around with status='dismissed' so the scanner
+    doesn't re-flag the same hit on the next pass.
+    """
+
+    __tablename__ = "vault_secret_candidates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    envelope = Column(JSONB, nullable=False)
+    # Detection metadata: pattern hit, entropy, sample preview (redacted),
+    # detector version. JSONB so detectors can add fields without migration.
+    detection = Column(JSONB, nullable=False)
+    source_artifact_type = Column(String, nullable=False)  # "note" | "evidence" | "artifact"
+    source_artifact_id = Column(UUID(as_uuid=True), nullable=False)
+    suggested_label = Column(String, nullable=True)
+    # Tiered so the dashboard can default to showing low-confidence first
+    # (where false-positive rate is highest) and the auto-quarantine path
+    # only applies to "high".
+    confidence_tier = Column(String, nullable=False, default="medium")  # "high" | "medium" | "low"
+    status = Column(String, nullable=False, default="pending")  # "pending" | "confirmed" | "dismissed"
+    promoted_to_secret_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("vault_secrets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewer_session = Column(String, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_vault_secret_candidates_status", "status"),
+        Index(
+            "idx_vault_secret_candidates_source",
+            "source_artifact_type",
+            "source_artifact_id",
+        ),
+        Index("idx_vault_secret_candidates_confidence", "confidence_tier"),
+        UniqueConstraint(
+            "source_artifact_type",
+            "source_artifact_id",
+            "suggested_label",
+            name="uq_vault_secret_candidates_source_label",
+        ),
+    )
+
+
+class VaultRevealAudit(Base):
+    """Append-only log of every reveal attempt. Used for the dashboard's
+    'recent reveals' surface and for anomaly detection.
+
+    Every reveal — successful or denied — gets a row. Denied rows are the
+    interesting ones: someone tried to reveal something while locked, OTP
+    failed, or rate limit fired. That's where compromise surfaces.
+    """
+
+    __tablename__ = "vault_reveal_audits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("vault_secrets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id = Column(String, nullable=True)
+    ip = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    request_source = Column(String, nullable=False, default="dashboard")  # "dashboard" | "discord_kepobot"
+    otp_method = Column(String, nullable=True)  # "discord_dm" | "none"
+    outcome = Column(String, nullable=False)
+    # outcome values: "success", "denied_locked", "denied_otp_failed",
+    # "denied_rate_limit", "denied_not_found"
+    requested_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    secret = relationship("VaultSecret", back_populates="audits")
+
+    __table_args__ = (
+        Index("idx_vault_reveal_audit_secret", "secret_id"),
+        Index("idx_vault_reveal_audit_requested", "requested_at"),
+        Index("idx_vault_reveal_audit_outcome", "outcome"),
+    )
