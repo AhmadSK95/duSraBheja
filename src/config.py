@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     public_contact_instagram_url: str = ""
     public_contact_discord_url: str = ""
     public_profile_seed_path: str = "~/Desktop/CompanyInterviewPrep"
+    # Comma-separated slugs the owner wants surfaced on /work and /projects.
+    # When set, the public-snapshot rebuild treats this as a strict whitelist —
+    # anything else discovered in PublicFactRecord (e.g. case-study section
+    # headings that got ingested as project facts) is dropped. Leave blank to
+    # surface every discovered slug (noisy; only useful during seeding).
+    public_project_allowlist: str = ""
     public_snapshot_refresh_minutes: int = 240
     public_chat_rate_limit_per_hour: int = 30
     public_chat_session_window_minutes: int = 60

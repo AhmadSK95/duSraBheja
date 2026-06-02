@@ -49,7 +49,21 @@ def canonical_public_project_slug(slug: str) -> str:
 
 
 def ordered_public_project_slugs() -> list[str]:
-    return []
+    """Owner-curated project ordering, parsed from settings.
+
+    The May 2026 lean redesign deleted the seed-driven implementation. This
+    re-reads the same intent from a comma-separated env var
+    (PUBLIC_PROJECT_ALLOWLIST). Empty → no whitelist (rebuild surfaces every
+    project slug discovered in PublicFactRecord).
+    """
+    raw = (settings.public_project_allowlist or "").strip()
+    if not raw:
+        return []
+    return [
+        canonical_public_project_slug(part)
+        for part in raw.split(",")
+        if part.strip()
+    ]
 
 
 def resolve_public_seed_path() -> Path:
@@ -1627,11 +1641,16 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     project_snapshots: list[PublicProjectSnapshot] = []
     ordered = ordered_public_project_slugs()
     discovered = set(narrative_projects.keys()) | set(project_groups.keys())
-    # Honor the curated order when the (currently stubbed) ordering helper has
-    # entries, then append any project slugs the narrative/facts surfaced that
-    # the ordering helper missed.
-    all_slugs = [slug for slug in ordered if slug in discovered]
-    all_slugs.extend(sorted(discovered - set(all_slugs)))
+    if ordered:
+        # Strict whitelist mode (PUBLIC_PROJECT_ALLOWLIST is set). Surface only
+        # the owner-curated slugs that we actually have data for; ignore the
+        # rest, which are typically case-study section headings ingested as
+        # project facts.
+        all_slugs = [slug for slug in ordered if slug in discovered]
+    else:
+        # Discovery mode (no allowlist configured). Surface every discovered
+        # slug — useful during seeding, noisy in production.
+        all_slugs = sorted(discovered)
     if all_slugs:
         await session.execute(delete(PublicProjectSnapshot))
         await session.commit()
