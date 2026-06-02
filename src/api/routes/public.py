@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -169,11 +170,23 @@ def _pills(items: list[str], *, cls: str = "pill-list") -> str:
     return f'<div class="{cls}">{tags}</div>' if tags else ""
 
 
+def _dict_items(value: object | None) -> list[dict]:
+    """Coerce a snapshot list to dicts only; tolerate non-list and mixed-shape inputs.
+
+    Snapshot payloads occasionally store free-form strings where renderers expect
+    dicts. Filtering at the load point keeps a single stray entry from 500ing
+    the whole page (see commit bf8f48d for the original incident on /about).
+    """
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _safe_contact_links(items: list[dict]) -> list[dict]:
     """Drop any contact link that points to a code-host (GitHub/GitLab/Bitbucket)."""
     blocked = ("github.com", "gitlab.com", "bitbucket.org", "bitbucket.com")
     out: list[dict] = []
-    for item in items or []:
+    for item in _dict_items(items):
         href = (item.get("href") or "").lower()
         label = (item.get("label") or "").lower()
         if any(b in href for b in blocked) or "github" in label or "gitlab" in label or "bitbucket" in label:
@@ -309,8 +322,9 @@ def _render_currently_feed(p: dict) -> str:
     """
 
 
+@lru_cache(maxsize=1)
 def _load_interests() -> dict:
-    """Load interests data from seed JSON file."""
+    """Load interests data from seed JSON file (cached for process lifetime)."""
     paths = [
         Path("public-seed/interests.json"),
         Path("/public-seed/interests.json"),
@@ -347,7 +361,7 @@ def _render_interests_posters() -> str:
     ]
     sections: list[str] = []
     for key, label, cat_cls in categories:
-        items = interests.get(key) or []
+        items = _dict_items(interests.get(key))
         accent = _INTERESTS_COLORS.get(cat_cls, "var(--accent)")
         if not items:
             if key == "top5_artists":
@@ -401,7 +415,7 @@ def _project_collections(projects: list[dict]) -> tuple[list[dict], list[dict]]:
 
 def _render_update_window(window: dict | None, *, compact: bool = False) -> str:
     payload = dict(window or {})
-    items = list(payload.get("items") or [])
+    items = _dict_items(payload.get("items"))
     if not items:
         return ""
     cls = " update-window--compact" if compact else ""
@@ -424,7 +438,7 @@ def _render_update_window(window: dict | None, *, compact: bool = False) -> str:
 
 
 def _render_taste_modules(p: dict) -> str:
-    modules = list(p.get("taste_modules") or [])
+    modules = _dict_items(p.get("taste_modules"))
     if not modules:
         return ""
     rows = []
@@ -435,7 +449,7 @@ def _render_taste_modules(p: dict) -> str:
             f'<div class="taste-card__rank">{_s(item.get("rank"))}</div>'
             f'<div class="taste-card__body"><strong>{_s(item.get("name"))}</strong>'
             f'<span>{_s(item.get("subtitle") or "")}</span></div></a>'
-            for item in list(module.get("items") or [])[:5]
+            for item in _dict_items(module.get("items"))[:5]
         )
         rows.append(
             f'<section class="taste-module">'
@@ -455,20 +469,20 @@ def _render_taste_modules(p: dict) -> str:
 
 def _render_architecture_diagram(spec: dict | None) -> str:
     diagram = dict(spec or {})
-    lanes = list(diagram.get("lanes") or [])
+    lanes = _dict_items(diagram.get("lanes"))
     if not lanes:
         return ""
     lane_html = "".join(
         f'<section class="architecture-lane">'
         f'<div class="architecture-lane__label">{_s(lane.get("label") or "")}</div>'
         f'<div class="architecture-lane__nodes">'
-        f'{"".join(f"<article class=\"architecture-node\"><h4>{_s(node.get('label') or '')}</h4><p>{_s(node.get('detail') or '')}</p></article>" for node in list(lane.get("nodes") or []))}'
+        f'{"".join(f"<article class=\"architecture-node\"><h4>{_s(node.get('label') or '')}</h4><p>{_s(node.get('detail') or '')}</p></article>" for node in _dict_items(lane.get("nodes")))}'
         f"</div></section>"
         for lane in lanes
     )
     callouts = "".join(
         f'<div class="architecture-callout"><strong>{_s(item.get("label") or "")}</strong><p>{_s(item.get("body") or "")}</p></div>'
-        for item in list(diagram.get("callouts") or [])[:3]
+        for item in _dict_items(diagram.get("callouts"))[:3]
     )
     return (
         f'<section class="architecture-diagram">'
@@ -514,7 +528,8 @@ def _render_product_flow(spec: dict | None) -> str:
 
 
 def _render_decision_slider(decisions: list[dict[str, str]]) -> str:
-    if not decisions:
+    safe_decisions = _dict_items(decisions)
+    if not safe_decisions:
         return ""
     slides = "".join(
         f'<article class="cs-decision-slide">'
@@ -523,12 +538,12 @@ def _render_decision_slider(decisions: list[dict[str, str]]) -> str:
         f'<p>{_s(item.get("rationale") or "")}</p>'
         f'<div class="cs-decision-slide__tradeoff">{_s(item.get("tradeoff") or "")}</div>'
         f"</article>"
-        for item in decisions[:6]
+        for item in safe_decisions[:6]
     )
     return (
         f'<div class="decision-slider" data-decision-slider>'
         f'<div class="decision-slider__nav"><button type="button" data-slider-prev>Prev</button>'
-        f'<span data-slider-counter>1 / {len(decisions[:6])}</span>'
+        f'<span data-slider-counter>1 / {len(safe_decisions[:6])}</span>'
         f'<button type="button" data-slider-next>Next</button></div>'
         f'<div class="decision-slider__viewport">{slides}</div>'
         f"</div>"
@@ -952,8 +967,9 @@ def _render_section(
         </section>
         """
 
-    elif section.section_type == "custom_html":
-        return c.get("html", "")
+    # Note: a `custom_html` section type used to render `c["html"]` raw, which
+    # was a stored-XSS path. Removed; reintroduce only behind a real sanitizer
+    # (e.g. bleach) if owner-authored raw HTML is genuinely needed.
 
     return ""
 
@@ -1480,7 +1496,7 @@ async def public_projects() -> HTMLResponse:
 
 
 def _render_work_fallback(p: dict, photos: dict, projects: list) -> str:
-    capabilities = list(p.get("capabilities") or [])
+    capabilities = _dict_items(p.get("capabilities"))
     flagship_projects, secondary_projects = _project_collections(projects)
     hero_html = f"""
     <section class="hero-inner">

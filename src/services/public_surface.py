@@ -2417,6 +2417,14 @@ def _public_chat_topic_allowed(question: str) -> bool:
 
 _GITHUB_URL_RE = re.compile(r"https?://(?:www\.)?github\.com/\S+", re.IGNORECASE)
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# Covers full and compressed IPv6 (incl. `::1`, `2001:db8::1`). Requires at least
+# one `::` or two `:`-separated hex groups so it doesn't eat ordinary text.
+_IPV6_RE = re.compile(
+    r"(?<![\w:])(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}(?![\w:])"
+    r"|(?<![\w:])::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4}(?![\w:])"
+    r"|(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?![\w:])",
+    re.IGNORECASE,
+)
 
 
 def _scrub_public_output(text: str) -> str:
@@ -2424,6 +2432,7 @@ def _scrub_public_output(text: str) -> str:
     redacted = re.sub(r"\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b", "[REDACTED SENSITIVE NUMBER]", redacted)
     redacted = _GITHUB_URL_RE.sub("[REDACTED]", redacted)
     redacted = _IP_RE.sub("[REDACTED]", redacted)
+    redacted = _IPV6_RE.sub("[REDACTED]", redacted)
     return redacted
 
 
@@ -2440,20 +2449,31 @@ def _check_public_chat_rate_limit(client_key: str) -> tuple[bool, int]:
     return True, max(0, remaining - 1)
 
 
+_TURNSTILE_CLIENT: httpx.AsyncClient | None = None
+
+
+def _turnstile_client() -> httpx.AsyncClient:
+    # Reuse one keep-alive client across requests so we don't pay TLS setup
+    # to Cloudflare on every chat submission.
+    global _TURNSTILE_CLIENT
+    if _TURNSTILE_CLIENT is None:
+        _TURNSTILE_CLIENT = httpx.AsyncClient(timeout=10)
+    return _TURNSTILE_CLIENT
+
+
 async def verify_turnstile_token(*, token: str | None, remote_ip: str | None = None) -> dict[str, Any]:
     if not public_chat_captcha_enabled():
         return {"ok": True, "detail": "Turnstile disabled."}
     if not token:
         return {"ok": False, "detail": "Missing captcha token."}
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
-            settings.cloudflare_turnstile_verify_url,
-            data={
-                "secret": settings.cloudflare_turnstile_secret_key,
-                "response": token,
-                "remoteip": remote_ip or "",
-            },
-        )
+    response = await _turnstile_client().post(
+        settings.cloudflare_turnstile_verify_url,
+        data={
+            "secret": settings.cloudflare_turnstile_secret_key,
+            "response": token,
+            "remoteip": remote_ip or "",
+        },
+    )
     payload = response.json()
     return {"ok": bool(payload.get("success")), "detail": payload}
 
