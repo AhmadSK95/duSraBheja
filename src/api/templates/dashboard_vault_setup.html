@@ -1,0 +1,165 @@
+<section class="atlas-hero">
+  <div class="atlas-kicker atlas-kicker--gold">Vault setup</div>
+  <h1 class="atlas-hero__title">Set the passphrase for your vault.</h1>
+  <p class="atlas-hero__subtitle">
+    This is the one secret that protects every other secret. It's stored only in your head —
+    never on the droplet, never in this page after you submit. If you lose it, the encrypted
+    data is permanently unrecoverable. Write it down, put it somewhere safe, and confirm
+    below before you submit.
+  </p>
+</section>
+
+<section class="atlas-section">
+  <div class="atlas-panel atlas-panel--full">
+    <h3>Suggested passphrase (diceware)</h3>
+    <p class="atlas-muted">
+      Eight random words from a curated wordlist. Strong, memorable, and standard. Click
+      <strong>Regenerate</strong> until you get one you like — or type your own below.
+    </p>
+
+    <div class="vault-setup-suggestion">
+      <code id="vault-suggestion" class="vault-setup-suggestion__code">$suggested_passphrase</code>
+      <div class="vault-setup-suggestion__actions">
+        <button type="button" class="atlas-btn atlas-btn--ghost" id="vault-regenerate">Regenerate</button>
+        <button type="button" class="atlas-btn atlas-btn--ghost" id="vault-copy-suggestion">Copy to fields</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="atlas-section">
+  <form method="post" action="/dashboard/vault/setup" class="vault-setup-form" id="vault-setup-form">
+    <div class="atlas-panel atlas-panel--full">
+      <h3>Confirm your passphrase</h3>
+      <p class="atlas-muted">
+        Type the passphrase you intend to use. Either the suggestion above, or your own
+        (minimum 16 characters and a mix of character types).
+      </p>
+
+      <label class="atlas-field">
+        <span>Passphrase</span>
+        <input
+          type="password"
+          name="passphrase"
+          id="vault-passphrase"
+          autocomplete="new-password"
+          spellcheck="false"
+          required
+          minlength="12"
+        />
+      </label>
+
+      <label class="atlas-field">
+        <span>Confirm passphrase</span>
+        <input
+          type="password"
+          name="passphrase_confirm"
+          id="vault-passphrase-confirm"
+          autocomplete="new-password"
+          spellcheck="false"
+          required
+          minlength="12"
+        />
+      </label>
+
+      <div id="vault-passphrase-feedback" class="vault-setup-feedback" aria-live="polite"></div>
+
+      $error_html
+
+      <label class="atlas-checkbox">
+        <input
+          type="checkbox"
+          name="acknowledged_backup"
+          id="vault-ack"
+          required
+          value="yes"
+        />
+        <span>I've written down or stored my passphrase safely. I understand it cannot be recovered.</span>
+      </label>
+
+      <div class="vault-setup-submit-row">
+        <button type="submit" class="atlas-btn atlas-btn--primary" id="vault-submit">Set up vault</button>
+      </div>
+    </div>
+  </form>
+</section>
+
+<section class="atlas-section">
+  <div class="atlas-panel atlas-panel--soft">
+    <h4>Why this matters</h4>
+    <ul class="atlas-list">
+      <li>The passphrase derives a key that protects every other secret in the vault.</li>
+      <li>It's never stored on the droplet — only in your head, and wherever you write it down.</li>
+      <li>A droplet compromise without your passphrase gets ciphertext, no plaintext.</li>
+      <li>Forgetting the passphrase makes the vault permanently unrecoverable.</li>
+    </ul>
+  </div>
+</section>
+
+<script>
+(function () {
+  const suggestionEl = document.getElementById('vault-suggestion');
+  const passEl = document.getElementById('vault-passphrase');
+  const confirmEl = document.getElementById('vault-passphrase-confirm');
+  const feedbackEl = document.getElementById('vault-passphrase-feedback');
+  const regenBtn = document.getElementById('vault-regenerate');
+  const copyBtn = document.getElementById('vault-copy-suggestion');
+  const form = document.getElementById('vault-setup-form');
+  const submitBtn = document.getElementById('vault-submit');
+
+  async function regenerate() {
+    regenBtn.disabled = true;
+    try {
+      const resp = await fetch('/dashboard/vault/setup/generate', { method: 'POST' });
+      if (!resp.ok) throw new Error('generate failed');
+      const data = await resp.json();
+      suggestionEl.textContent = data.passphrase;
+    } catch (_) {
+      suggestionEl.textContent = '(failed to generate — try again or type your own)';
+    } finally {
+      regenBtn.disabled = false;
+    }
+  }
+
+  function copySuggestionToFields() {
+    const value = suggestionEl.textContent.trim();
+    if (!value || value.startsWith('(')) return;
+    passEl.value = value;
+    confirmEl.value = value;
+    updateFeedback();
+  }
+
+  function updateFeedback() {
+    const a = passEl.value;
+    const b = confirmEl.value;
+    if (!a && !b) {
+      feedbackEl.textContent = '';
+      feedbackEl.dataset.state = '';
+      return;
+    }
+    if (a !== b) {
+      feedbackEl.textContent = 'Passphrases do not match.';
+      feedbackEl.dataset.state = 'error';
+      return;
+    }
+    // Crude client-side strength hint; the server enforces the real check.
+    const tokens = a.replace(/ /g, '-').split('-').filter(Boolean);
+    const looksDiceware = tokens.length >= 6 && tokens.every(t => /^[a-z]+$/i.test(t));
+    if (looksDiceware) {
+      feedbackEl.textContent = 'Looks like a diceware passphrase. Strong.';
+      feedbackEl.dataset.state = 'ok';
+    } else if (a.length >= 16) {
+      feedbackEl.textContent = 'Length is fine; the server will check character mix on submit.';
+      feedbackEl.dataset.state = 'ok';
+    } else {
+      feedbackEl.textContent = 'Passphrase is short. Either use the suggestion, or make it at least 16 characters.';
+      feedbackEl.dataset.state = 'warn';
+    }
+  }
+
+  regenBtn?.addEventListener('click', regenerate);
+  copyBtn?.addEventListener('click', copySuggestionToFields);
+  passEl?.addEventListener('input', updateFeedback);
+  confirmEl?.addEventListener('input', updateFeedback);
+})();
+</script>

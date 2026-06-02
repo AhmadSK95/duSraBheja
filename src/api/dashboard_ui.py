@@ -22,6 +22,12 @@ NAV_GROUPS = [
             ("public-facts", "Public Facts", "/dashboard/public-facts"),
         ],
     ),
+    (
+        "Vault",
+        [
+            ("vault", "Vault", "/dashboard/vault/setup"),
+        ],
+    ),
 ]
 
 
