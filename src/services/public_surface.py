@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import json
+import logging
 import re
 import secrets
 from collections import defaultdict
@@ -11,10 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
+
+_log = logging.getLogger("brain-public-surface")
 from src.lib import store
 from src.lib.claude import call_claude, call_claude_conversation
 from src.lib.time import format_display_datetime
@@ -40,10 +45,6 @@ from src.services.providers import model_for_role, provider_registry_summary
 from src.services.secrets import extract_secret_candidates, redact_secret_candidates
 
 
-def build_profile_narrative() -> dict[str, Any]:
-    return {}
-
-
 def canonical_public_project_slug(slug: str) -> str:
     return (slug or "").strip().lower()
 
@@ -67,7 +68,136 @@ def ordered_public_project_slugs() -> list[str]:
 
 
 def resolve_public_seed_path() -> Path:
-    return Path("")
+    """Return the first public-seed directory that actually has our seed files.
+
+    Candidates, in order:
+      1. ``/public-seed`` (container bind-mount; canonical in prod)
+      2. ``<repo>/public-seed`` (canonical in dev)
+      3. ``settings.public_profile_seed_path`` (legacy escape hatch)
+
+    A directory only counts if it contains ``about.md`` — otherwise we keep
+    walking. This is what stops the resolver from latching onto a stale
+    legacy path that happens to exist but doesn't hold the seed content.
+
+    Falls back to the repo-local path so callers can always Path-compose
+    against the return value without crashing.
+    """
+    mounted = Path("/public-seed")
+    repo_local = Path(__file__).resolve().parents[2] / "public-seed"
+    configured = Path(settings.public_profile_seed_path).expanduser()
+    for candidate in (mounted, repo_local, configured):
+        if (candidate / "about.md").exists():
+            return candidate
+    return repo_local
+
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.DOTALL)
+
+
+def _parse_about_md(path: Path) -> dict[str, Any]:
+    """Pull the YAML frontmatter out of a markdown file. Body is ignored."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    match = _FRONTMATTER_RE.match(text)
+    if not match:
+        return {}
+    try:
+        parsed = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError as exc:
+        _log.warning("about.md frontmatter failed to parse: %s", exc)
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _log.warning("seed file %s failed to load: %s", path, exc)
+        return None
+
+
+def _load_case_studies(seed_root: Path) -> list[dict[str, Any]]:
+    """Read every JSON under public-seed/case_studies/ as a project dict."""
+    case_dir = seed_root / "case_studies"
+    if not case_dir.is_dir():
+        return []
+    projects: list[dict[str, Any]] = []
+    for file in sorted(case_dir.glob("*.json")):
+        payload = _read_json(file)
+        if isinstance(payload, dict) and payload.get("slug"):
+            projects.append(payload)
+    return projects
+
+
+def build_profile_narrative() -> dict[str, Any]:
+    """Assemble the public-snapshot narrative from owner-authored seed files.
+
+    Reads:
+      - ``public-seed/about.md`` (YAML frontmatter) for identity, arc, education,
+        skills, roles, capabilities, personal signals, hero copy.
+      - ``public-seed/photo_map.json`` for the ``photos`` dict consumed by
+        renderers (``hero``, ``personality``, ``work``, etc.).
+      - ``public-seed/case_studies/*.json`` for the ``projects`` list, each
+        item shaped like ``narrative_project`` expected by
+        ``refresh_public_snapshots``.
+
+    Returns an empty dict if the seed dir is unreachable. Per the no-content-loss
+    policy, callers (specifically ``refresh_public_snapshots``) carry forward
+    the previous snapshot when this returns empty rather than wiping data.
+    """
+    seed_root = resolve_public_seed_path()
+    if not seed_root.exists():
+        return {}
+
+    narrative: dict[str, Any] = {}
+
+    about = _parse_about_md(seed_root / "about.md")
+    if about:
+        # Map frontmatter keys onto the shape ``refresh_public_snapshots`` reads.
+        narrative.update({k: v for k, v in about.items() if v is not None})
+        if about.get("hero_subtitle") and not narrative.get("hero_summary"):
+            narrative["hero_summary"] = about["hero_subtitle"]
+        if about.get("identity") and not narrative.get("identity_stack"):
+            narrative["identity_stack"] = [about["identity"]]
+        if about.get("personal_signals"):
+            # Renderers want a list of {label, body} dicts under personal_texture.
+            signals = about["personal_signals"]
+            if isinstance(signals, dict):
+                narrative["personal_texture"] = [
+                    {
+                        "label": (v.get("label") or k.replace("_", " ").title())
+                        if isinstance(v, dict)
+                        else k.replace("_", " ").title(),
+                        "body": (v.get("body") or "") if isinstance(v, dict) else str(v or ""),
+                    }
+                    for k, v in signals.items()
+                ]
+        if about.get("contact_open_to"):
+            narrative["open_brain_topics"] = list(about["contact_open_to"])
+
+    photos = _read_json(seed_root / "photo_map.json")
+    if isinstance(photos, dict):
+        narrative["photos"] = photos
+
+    projects = _load_case_studies(seed_root)
+    if projects:
+        narrative["projects"] = projects
+
+    # Source pack — list the seed files we actually read, so the snapshot's
+    # ``source_refs`` audit trail reflects them.
+    source_files: list[str] = []
+    for candidate in (seed_root / "about.md", seed_root / "photo_map.json"):
+        if candidate.exists():
+            source_files.append(candidate.name)
+    if projects:
+        source_files.extend(f"case_studies/{p['slug']}.json" for p in projects)
+    if source_files:
+        narrative["source_pack"] = {"files": source_files}
+
+    return narrative
 
 PUBLIC_SNAPSHOT_SCHEMA_VERSION = 4
 PUBLIC_SNAPSHOT_SESSION_CACHE_KEY = "public_surface_snapshot_status"
