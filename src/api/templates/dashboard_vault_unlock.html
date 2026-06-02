@@ -1,0 +1,51 @@
+<section class="atlas-section">
+  <div class="atlas-panel atlas-panel--full">
+    <h3>Enter your passphrase</h3>
+    <p class="atlas-muted">
+      Your passphrase decrypts the vault private key into this server's memory for the next 8 hours.
+      It's never stored on disk or written to logs. If you lock the vault or the container restarts,
+      you'll be prompted again.
+    </p>
+
+    <div class="vault-unlock-fingerprint">
+      <span class="vault-unlock-fingerprint__label">Vault key ID</span>
+      <code class="vault-unlock-fingerprint__code">$fingerprint</code>
+      <span class="atlas-muted vault-unlock-fingerprint__hint">— sanity check this matches what you set up.</span>
+    </div>
+
+    <form method="post" action="/dashboard/vault/unlock" class="vault-setup-form">
+      <input type="hidden" name="next" value="$next_path" />
+
+      <label class="atlas-field">
+        <span>Passphrase</span>
+        <input
+          type="password"
+          name="passphrase"
+          id="vault-unlock-passphrase"
+          autocomplete="current-password"
+          spellcheck="false"
+          required
+          autofocus
+        />
+      </label>
+
+      $error_html
+
+      <div class="vault-setup-submit-row">
+        <button type="submit" class="atlas-btn atlas-btn--primary">Unlock vault</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="atlas-section">
+  <div class="atlas-panel atlas-panel--soft">
+    <h4>What "unlocked" means</h4>
+    <ul class="atlas-list">
+      <li>The vault private key sits in this server process's memory, tied to your dashboard session.</li>
+      <li>Reveal flows (step 1.5) and any service that needs to decrypt secrets check this state per request.</li>
+      <li>Auto-locks after 8 hours of inactivity. Manual lock available from <code>/dashboard/vault/</code>.</li>
+      <li>A container restart drops every unlock — that's by design, not a bug.</li>
+    </ul>
+  </div>
+</section>

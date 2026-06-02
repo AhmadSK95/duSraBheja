@@ -1070,3 +1070,34 @@ button.atlas-nav-link {
 .vault-setup-form {
   display: block;
 }
+
+/* Unlock fingerprint display */
+.vault-unlock-fingerprint {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 18px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.vault-unlock-fingerprint__label {
+  color: var(--atlas-muted);
+  font-size: 0.84rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.vault-unlock-fingerprint__code {
+  font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+  font-size: 1rem;
+  color: #fde68a;
+  letter-spacing: 0.04em;
+}
+
+.vault-unlock-fingerprint__hint {
+  font-size: 0.88rem;
+}

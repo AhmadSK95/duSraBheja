@@ -244,7 +244,10 @@ def test_setup_post_valid_diceware_initializes_and_redirects(
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/"
+    # After step 1.4, setup hands off to the vault index, which then routes
+    # the owner to unlock. (Earlier 1.3-only version redirected straight
+    # to /dashboard/.)
+    assert response.headers["location"] == "/dashboard/vault/"
     assert _DB.vault_row is not None
     assert _DB.committed is True
 

@@ -25,7 +25,7 @@ NAV_GROUPS = [
     (
         "Vault",
         [
-            ("vault", "Vault", "/dashboard/vault/setup"),
+            ("vault", "Vault", "/dashboard/vault/"),
         ],
     ),
 ]
