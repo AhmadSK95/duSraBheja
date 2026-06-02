@@ -26,44 +26,113 @@
     "Wrote a multi-provider LLM layer with per-model token counting and a custom benchmark harness comparing cost, latency, and quality across Claude, OpenAI, and Ollama."
   ],
   "demonstrates": [
-    "Hybrid routing as a real product decision, not a default — knowing when to spend tokens and when not to.",
-    "In-process analytics stack (DuckDB columnar SQL + Parquet on disk + pandas / scipy / statsmodels) — fast and self-contained.",
+    "Hybrid routing as a real product decision — knowing when to spend tokens and when not to.",
+    "In-process analytics stack (DuckDB + Parquet + pandas/scipy/statsmodels) — fast and self-contained.",
     "Multi-agent orchestration with a dedicated Verification step — catching hallucinations is part of the system, not an afterthought."
   ],
   "links": [],
-  "proof": [
+  "constraints": [
+    "Shipped as a single 154-file monolithic commit — feature-complete MVP, zero production hours.",
+    "Multi-provider fallback only earns its keep if the simple path stays cheap; the router has to be honest about complexity."
+  ],
+  "outcomes": [
+    "Runs locally via `docker compose up`; full stack (FastAPI + Next.js 16 + DuckDB + Redis / Celery) wired and tested end-to-end.",
     "448 tests passing.",
     "10+ Plotly chart types; PNG / SVG / CSV / Excel / PDF export.",
     "1,193-line conversation engine tracking current dataset, columns, and prior results for follow-up queries."
   ],
-  "outcomes": [
-    "Runs locally via `docker compose up`; full stack (FastAPI + Next.js 16 + DuckDB + Redis / Celery) wired and tested end-to-end.",
-    "Next: hosted demo, real-world data testing on >1GB datasets, token-budget enforcement."
-  ],
-  "constraints": [
-    "Single 154-file monolithic commit representing ~4 weeks of work — feature-complete MVP, zero production hours.",
-    "Multi-provider fallback only earns its keep because the simple path stays cheap; the router has to be honest about complexity."
-  ],
-  "case_study_sections": [
-    {
-      "title": "What I built",
-      "summary": "A complexity router classifies queries as simple, moderate, or complex and dispatches either to direct DuckDB SQL or to a ReAct loop. Five specialist agents — Data Quality, Statistical, Visualization, Explanation, Verification — coordinated by an orchestrator. The Verification agent specifically exists to cross-check the others and catch hallucinations. A multi-provider LLM layer (Claude → OpenAI → Ollama) with per-model token counting and a benchmark harness comparing cost, latency, and quality across providers. An in-process analytics stack: DuckDB columnar SQL + Parquet on disk + SQLite metadata; pandas / scipy / statsmodels for stats; 10+ Plotly chart types; PNG / SVG / CSV / Excel / PDF export. A 1,193-line conversation engine that tracks the current dataset, columns mentioned, and previous results so follow-ups like 'compare those regions' actually work."
-    },
-    {
-      "title": "One sharp decision",
-      "summary": "Hybrid query routing instead of pure-SQL or pure-agent. The hardest design call on the project. A single path is wrong both ways — pure SQL can't handle 'compare Q3 vs Q4 trends, break down by region, explain what changed,' and a ReAct loop for 'how many rows?' is absurd. The split lets the simple path stay sub-second and the agentic path spend tokens only where they earn ROI. That same split is what makes the multi-provider fallback meaningful — cheap providers handle the easy 80%, expensive ones get reserved for the work that needs them."
-    },
-    {
-      "title": "One real struggle",
-      "summary": "Scope. dataGenie shipped as a single 154-file monolithic commit with 448 tests passing on my laptop and zero production hours. Feature-complete MVP, no real users, no >1GB dataset stress-tested, no token budget enforcement. The recovery — already visible in how I'm now shipping duSraBheja — is the habit of shipping smaller, deploying earlier, and letting real usage drive the next round of agents rather than designing them up front."
-    },
-    {
-      "title": "Outcome",
-      "summary": "Runs locally via `docker compose up`. Full stack wired and tested. The next milestones are real-world data testing, performance work for >1GB datasets, and a hosted demo so the platform stops being a private repo and starts being a thing other people can poke."
-    }
-  ],
   "demo_asset": "datagenie_demo.mp4",
   "curated_case_study": {
-    "curation_mode": "owner_curated"
+    "curation_mode": "owner_curated",
+    "project_framing": "A platform for the question 'what does this data say?' that doesn't require the asker to know SQL or even the column names. Upload a file, ask in plain English, get an interactive chart with a written answer and the underlying query you can verify. The agents handle the work, the user reads the answer.",
+    "problem": "Every non-technical teammate who needs data from a CSV either asks an engineer or fights Excel pivot tables. The engineering loop is slow; the Excel loop is error-prone and gets abandoned. The non-technical user ends up making decisions on intuition instead of data — not because they want to, but because the tooling demanded too much to use.",
+    "why_now": "Two shifts made this newly possible: LLMs got good enough at writing correct SQL against schemas they were just shown, and in-process analytical databases (DuckDB) got fast enough that you don't need a data warehouse to query a CSV. Combine those, and a real user can go from 'I have a file' to 'I have an answer' without ever seeing a query.",
+    "architecture_narrative": "A complexity router classifies the incoming question as simple, moderate, or complex. Simple goes straight to DuckDB SQL — sub-second answers for 'how many rows', 'top 10 by revenue', basic filters. Complex enters a ReAct loop with five specialist agents (Data Quality, Statistical, Visualization, Explanation, Verification) coordinated by an orchestrator. The Verification agent is the load-bearing one — it cross-checks the others' work before surfacing anything to the user. A multi-provider LLM layer (Claude / OpenAI / Ollama) with per-model token counting picks the cheapest provider that hits the quality bar, and a benchmark harness keeps that decision honest. Storage is DuckDB columnar SQL + Parquet on disk + SQLite metadata; analytics is pandas / scipy / statsmodels; visualization is 10+ Plotly chart types. A 1,193-line conversation engine tracks the current dataset, columns mentioned, and prior results so 'compare those regions' actually works.",
+    "product_flow": {
+      "title": "From file to answer",
+      "caption": "A non-technical user goes from 'I have a CSV' to 'I have an answer' without ever seeing SQL.",
+      "steps": [
+        {"eyebrow": "Step 1", "title": "Ingest", "detail": "Upload CSV / Excel / PDF / connect a database. Parquet on disk, DuckDB columnar SQL ready immediately."},
+        {"eyebrow": "Step 2", "title": "Route", "detail": "The complexity router classifies the question as simple, moderate, or complex — the routing decision is what makes the cost curve work."},
+        {"eyebrow": "Step 3", "title": "Execute (simple)", "detail": "Direct DuckDB SQL — sub-second answers for counts, top-N, basic filters. No agents, no tokens spent."},
+        {"eyebrow": "Step 4", "title": "Execute (complex)", "detail": "ReAct loop with five agents: Data Quality, Statistical, Visualization, Explanation, and Verification. Orchestrator coordinates."},
+        {"eyebrow": "Step 5", "title": "Verify", "detail": "Verification agent cross-checks the others' work. Hallucinations get caught before they surface."},
+        {"eyebrow": "Step 6", "title": "Answer", "detail": "Interactive Plotly chart + written explanation + confidence score + the SQL you can verify. Export to PNG / SVG / CSV / Excel / PDF."}
+      ],
+      "branches": [
+        {"title": "Multi-turn conversation", "detail": "1,193-line engine tracks current dataset, columns mentioned, and prior results so 'compare those regions' actually works."}
+      ],
+      "outcome": "One question, one chart, one written answer, one verifiable query."
+    },
+    "architecture_diagram": {
+      "title": "System shape",
+      "caption": "Local-first analytics stack with a hybrid SQL / agentic execution layer and a multi-provider LLM fallback.",
+      "lanes": [
+        {
+          "label": "Input",
+          "nodes": [
+            {"label": "File ingest", "detail": "CSV / Excel / PDF / DB connection. Parsed to Parquet on disk."},
+            {"label": "Conversation engine", "detail": "Tracks dataset, columns referenced, prior results, follow-up context."}
+          ]
+        },
+        {
+          "label": "Routing",
+          "nodes": [
+            {"label": "Complexity classifier", "detail": "Simple / moderate / complex — decides whether to spend tokens at all."}
+          ]
+        },
+        {
+          "label": "Execution",
+          "nodes": [
+            {"label": "Direct DuckDB", "detail": "Columnar SQL on Parquet. Sub-second for the simple 80%."},
+            {"label": "ReAct loop", "detail": "Data Quality, Statistical, Visualization, Explanation, Verification — five specialist agents."},
+            {"label": "Multi-provider LLM", "detail": "Claude / OpenAI / Ollama. Per-model token counting; benchmark harness picks cost-vs-quality."}
+          ]
+        },
+        {
+          "label": "Output",
+          "nodes": [
+            {"label": "Plotly visualization", "detail": "10+ chart types with interactive UI."},
+            {"label": "Written explanation", "detail": "Plain-English answer plus confidence score and the underlying SQL."},
+            {"label": "Export", "detail": "PNG / SVG / CSV / Excel / PDF."}
+          ]
+        }
+      ],
+      "callouts": [
+        {"label": "Verification is load-bearing", "body": "The fifth agent's only job is to catch the other four. Multi-agent systems without a verification layer hallucinate confidently."},
+        {"label": "Hybrid routing", "body": "The simple path doesn't spend a single token. The complex path is allowed to spend many, because the routing decision earns that budget."}
+      ]
+    },
+    "key_decisions": [
+      {
+        "title": "Hybrid query routing instead of pure-SQL or pure-agent",
+        "decision": "Build two paths — direct DuckDB for simple queries, ReAct loop with five agents for complex ones — and a router that decides between them.",
+        "rationale": "A single path is wrong both ways. Pure SQL can't handle 'compare Q3 vs Q4 trends, break down by region, explain what changed.' A ReAct loop for 'how many rows?' is absurd. The split keeps simple sub-second and spends tokens only where they earn ROI.",
+        "tradeoff": "Two paths to maintain. Worth it because the router decision is also what makes the multi-provider fallback meaningful — cheap providers handle the easy 80%, expensive ones get reserved for work that needs them."
+      },
+      {
+        "title": "A dedicated Verification agent",
+        "decision": "Add a fifth agent whose only job is to cross-check the other four.",
+        "rationale": "Multi-agent systems that don't verify their own outputs hallucinate confidently. Catching that has to be part of the system, not a hope.",
+        "tradeoff": "Extra tokens on every complex query. Worth it because the alternative is silently wrong answers."
+      },
+      {
+        "title": "Local-first analytics stack",
+        "decision": "DuckDB + Parquet + pandas / scipy / statsmodels — all in-process, no data warehouse.",
+        "rationale": "The platform has to work for someone who uploaded a CSV ten seconds ago. No setup, no auth to a warehouse, no waiting for a job to finish.",
+        "tradeoff": "Won't scale past low-tens-of-GB datasets without rearchitecture. Fine for the MVP target user."
+      }
+    ],
+    "struggles": [
+      {
+        "problem": "Scope. Shipped as a single 154-file monolithic commit with 448 tests passing on my laptop and zero production hours. Feature-complete MVP with no real users.",
+        "resolution": "No clean fix — this is a habit problem, not a bug. The recovery is visible in how I'm now shipping duSraBheja: smaller PRs, earlier deploys, letting real usage drive the next round of agents rather than designing them up front."
+      }
+    ],
+    "learnings": [
+      "Multi-agent systems need a verification layer before they need a sixth agent.",
+      "Hybrid routing is a product decision, not a technical one — it's about when to spend tokens.",
+      "Feature-complete-but-unreleased is a worse state than partially-shipped."
+    ]
   }
 }

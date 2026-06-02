@@ -630,8 +630,19 @@ def _photo_story_card(
     )
 
 
-def _section_chip_row(items: list[str], *, cls: str = "section-chip-row") -> str:
-    chips = "".join(f'<span class="section-chip">{_s(item)}</span>' for item in items if item)
+def _section_chip_row(items: list, *, cls: str = "section-chip-row") -> str:
+    # Tolerate dict items in case a snapshot field is wired through here by
+    # mistake (see incident: case_study_sections used to leak `{'title': ...}`
+    # repr into the chip row before this defensive extraction).
+    def _label(item: object) -> str:
+        if isinstance(item, dict):
+            return str(item.get("title") or item.get("label") or "")
+        return str(item or "")
+    chips = "".join(
+        f'<span class="section-chip">{_s(label)}</span>'
+        for label in (_label(item) for item in items or [])
+        if label
+    )
     return f'<div class="{cls}">{chips}</div>' if chips else ""
 
 
@@ -1633,76 +1644,102 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     </section>
     """
 
-    framing_html = f"""
-    <section class="section container reveal">
-      {_kicker("Case Study Map")}
-      <div class="case-study-intro">
-        <div class="case-study-panel case-study-panel--full">
-          <h3>Project framing</h3>
-          <p>{_s(case_study.get("project_framing") or project.get("summary") or "")}</p>
-        </div>
-        <div class="case-study-grid case-study-grid--triple">
-          <div class="case-study-panel">
-            <h3>Problem / Context</h3>
-            <p>{_s(case_study.get("problem") or project.get("summary") or "")}</p>
+    # Only render the framing sub-panels that actually have content; empty
+    # boxes were leaking onto pages where the case study hadn't authored
+    # a Why now / Problem / Role yet.
+    framing_panels: list[str] = []
+    problem_text = case_study.get("problem") or ""
+    if problem_text:
+        framing_panels.append(
+            f'<div class="case-study-panel"><h3>Problem</h3>'
+            f'<p>{_s(problem_text)}</p></div>'
+        )
+    role_text = proj_p.get("role_scope") or ""
+    if role_text:
+        framing_panels.append(
+            f'<div class="case-study-panel"><h3>Role</h3>'
+            f'<p>{_s(role_text)}</p></div>'
+        )
+    why_now_text = case_study.get("why_now") or ""
+    if why_now_text:
+        framing_panels.append(
+            f'<div class="case-study-panel"><h3>Why now</h3>'
+            f'<p>{_s(why_now_text)}</p></div>'
+        )
+    project_framing_text = case_study.get("project_framing") or ""
+    framing_html = ""
+    if project_framing_text or framing_panels:
+        sub_grid_cls = (
+            "case-study-grid case-study-grid--triple"
+            if len(framing_panels) >= 3
+            else "case-study-grid"
+        )
+        sub_grid_html = (
+            f'<div class="{sub_grid_cls}">{"".join(framing_panels)}</div>'
+            if framing_panels
+            else ""
+        )
+        framing_html = f"""
+        <section class="section container reveal">
+          {_kicker("Overview")}
+          <div class="case-study-intro">
+            {f'<div class="case-study-panel case-study-panel--full"><h3>Project framing</h3><p>{_s(project_framing_text)}</p></div>' if project_framing_text else ''}
+            {sub_grid_html}
           </div>
-          <div class="case-study-panel">
-            <h3>Role and Ownership</h3>
-            <p>{_s(proj_p.get("role_scope") or "I owned the core technical and product decisions across this project.")}</p>
-          </div>
-          <div class="case-study-panel">
-            <h3>Why now</h3>
-            <p>{_s(case_study.get("why_now") or "")}</p>
-          </div>
-        </div>
-      </div>
-    </section>
-    """
+        </section>
+        """
 
     constraints = list(proj_p.get("constraints") or case_study.get("constraints") or [])
     outcomes = list(case_study.get("outcomes") or proj_p.get("outcomes") or [])
-    summary_grid = f"""
-    <section class="section container reveal">
-      {_kicker("Topline")}
-      <div class="case-study-grid case-study-grid--triple">
-        <div class="case-study-panel">
-          <h3>Constraints</h3>
-          {_bullet_list(constraints)}
-        </div>
-        <div class="case-study-panel">
-          <h3>Outcomes</h3>
-          {_bullet_list(outcomes)}
-        </div>
-        <div class="case-study-panel">
-          <h3>What changed because of the project</h3>
-          <p>{_s((outcomes[0] if outcomes else project.get("summary")) or "")}</p>
-        </div>
-      </div>
-    </section>
-    """
+    summary_panels: list[str] = []
+    if constraints:
+        summary_panels.append(
+            f'<div class="case-study-panel"><h3>Constraints</h3>'
+            f'{_bullet_list(constraints)}</div>'
+        )
+    if outcomes:
+        summary_panels.append(
+            f'<div class="case-study-panel"><h3>Outcomes</h3>'
+            f'{_bullet_list(outcomes)}</div>'
+        )
+    summary_grid = (
+        f'<section class="section container reveal">{_kicker("Topline")}'
+        f'<div class="case-study-grid">{"".join(summary_panels)}</div></section>'
+        if summary_panels
+        else ""
+    )
 
-    architecture_html = f"""
-    <section class="section container reveal" id="architecture">
-      {_kicker("Architecture")}
-      {_render_product_flow(case_study.get("product_flow"))}
-      <div class="case-study-panel case-study-panel--full">
-        <h3>Architecture narrative</h3>
-        <p>{_s(case_study.get("architecture_narrative") or "")}</p>
-      </div>
-      <div class="case-study-panel case-study-panel--full">
-        <h3>System diagram</h3>
-        <p>This is the secondary view: the system shape behind the flow above. It exists to explain the moving parts, not to substitute for the product story.</p>
-      </div>
-      {_render_architecture_diagram(case_study.get("architecture_diagram"))}
-    </section>
-    """
+    # Skip the whole Architecture section if no architecture content exists.
+    # Skip the System Diagram blurb when there's no diagram to follow it.
+    arch_narrative_text = case_study.get("architecture_narrative") or ""
+    product_flow_html = _render_product_flow(case_study.get("product_flow"))
+    diagram_html = _render_architecture_diagram(case_study.get("architecture_diagram"))
+    arch_parts: list[str] = []
+    if product_flow_html:
+        arch_parts.append(product_flow_html)
+    if arch_narrative_text:
+        arch_parts.append(
+            f'<div class="case-study-panel case-study-panel--full">'
+            f'<h3>Architecture narrative</h3>'
+            f'<p>{_s(arch_narrative_text)}</p></div>'
+        )
+    if diagram_html:
+        arch_parts.append(diagram_html)
+    architecture_html = (
+        f'<section class="section container reveal" id="architecture">'
+        f'{_kicker("Architecture")}{"".join(arch_parts)}</section>'
+        if arch_parts
+        else ""
+    )
 
-    decisions_html = f"""
-    <section class="section container reveal">
-      {_kicker("Key Decisions")}
-      {_render_decision_slider(list(case_study.get("key_decisions") or []))}
-    </section>
-    """
+    # Only render Key Decisions if there are any.
+    decisions_inner = _render_decision_slider(list(case_study.get("key_decisions") or []))
+    decisions_html = (
+        f'<section class="section container reveal">'
+        f'{_kicker("Key Decisions")}{decisions_inner}</section>'
+        if decisions_inner
+        else ""
+    )
 
     phase_cards = "".join(
         f'<article class="case-study-journey__item"><div class="public-kicker">{_s(item.get("title", ""))}</div>'

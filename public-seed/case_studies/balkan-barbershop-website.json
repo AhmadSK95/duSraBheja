@@ -37,38 +37,109 @@
   "links": [
     {"label": "Live site", "href": "https://balkanbarbers.com"}
   ],
-  "proof": [
-    "156 commits across four months (Nov 11, 2025 → Mar 11, 2026).",
-    "15+ PostgreSQL tables backing bookings, services, ratings, refresh tokens, waitlist entries, SMS DND, payment status.",
-    "Production booking volume since launch."
-  ],
-  "outcomes": [
-    "Production booking platform — customers book and pay, barbers see schedules and ratings, admins query the business in English."
-  ],
   "constraints": [
     "Single-shop SaaS — designed for low ops burden, atomic deploy, single droplet.",
     "Regulatory window on US SMS (A2P registration) — integration shipped switchable, safe-disabled by default."
   ],
-  "case_study_sections": [
-    {
-      "title": "What I built",
-      "summary": "React 18 frontend with brown/gold design system, Framer Motion transitions on core pages, Recharts admin analytics, react-toastify notifications. Node/Express backend with JWT + refresh-token rotation, Google OAuth, PostgreSQL across 15+ tables (users, services, bookings, booking_services, barber_services, refresh_tokens, rating_results, sms_dnd_numbers, waitlist_entries). Booking lifecycle features: multi-service bookings, per-booking ratings, reschedule and cancel with timezone awareness, node-cron reminder pipeline. Stripe Checkout with webhook-driven payment status and a 'Pay Now' flow for post-booking collection. Admin LLM assistant — natural-language queries against the business data ('how many bookings this month?', 'revenue by barber?') gated by a metrics registry, safety validator, and per-user rate limiter. A safe-deploy script with git-readiness checks, commit-marker backend-change detection, SSH multiplexing, and UFW rate limiting on the droplet."
-    },
-    {
-      "title": "One sharp decision",
-      "summary": "Killed the AI hairstyle generator and virtual try-on in week two. The initial commit shipped DALL·E hairstyle gen, a TensorFlow.js / Replicate try-on, a Python/Flask AI backend, and 4,800+ lines of supporting code. By day four the math was clear: infrastructure burden was high, value to a working barber was low, and the booking system itself wasn't done. Cut it cleanly, focused on the booking core for two months, and only re-introduced AI months later as a backend admin assistant — where it actually shortens the operator's day. Same project, second AI attempt, ten times the ROI."
-    },
-    {
-      "title": "One real struggle",
-      "summary": "SMS. I oscillated AWS SNS → Twilio → AWS SNS over five days. SNS can't do custom Sender IDs for US numbers; Twilio can but costs more and A2P registration is its own slog. The honest framing: I didn't solve SMS. I stopped pretending I could ship it under the current regulatory window, made the integration switchable, and kept email and in-app notifications doing the work. That same pass drove the bigger AWS → DigitalOcean migration."
-    },
-    {
-      "title": "Outcome",
-      "summary": "Production booking platform on a DigitalOcean droplet with managed Postgres, Nginx with SSL, UFW firewall, git-push-to-deploy. Customers book, pay, get reminders; barbers see their schedule and ratings; admins query the business in English."
-    }
+  "outcomes": [
+    "Production booking platform — customers book and pay, barbers see schedules and ratings, admins query the business in English.",
+    "156 commits across four months (Nov 11, 2025 → Mar 11, 2026).",
+    "15+ PostgreSQL tables backing bookings, services, ratings, refresh tokens, waitlist entries, SMS DND, payment status."
   ],
   "demo_asset": "balkan_barbers_demo.mp4",
   "curated_case_study": {
-    "curation_mode": "owner_curated"
+    "curation_mode": "owner_curated",
+    "project_framing": "A neighborhood barbershop needed an online identity that matched the room — brown/gold, editorial, neighborhood-rooted — plus a real booking system, ratings, reschedules, payments, and customer comms. Not a brochure; the operating layer.",
+    "problem": "Most barbershop websites fail on operations, not branding. The owner needed bookings, payments, ratings, reminders, and a way to query the business in English — built so the shop could run on it day one and the operator wouldn't need a developer to ask 'how many bookings this month?'",
+    "why_now": "Booking platforms exist (Booksy, Square) but they take a cut, lock the brand into their template, and surface customer data only on their dashboard. For a shop that wanted full brand control and full data ownership, the build-your-own path is cheaper at month 12 than month 1.",
+    "architecture_narrative": "React 18 frontend with a brown/gold design system, Framer Motion transitions on core pages, Recharts for admin analytics, react-toastify notifications. Node/Express backend with JWT + refresh-token rotation, Google OAuth, and PostgreSQL across 15+ tables (users, services, bookings, booking_services, barber_services, refresh_tokens, rating_results, sms_dnd_numbers, waitlist_entries). Booking lifecycle: multi-service bookings, per-booking ratings, reschedule and cancel with timezone awareness, node-cron reminder pipeline. Stripe Checkout with webhook-driven payment status and a 'Pay Now' flow for post-booking collection. Admin LLM assistant — natural-language queries against business data, gated by a metrics registry, safety validator, and per-user rate limiter. Deploy is a safe-deploy script with git-readiness checks, commit-marker backend-change detection, SSH multiplexing, and UFW rate limiting on the droplet.",
+    "product_flow": {
+      "title": "Customer book → operator runs the day",
+      "caption": "A booking flows through Stripe, a reminder cron, and a per-booking rating loop. The operator sees it all in one admin view.",
+      "steps": [
+        {"eyebrow": "Step 1", "title": "Browse + select", "detail": "Customer picks one or more services and a barber on the React frontend; Framer Motion handles the transition between selection and confirmation."},
+        {"eyebrow": "Step 2", "title": "Authenticate", "detail": "Google OAuth or email/password. JWT with refresh-token rotation; tokens never leak via local storage."},
+        {"eyebrow": "Step 3", "title": "Book + pay", "detail": "Booking row + booking_services rows committed in a transaction. Stripe Checkout for payment; webhook updates payment_status on confirmation."},
+        {"eyebrow": "Step 4", "title": "Remind", "detail": "node-cron job sweeps upcoming bookings on a schedule, sends reminders via Resend (email). SMS is wired but safe-disabled pending A2P."},
+        {"eyebrow": "Step 5", "title": "Serve + rate", "detail": "Barber sees the schedule. After the cut, a rating link goes to the customer; rating_results writes back to the booking."},
+        {"eyebrow": "Step 6", "title": "Operate", "detail": "Admin LLM assistant answers business questions in English ('revenue by barber this month?'), gated by a metrics registry and a per-user rate limit."}
+      ],
+      "branches": [
+        {"title": "Reschedule / cancel", "detail": "Timezone-aware modal; existing payment is preserved or refunded based on policy."},
+        {"title": "Waitlist", "detail": "Customers can join a waitlist when a barber's schedule is full; promoted to bookings when slots open."}
+      ],
+      "outcome": "Customers book, pay, get reminded. Operators see the day. Admins query the business in English."
+    },
+    "architecture_diagram": {
+      "title": "System shape",
+      "caption": "React frontend, Express API, Postgres data layer, and integrations — all on a single DigitalOcean droplet with managed Postgres.",
+      "lanes": [
+        {
+          "label": "Frontend",
+          "nodes": [
+            {"label": "React 18 + Router 7", "detail": "Brown/gold design system, Framer Motion transitions on core pages, Recharts on the admin view."},
+            {"label": "Customer + Admin UIs", "detail": "Two surfaces, one codebase. Admin AI assistant lives behind the auth wall."}
+          ]
+        },
+        {
+          "label": "API",
+          "nodes": [
+            {"label": "Node/Express", "detail": "Helmet, express-rate-limit, express-validator. JWT + refresh-token rotation; Google OAuth."},
+            {"label": "Admin LLM gate", "detail": "Metrics registry + safety validator + per-user rate limiter wrap every OpenAI call."}
+          ]
+        },
+        {
+          "label": "Data",
+          "nodes": [
+            {"label": "PostgreSQL (15+ tables)", "detail": "users, services, bookings, booking_services, barber_services, refresh_tokens, rating_results, sms_dnd_numbers, waitlist_entries."},
+            {"label": "node-cron", "detail": "Reminder pipeline sweeps upcoming bookings on a schedule."}
+          ]
+        },
+        {
+          "label": "Integrations",
+          "nodes": [
+            {"label": "Stripe Checkout", "detail": "Webhooks update payment_status; idempotent on retry."},
+            {"label": "Resend (email)", "detail": "Booking confirmations, reminders, rating prompts."},
+            {"label": "Twilio (safe-disabled)", "detail": "Switchable SMS path, off until A2P registration clears."},
+            {"label": "OpenAI", "detail": "Admin natural-language assistant only — not customer-facing."}
+          ]
+        }
+      ],
+      "callouts": [
+        {"label": "Safe-deploy script", "body": "deploy-do-safe.sh runs git-readiness checks, detects backend-change commit markers, multiplexes SSH, and rolls back atomically on failure."},
+        {"label": "A2P-shaped SMS path", "body": "Twilio integration is switchable, safe-disabled by default. Email + in-app notifications handle reminders until US A2P approval lands."}
+      ]
+    },
+    "key_decisions": [
+      {
+        "title": "Kill the AI hairstyle generator in week two",
+        "decision": "Cut the DALL·E hairstyle gen and TensorFlow.js virtual try-on; reinvest the time in the booking core.",
+        "rationale": "The initial commit shipped 4,800+ lines of AI try-on, a Python/Flask AI backend, and Replicate inference. By day four the math was clear — infra burden was high, value to a working barber was low, and the booking system itself wasn't done.",
+        "tradeoff": "Threw away a flashy feature that demos well. Months later, AI came back as an admin assistant where it actually shortens the operator's day. Same project, second AI attempt, ten times the ROI."
+      },
+      {
+        "title": "Build the booking core before the brand polish",
+        "decision": "Spend two months on bookings, payments, ratings, reminders before touching the editorial design system.",
+        "rationale": "A beautiful site for a broken booking flow is worse than an ugly site that works. Operators care about uptime; customers care that the booking went through.",
+        "tradeoff": "The site looked plain for two months. The booking flow worked from week three."
+      },
+      {
+        "title": "Migrate AWS → DigitalOcean mid-build",
+        "decision": "Move the production stack from AWS (EC2, RDS, SES, SNS) to a single DigitalOcean droplet with managed Postgres.",
+        "rationale": "AWS was over-provisioned for a single-shop SaaS. Cost was ~3x what it needed to be; the IAM / VPC / SG burden was real ops work for no real benefit.",
+        "tradeoff": "Lost AWS's depth on the SMS path (SNS could've covered some cases). Gained a deploy primitive I now reuse on other client work."
+      }
+    ],
+    "struggles": [
+      {
+        "problem": "SMS. I oscillated AWS SNS → Twilio → AWS SNS over five days. SNS can't do custom Sender IDs for US numbers; Twilio can but costs more and A2P registration is its own slog.",
+        "resolution": "Honest framing: I didn't solve SMS. I stopped pretending I could ship it under the current regulatory window, made the integration switchable, and kept email and in-app notifications doing the work. That same pass drove the bigger AWS → DigitalOcean migration."
+      }
+    ],
+    "learnings": [
+      "Operators care about the boring parts. The flashy features are for portfolio screenshots.",
+      "Killing a feature on day four is a leadership skill, not a failure.",
+      "Pick the platform you can debug at 11pm; pick the deploy primitive you can hand off."
+    ]
   }
 }
