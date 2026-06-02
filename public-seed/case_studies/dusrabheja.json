@@ -1,0 +1,69 @@
+{
+  "slug": "dusrabheja",
+  "title": "duSraBheja — Personal AI Second Brain & MCP Server",
+  "tagline": "A personal open-brain that ingests everything I capture and makes it answerable by AI agents through MCP.",
+  "summary": "The problem isn't capturing information — it's retrieving it when you need it and knowing what you know. duSraBheja runs on a single droplet, captures from Discord and 6+ local sources, classifies and embeds everything, and exposes the result to Claude Code, Codex, and a public chat through MCP and HTTP.",
+  "status": "Live",
+  "tier": "flagship",
+  "display_order": 1,
+  "role_scope": "Designer, engineer, operator. Solo build.",
+  "stack": [
+    "Python 3.12",
+    "FastAPI",
+    "SQLAlchemy 2.0 async",
+    "PostgreSQL + pgvector",
+    "ARQ on Redis",
+    "FastMCP",
+    "NVIDIA NIM (Llama 3.1 8B, 3.3 70B, 11B Vision, nv-embedqa-e5-v5)",
+    "Docker Compose",
+    "DigitalOcean"
+  ],
+  "resume_bullets": [
+    "Built a Discord-fed personal AI second brain with an MCP server, a 6-layer canonical memory model (Evidence → Observation → Episode → Thread → Entity → Synthesis), and a 5-page private dashboard.",
+    "Pivoted from a TypeScript/WhatsApp/LangGraph stack to Python/Discord/ARQ on day 10; cut Anthropic + OpenAI months later for NVIDIA NIM free-tier models. Same problem, two rewrites, simpler ops each time.",
+    "Hardened the public surface with an explicit fact allowlist, daily refresh, output scrubbing (GitHub URLs, IPs, SSNs), and topic gating so the public chat only answers what I've approved."
+  ],
+  "demonstrates": [
+    "Async Python at production scale (FastAPI + ARQ + asyncpg + pgvector).",
+    "Agentic orchestration with discipline — retrieval tests, confidence-gated routing, owner-approved publish path.",
+    "Self-hosted ops on a single $X droplet — five services, Docker Compose, no platform lock-in."
+  ],
+  "links": [
+    {"label": "Ask the open brain", "href": "/brain"}
+  ],
+  "proof": [
+    "92 commits in 23 days during the rebuild.",
+    "Two crons running, cognition firing on-demand every 20 merges.",
+    "Six capture sources (Discord, Apple Notes, Chrome history, project files, git, life exports)."
+  ],
+  "outcomes": [
+    "Live in production on a single DigitalOcean droplet running five services (brain-redis, brain-bot, brain-worker, brain-mcp, brain-api).",
+    "Powers the public chat at /brain and the Claude Code / Codex tool surface I use daily."
+  ],
+  "constraints": [
+    "Free-tier model budget — every chat, vision, and embedding call routes through NIM, so token counts and model names get logged for quota visibility, cost is zero.",
+    "Single-droplet ops — no horizontal scale, so the public path was engineered to be cache-friendly and fast."
+  ],
+  "case_study_sections": [
+    {
+      "title": "What I built",
+      "summary": "Discord `#inbox` capture → ARQ async pipeline (extract → classify → embed → librarian merge → canonical Note) with a 0.75 confidence gate routing low-confidence items to a review flow. A 6-layer canonical memory model so story is presentation, not storage. A FastMCP server exposing search, ask, capture, context, protocol, story, and website tools to Claude Code and Codex. A 5-page private Atlas dashboard with no on-render LLM calls — every page is one or two indexed SQL queries. A public surface backed by an explicit PublicFactRecord allowlist with daily refresh, owner approval, and output scrubbing for repo URLs, IPs, SSNs, IPv6 addresses."
+    },
+    {
+      "title": "One sharp decision",
+      "summary": "Ten days into a TypeScript/WhatsApp/LangGraph stack I pivoted the whole thing to Python/Discord/ARQ. The TS stack had clean infrastructure — NATS, Temporal, pgvector — but was bleeding memory across 10 child processes and Node's async story wasn't native. The rewrite kept the schema discipline but bought native async/await, SQLAlchemy 2.0, real MCP, simpler ops. Then I cut again — removed Anthropic, OpenAI, Whisper, and moved every model call to NVIDIA NIM through one OpenAI-compatible client. Don't romanticize the previous architecture; if the cost curve is wrong, rewrite."
+    },
+    {
+      "title": "One real struggle",
+      "summary": "Vector search silently returned wrong results for a day. asyncpg's parameter binding for pgvector isn't the same as psycopg2's — queries were running but ranking was nonsense. The fix was small, three commits and about 65 lines. The deeper cost was confidence in retrieval. Recovery was discipline: every retrieval path got a test before being shipped, and the librarian and retriever got project-aware ranking. That habit is how I now ship retrieval changes without anxiety."
+    },
+    {
+      "title": "Outcome",
+      "summary": "Live on a single DigitalOcean droplet — brain-redis, brain-bot, brain-worker, brain-mcp, brain-api. Captures from six+ sources, classifies with Llama 3.1 8B, embeds via nv-embedqa-e5-v5 (1024d), merges via Llama 3.3 70B. Two crons (reminders, daily public refresh). Cognition fires on-demand every 20 merges. The public chat at /brain answers from the same allowlisted snapshot you're reading from."
+    }
+  ],
+  "demo_asset": "",
+  "curated_case_study": {
+    "curation_mode": "owner_curated"
+  }
+}

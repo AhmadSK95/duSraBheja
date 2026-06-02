@@ -1,0 +1,67 @@
+{
+  "slug": "kaffa-espresso-bar-website",
+  "title": "Kaffa Espresso Bar — Live Client Site",
+  "tagline": "A neighborhood espresso bar's first real web presence — vanilla site, real deploy pipeline, HTTPS that renews itself.",
+  "summary": "A Jersey City espresso bar with no web presence and no in-house technical capacity needed a real site, a real domain, and an operator who could hand it over and have it stay up. The result is a single-page vanilla HTML/CSS/JS site on its own droplet with a release-versioned deploy pipeline, atomic symlink cutover, 5-release rollback, and zero-downtime cert renewal.",
+  "status": "Live",
+  "tier": "flagship",
+  "display_order": 4,
+  "role_scope": "Designer, engineer, operator. One-month build, single client, hand-off-ready.",
+  "stack": [
+    "HTML5",
+    "CSS3 (Grid, Flexbox, custom properties)",
+    "Vanilla JavaScript",
+    "Nginx",
+    "Let's Encrypt / Certbot (webroot ACME)",
+    "DigitalOcean Droplet",
+    "Bash deploy scripts with post-receive hooks",
+    "GoDaddy DNS"
+  ],
+  "resume_bullets": [
+    "Built a single-page vanilla HTML/CSS/JS site (no framework tax) with 18 WebP images at ~2.3 MB total, mobile hamburger nav, smooth scroll, and SEO meta + structured data.",
+    "Wrote a release-versioned deploy pipeline (bootstrap, deploy, remote worker, Nginx vhost) with atomic symlink cutover and a 5-release rollback window.",
+    "Migrated the live site from a legacy subdomain to a real apex `.com` without touching MX / TXT / nameservers — no email outage, no DNS-cutover downtime, legacy cert kept working through the transition."
+  ],
+  "demonstrates": [
+    "Picking boring infrastructure over flashy: vanilla JS + Nginx + webroot ACME over a static-host SaaS, because the operator needs Nginx-level redirect control and zero-downtime renewal.",
+    "Deploy primitives that survive a client hand-off — bootstrap, deploy, rollback, vhost config, all in version control.",
+    "Domain-cutover work with surgical care for the non-web stuff (email, third-party integrations on legacy DNS)."
+  ],
+  "links": [
+    {"label": "Live site", "href": "https://kaffaespressobar.com"}
+  ],
+  "proof": [
+    "11 commits, Feb 11 → Mar 9, 2026.",
+    "~2.3 MB total page weight including all 18 hero / menu / gallery photos.",
+    "Zero-downtime HTTPS renewal since launch."
+  ],
+  "outcomes": [
+    "Live at the custom domain, primary online presence for the shop — production-stable since Mar 9."
+  ],
+  "constraints": [
+    "No in-house technical capacity at the shop — every deploy primitive had to be operable by the client or trivially handed off.",
+    "Legacy subdomain hosted off another artist's portfolio, with email and external integrations still pointed at the old DNS — cutover had to be surgical."
+  ],
+  "case_study_sections": [
+    {
+      "title": "What I built",
+      "summary": "A vanilla HTML5 / CSS3 / JS single-page site — hero, about, menu, gallery, hours, location, contact, mobile hamburger nav, smooth scroll. 18 WebP images optimized to ~2.3 MB total. Teal accent (#3FBFBF), Pacifico script logo. A release-versioned deploy pipeline: bootstrap script, deploy script, remote worker script, Nginx vhost config — atomic symlink cutover with a 5-release rollback window and a deploy-only SSH user. Let's Encrypt HTTPS via Certbot's webroot ACME flow so renewal doesn't take the site down. SEO pass on the final commit (meta, OG tags, structured data)."
+    },
+    {
+      "title": "One sharp decision",
+      "summary": "Pulling the site off AWS S3 and rebuilding as a git-driven droplet deploy. S3 is the easy answer for a static site — but I wanted Nginx-level redirect control, real release versioning, and the same deploy primitives I use across other client work. Webroot ACME over standalone for the same reason: HTTPS renews without a downtime window. Same instinct as the duSraBheja pivot: pick the slightly harder option you can actually own."
+    },
+    {
+      "title": "One real struggle",
+      "summary": "Domain migration was the hairy part. Legacy domain was a subdomain of another artist's portfolio; the client wanted a real `.com` apex while keeping email and external integrations pointed at the old DNS untouched. I explicitly walled off MX / TXT / nameserver records, wrote a `finalize_primary_domain_cutover.sh` that set up `www` → apex and old-subdomain → apex redirects, and kept the legacy cert working through the cutover. No outage, no broken email."
+    },
+    {
+      "title": "Outcome",
+      "summary": "Live at the custom domain, primary online presence for the shop. Production-stable since Mar 9, 2026."
+    }
+  ],
+  "demo_asset": "kaffa_espresso_bar_demo.mp4",
+  "curated_case_study": {
+    "curation_mode": "owner_curated"
+  }
+}

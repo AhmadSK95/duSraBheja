@@ -36,9 +36,10 @@ htmlcov/
 .coverage
 coverage.xml
 
-# Large local media (videos, big binaries) — these should never end up in an image
+# Large local media (videos, big binaries) — these should never end up in an image.
+# website_photos/ ships via git + bind mount; demo_videos/ stays out (one demo is 33MB)
+# and lives on the droplet host only.
 myInput/
-public-seed/website_photos/
 public-seed/demo_videos/
 *.mov
 *.mp4

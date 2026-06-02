@@ -1,0 +1,87 @@
+{
+  "hero": {
+    "filename": "05_nov2025_waterfront_fullbody_portrait.jpg",
+    "url": "/public-assets/profile/05_nov2025_waterfront_fullbody_portrait.jpg",
+    "alt": "Ahmad standing at a Jersey City waterfront, dramatic sky behind"
+  },
+  "personality": {
+    "filename": "09_aug2025_holding_oscar_colorful_art_wall.jpg",
+    "url": "/public-assets/profile/09_aug2025_holding_oscar_colorful_art_wall.jpg",
+    "alt": "Ahmad holding Oscar in front of a vibrant abstract art wall"
+  },
+  "profile": {
+    "filename": "03_jan2026_oscar_on_shoulder_white_wall.jpg",
+    "url": "/public-assets/profile/03_jan2026_oscar_on_shoulder_white_wall.jpg",
+    "alt": "Ahmad with Oscar on his shoulder, clean white wall"
+  },
+  "work": {
+    "filename": "02_feb2026_nyc_street_portrait_with_badge.jpg",
+    "url": "/public-assets/profile/02_feb2026_nyc_street_portrait_with_badge.jpg",
+    "alt": "Ahmad on a NYC street holding up his work badge"
+  },
+  "personal": {
+    "filename": "07_sep2025_bike_helmet_oscar_front_door.jpg",
+    "url": "/public-assets/profile/07_sep2025_bike_helmet_oscar_front_door.jpg",
+    "alt": "Ahmad in a bike helmet at the front door, Oscar on the welcome mat"
+  },
+  "interests": {
+    "filename": "10_aug2025_pokemon_plushies.jpg",
+    "url": "/public-assets/profile/10_aug2025_pokemon_plushies.jpg",
+    "alt": "Ahmad with Charmander, Squirtle, and Bulbasaur plushies"
+  },
+  "home_secondary": {
+    "filename": "01_feb2026_home_selfie_with_oscar_and_iris.jpg",
+    "url": "/public-assets/profile/01_feb2026_home_selfie_with_oscar_and_iris.jpg",
+    "alt": "Ahmad at home with Oscar and Iris"
+  },
+  "oscar_solo_primary": {
+    "filename": "oscar_cat_stairs.png",
+    "url": "/public-assets/profile/oscar_cat_stairs.png",
+    "alt": "Oscar sitting on purple stairs"
+  },
+  "oscar_solo_secondary": {
+    "filename": "oscar_cat_couch_closeup.png",
+    "url": "/public-assets/profile/oscar_cat_couch_closeup.png",
+    "alt": "Oscar lying on a blue couch, closeup"
+  },
+  "oscar_solo_chair": {
+    "filename": "oscar_cat_on_chair.png",
+    "url": "/public-assets/profile/oscar_cat_on_chair.png",
+    "alt": "Oscar on an orange armchair"
+  },
+  "oscar_office": {
+    "filename": "oscar_cat_office_chair.png",
+    "url": "/public-assets/profile/oscar_cat_office_chair.png",
+    "alt": "Oscar sitting upright on a pink office chair"
+  },
+  "ghibli_cat": {
+    "filename": "ahmad_with_cat_ghibli.png",
+    "url": "/public-assets/profile/ahmad_with_cat_ghibli.png",
+    "alt": "Ghibli-style illustration of Ahmad with Oscar"
+  },
+  "selfie_oscar": {
+    "filename": "ahmad_selfie_with_oscar.png",
+    "url": "/public-assets/profile/ahmad_selfie_with_oscar.png",
+    "alt": "Ahmad selfie with Oscar"
+  },
+  "oscar_shoulder_candid": {
+    "filename": "04_jan2026_oscar_on_shoulder_looking_away.jpg",
+    "url": "/public-assets/profile/04_jan2026_oscar_on_shoulder_looking_away.jpg",
+    "alt": "Ahmad with Oscar on his shoulder, Oscar looking away"
+  },
+  "holding_oscar_home": {
+    "filename": "08_aug2025_holding_oscar_at_home.jpg",
+    "url": "/public-assets/profile/08_aug2025_holding_oscar_at_home.jpg",
+    "alt": "Ahmad holding Oscar at home"
+  },
+  "oscar_sploot": {
+    "filename": "oscar_cat_from_above.png",
+    "url": "/public-assets/profile/oscar_cat_from_above.png",
+    "alt": "Oscar splooting on the floor, seen from above"
+  },
+  "og_image": {
+    "filename": "buildwithmoenu_og_linkedin_v2.jpg",
+    "url": "/public-assets/profile/buildwithmoenu_og_linkedin_v2.jpg",
+    "alt": "Build With Moenu — social card"
+  }
+}

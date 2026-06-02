@@ -1,0 +1,69 @@
+{
+  "slug": "datagenie",
+  "title": "dataGenie — Multi-Agent Data Analytics Platform",
+  "tagline": "Upload a CSV, ask in plain English, get back a chart, a written answer, and the SQL you can verify.",
+  "summary": "Non-technical people shouldn't need to write SQL to explore their own data. dataGenie collapses the loop — ingest CSV / Excel / PDF / database, ask a question, get an interactive chart with a written explanation and confidence score, with the underlying query shown so you can verify.",
+  "status": "MVP complete · local",
+  "tier": "flagship",
+  "display_order": 2,
+  "role_scope": "Designer, engineer, evaluator. Solo build.",
+  "stack": [
+    "Python 3.12",
+    "FastAPI",
+    "DuckDB",
+    "Apache Parquet (PyArrow)",
+    "pandas, scipy, statsmodels",
+    "Celery + Redis",
+    "Anthropic / OpenAI / Ollama",
+    "Plotly",
+    "Next.js 16 + React 19 + TypeScript",
+    "Zustand, shadcn/ui, Tailwind 4",
+    "Docker Compose"
+  ],
+  "resume_bullets": [
+    "Designed a hybrid query router that classifies questions as simple, moderate, or complex and dispatches to direct DuckDB SQL or a ReAct loop with five specialist agents.",
+    "Built a Verification agent specifically to cross-check the other agents' outputs and catch hallucinations before they surface to the user.",
+    "Wrote a multi-provider LLM layer with per-model token counting and a custom benchmark harness comparing cost, latency, and quality across Claude, OpenAI, and Ollama."
+  ],
+  "demonstrates": [
+    "Hybrid routing as a real product decision, not a default — knowing when to spend tokens and when not to.",
+    "In-process analytics stack (DuckDB columnar SQL + Parquet on disk + pandas / scipy / statsmodels) — fast and self-contained.",
+    "Multi-agent orchestration with a dedicated Verification step — catching hallucinations is part of the system, not an afterthought."
+  ],
+  "links": [],
+  "proof": [
+    "448 tests passing.",
+    "10+ Plotly chart types; PNG / SVG / CSV / Excel / PDF export.",
+    "1,193-line conversation engine tracking current dataset, columns, and prior results for follow-up queries."
+  ],
+  "outcomes": [
+    "Runs locally via `docker compose up`; full stack (FastAPI + Next.js 16 + DuckDB + Redis / Celery) wired and tested end-to-end.",
+    "Next: hosted demo, real-world data testing on >1GB datasets, token-budget enforcement."
+  ],
+  "constraints": [
+    "Single 154-file monolithic commit representing ~4 weeks of work — feature-complete MVP, zero production hours.",
+    "Multi-provider fallback only earns its keep because the simple path stays cheap; the router has to be honest about complexity."
+  ],
+  "case_study_sections": [
+    {
+      "title": "What I built",
+      "summary": "A complexity router classifies queries as simple, moderate, or complex and dispatches either to direct DuckDB SQL or to a ReAct loop. Five specialist agents — Data Quality, Statistical, Visualization, Explanation, Verification — coordinated by an orchestrator. The Verification agent specifically exists to cross-check the others and catch hallucinations. A multi-provider LLM layer (Claude → OpenAI → Ollama) with per-model token counting and a benchmark harness comparing cost, latency, and quality across providers. An in-process analytics stack: DuckDB columnar SQL + Parquet on disk + SQLite metadata; pandas / scipy / statsmodels for stats; 10+ Plotly chart types; PNG / SVG / CSV / Excel / PDF export. A 1,193-line conversation engine that tracks the current dataset, columns mentioned, and previous results so follow-ups like 'compare those regions' actually work."
+    },
+    {
+      "title": "One sharp decision",
+      "summary": "Hybrid query routing instead of pure-SQL or pure-agent. The hardest design call on the project. A single path is wrong both ways — pure SQL can't handle 'compare Q3 vs Q4 trends, break down by region, explain what changed,' and a ReAct loop for 'how many rows?' is absurd. The split lets the simple path stay sub-second and the agentic path spend tokens only where they earn ROI. That same split is what makes the multi-provider fallback meaningful — cheap providers handle the easy 80%, expensive ones get reserved for the work that needs them."
+    },
+    {
+      "title": "One real struggle",
+      "summary": "Scope. dataGenie shipped as a single 154-file monolithic commit with 448 tests passing on my laptop and zero production hours. Feature-complete MVP, no real users, no >1GB dataset stress-tested, no token budget enforcement. The recovery — already visible in how I'm now shipping duSraBheja — is the habit of shipping smaller, deploying earlier, and letting real usage drive the next round of agents rather than designing them up front."
+    },
+    {
+      "title": "Outcome",
+      "summary": "Runs locally via `docker compose up`. Full stack wired and tested. The next milestones are real-world data testing, performance work for >1GB datasets, and a hosted demo so the platform stops being a private repo and starts being a thing other people can poke."
+    }
+  ],
+  "demo_asset": "datagenie_demo.mp4",
+  "curated_case_study": {
+    "curation_mode": "owner_curated"
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "slug": "balkan-barbershop-website",
+  "title": "Balkan Barbershop — Live Client Site & Booking Platform",
+  "tagline": "Portrait-driven editorial site fronting a full booking platform — bookings, payments, ratings, an admin AI assistant.",
+  "summary": "Most barbershop websites fail on operations, not branding. The owner needed a system, not just a brochure. The result is a React 18 frontend with a brown/gold design system fronting a Node/Express booking platform with Stripe, JWT, Google OAuth, and a natural-language admin assistant gated by a metrics registry.",
+  "status": "Live",
+  "tier": "flagship",
+  "display_order": 3,
+  "role_scope": "Designer, engineer, deployer. Single-shop SaaS, four-month build.",
+  "stack": [
+    "React 18",
+    "React Router 7",
+    "Framer Motion",
+    "Recharts",
+    "Node.js + Express",
+    "PostgreSQL (15+ tables)",
+    "JWT + Google OAuth",
+    "Stripe Checkout + webhooks",
+    "node-cron",
+    "OpenAI (admin assistant)",
+    "Resend (email)",
+    "Twilio (SMS, safe-disabled)",
+    "DigitalOcean + Managed PostgreSQL",
+    "Nginx",
+    "UFW"
+  ],
+  "resume_bullets": [
+    "Shipped a React 18 + Node/Express booking platform with multi-service bookings, Stripe Checkout, JWT refresh-token rotation, Google OAuth, and a node-cron reminder pipeline.",
+    "Built an admin natural-language assistant that answers business questions in English, gated by a metrics registry, safety validator, and per-user rate limiter.",
+    "Migrated from AWS to a single DigitalOcean droplet with managed Postgres, cutting infra cost ~3x while keeping the same reliability bar."
+  ],
+  "demonstrates": [
+    "Product-first design — killing a flashy feature when the math doesn't work, then bringing AI back where it earns its keep.",
+    "Owner-grade ops on a small SaaS — git-driven deploys, atomic releases, UFW + rate limiting, safe rollback path.",
+    "Honest engineering trade-offs (the SMS story) rather than perfection theater."
+  ],
+  "links": [
+    {"label": "Live site", "href": "https://balkanbarbers.com"}
+  ],
+  "proof": [
+    "156 commits across four months (Nov 11, 2025 → Mar 11, 2026).",
+    "15+ PostgreSQL tables backing bookings, services, ratings, refresh tokens, waitlist entries, SMS DND, payment status.",
+    "Production booking volume since launch."
+  ],
+  "outcomes": [
+    "Production booking platform — customers book and pay, barbers see schedules and ratings, admins query the business in English."
+  ],
+  "constraints": [
+    "Single-shop SaaS — designed for low ops burden, atomic deploy, single droplet.",
+    "Regulatory window on US SMS (A2P registration) — integration shipped switchable, safe-disabled by default."
+  ],
+  "case_study_sections": [
+    {
+      "title": "What I built",
+      "summary": "React 18 frontend with brown/gold design system, Framer Motion transitions on core pages, Recharts admin analytics, react-toastify notifications. Node/Express backend with JWT + refresh-token rotation, Google OAuth, PostgreSQL across 15+ tables (users, services, bookings, booking_services, barber_services, refresh_tokens, rating_results, sms_dnd_numbers, waitlist_entries). Booking lifecycle features: multi-service bookings, per-booking ratings, reschedule and cancel with timezone awareness, node-cron reminder pipeline. Stripe Checkout with webhook-driven payment status and a 'Pay Now' flow for post-booking collection. Admin LLM assistant — natural-language queries against the business data ('how many bookings this month?', 'revenue by barber?') gated by a metrics registry, safety validator, and per-user rate limiter. A safe-deploy script with git-readiness checks, commit-marker backend-change detection, SSH multiplexing, and UFW rate limiting on the droplet."
+    },
+    {
+      "title": "One sharp decision",
+      "summary": "Killed the AI hairstyle generator and virtual try-on in week two. The initial commit shipped DALL·E hairstyle gen, a TensorFlow.js / Replicate try-on, a Python/Flask AI backend, and 4,800+ lines of supporting code. By day four the math was clear: infrastructure burden was high, value to a working barber was low, and the booking system itself wasn't done. Cut it cleanly, focused on the booking core for two months, and only re-introduced AI months later as a backend admin assistant — where it actually shortens the operator's day. Same project, second AI attempt, ten times the ROI."
+    },
+    {
+      "title": "One real struggle",
+      "summary": "SMS. I oscillated AWS SNS → Twilio → AWS SNS over five days. SNS can't do custom Sender IDs for US numbers; Twilio can but costs more and A2P registration is its own slog. The honest framing: I didn't solve SMS. I stopped pretending I could ship it under the current regulatory window, made the integration switchable, and kept email and in-app notifications doing the work. That same pass drove the bigger AWS → DigitalOcean migration."
+    },
+    {
+      "title": "Outcome",
+      "summary": "Production booking platform on a DigitalOcean droplet with managed Postgres, Nginx with SSL, UFW firewall, git-push-to-deploy. Customers book, pay, get reminders; barbers see their schedule and ratings; admins query the business in English."
+    }
+  ],
+  "demo_asset": "balkan_barbers_demo.mp4",
+  "curated_case_study": {
+    "curation_mode": "owner_curated"
+  }
+}

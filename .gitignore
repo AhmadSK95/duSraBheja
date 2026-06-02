@@ -56,8 +56,9 @@ alembic/versions/__pycache__/
 Users/
 tmp/
 
-# Public seed — large binaries (photos, videos) managed outside git
-public-seed/website_photos/
+# Public seed — photos ship via git so deploys carry the website content.
+# Demo videos stay out of git (one is 33MB) and live on the droplet host's
+# bind-mounted /opt/dusrabheja/public-seed/demo_videos/ — managed manually.
 public-seed/demo_videos/
 myInput/website_photos/
 
