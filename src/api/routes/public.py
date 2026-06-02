@@ -1253,13 +1253,10 @@ async def public_about() -> HTMLResponse:
         used_about_photo_refs.add(ref)
         return photo
 
-    # Owner-curated bullets — prefer the seed (about.md frontmatter) when set,
-    # fall back to a baseline if the snapshot hasn't been refreshed yet.
-    hero_bullets = list(p.get("hero_bullets") or []) or [
-        "IIT Kharagpur to New York, with Amazon-scale systems and enterprise backend work in between.",
-        "The current phase is less about titles and more about ownership, product taste, and building tools that feel worth carrying.",
-        "The person in the system matters too: Oscar, Jersey City, anime, music, and a bias toward things that feel alive.",
-    ]
+    # Owner-curated bullets — only source of truth is about.md frontmatter.
+    # No code fallback: an empty list renders no bullets, which is a real bug
+    # signal we want to see rather than mask with stale baseline copy.
+    hero_bullets = list(p.get("hero_bullets") or [])
     hero_photo = take_about_photo("personality") or take_about_photo("hero") or take_about_photo("work")
     hero_html = f"""
     <section class="about-hero">
