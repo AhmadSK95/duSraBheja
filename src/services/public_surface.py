@@ -1484,6 +1484,16 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         key = (item.get("label") or item.get("fact_key") or "").lower()
         if key:
             deduped_contacts[key] = item
+    # `build_profile_narrative()` was stubbed to {} in the May 2026 lean redesign
+    # (commit 3e9dfa1 deleted src/services/profile_narrative.py). The fields below
+    # still ask `narrative.get(...)` for their content but get nothing back, so
+    # they'd silently wipe to empty on every rebuild. Carry forward whatever the
+    # previous snapshot held when the narrative builder has nothing to offer —
+    # the owner approves new content via the dashboard and PublicFactRecord;
+    # the rebuild should never blow that approved state away.
+    def _carry(key: str, default: Any) -> Any:
+        return narrative.get(key) or existing_profile_payload.get(key) or default
+
     profile_payload = {
         "schema_version": PUBLIC_SNAPSHOT_SCHEMA_VERSION,
         "name": narrative.get("name") or settings.public_profile_name,
@@ -1508,33 +1518,33 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
                 "title": item.get("title"),
                 "summary": _excerpt(item.get("summary") or item.get("tagline"), limit=220),
             }
-            for item in (narrative.get("projects") or [])
+            for item in (narrative.get("projects") or existing_profile_payload.get("projects") or [])
         ][:6],
-        "identity_stack": narrative.get("identity_stack") or [],
-        "current_arc": narrative.get("current_arc") or {},
-        "resume_sections": narrative.get("resume_sections") or [],
-        "eras": narrative.get("eras") or [],
-        "timeline": narrative.get("timeline") or [],
-        "roles": narrative.get("roles") or [],
-        "projects": narrative.get("projects") or [],
-        "capabilities": narrative.get("capabilities") or [],
-        "photos": narrative.get("photos") or {},
-        "photo_slots": narrative.get("photo_slots") or [],
-        "proof_points": narrative.get("proof_points") or [],
-        "personal_texture": narrative.get("personal_texture") or [],
-        "personal_signals": narrative.get("personal_signals") or {},
-        "thought_garden": narrative.get("thought_garden") or [],
-        "contact_modes": narrative_contacts,
-        "currently": narrative.get("currently") or {},
-        "taste_modules": narrative.get("taste_modules") or [],
-        "daily_update_window": narrative.get("daily_update_window") or {},
-        "latest_work_summary": narrative.get("latest_work_summary") or "",
+        "identity_stack": _carry("identity_stack", []),
+        "current_arc": _carry("current_arc", {}),
+        "resume_sections": _carry("resume_sections", []),
+        "eras": _carry("eras", []),
+        "timeline": _carry("timeline", []),
+        "roles": _carry("roles", []),
+        "projects": _carry("projects", []),
+        "capabilities": _carry("capabilities", []),
+        "photos": _carry("photos", {}),
+        "photo_slots": _carry("photo_slots", []),
+        "proof_points": _carry("proof_points", []),
+        "personal_texture": _carry("personal_texture", []),
+        "personal_signals": _carry("personal_signals", {}),
+        "thought_garden": _carry("thought_garden", []),
+        "contact_modes": narrative_contacts or existing_profile_payload.get("contact_modes") or [],
+        "currently": _carry("currently", {}),
+        "taste_modules": _carry("taste_modules", []),
+        "daily_update_window": _carry("daily_update_window", {}),
+        "latest_work_summary": _carry("latest_work_summary", ""),
         "freshness": {
             "last_refreshed_at": format_display_datetime(refreshed_at),
             "refresh_mode": "daily-brain-refresh",
             "publish_mode": "hybrid-wave",
         },
-        "open_brain_topics": narrative.get("open_brain_topics") or [],
+        "open_brain_topics": _carry("open_brain_topics", []),
     }
     profile_snapshot = await _upsert_public_profile_snapshot(
         session,
@@ -1557,8 +1567,6 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
     if profile_review:
         staged_reviews.append(profile_review)
 
-    await session.execute(delete(PublicProjectSnapshot))
-    await session.commit()
     project_groups: dict[str, list[PublicFactRecord]] = defaultdict(list)
     for fact in project_facts:
         if fact.project_slug:
@@ -1568,6 +1576,12 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         for item in (narrative.get("projects") or [])
         if item.get("slug")
     }
+    # Defer the wipe until we know we have something to write. Without this guard,
+    # an empty `ordered_public_project_slugs()` stub + an empty narrative would
+    # delete every PublicProjectSnapshot row and rebuild zero. We now also union
+    # the slugs we discovered from project facts (PublicFactRecord rows whose
+    # facet == "projects") so the rebuild works even when the narrative builder
+    # has nothing to offer.
     # Pre-load case studies from ProjectStateSnapshot + repos from ProjectRepo
     # Uses fuzzy slug matching: "barbershop" matches "balkan-barbershop-website"
     _case_studies: dict[str, dict] = {}
@@ -1611,11 +1625,16 @@ async def refresh_public_snapshots(session: AsyncSession, *, force: bool = False
         return _repo_links.get(canonical_public_project_slug(slug), [])
 
     project_snapshots: list[PublicProjectSnapshot] = []
-    all_slugs = [
-        slug
-        for slug in ordered_public_project_slugs()
-        if slug in narrative_projects or slug in project_groups
-    ]
+    ordered = ordered_public_project_slugs()
+    discovered = set(narrative_projects.keys()) | set(project_groups.keys())
+    # Honor the curated order when the (currently stubbed) ordering helper has
+    # entries, then append any project slugs the narrative/facts surfaced that
+    # the ordering helper missed.
+    all_slugs = [slug for slug in ordered if slug in discovered]
+    all_slugs.extend(sorted(discovered - set(all_slugs)))
+    if all_slugs:
+        await session.execute(delete(PublicProjectSnapshot))
+        await session.commit()
     for slug in all_slugs:
         facts = sorted(
             project_groups.get(slug, []),
