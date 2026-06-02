@@ -1064,20 +1064,15 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
         fallback="Right now the strongest proof is in the flagship case studies and the brain-backed products behind them.",
         limit=170,
     )
-    freshness = dict(p.get("freshness") or {})
     proof_cards = [
         ("6+", "Years building software"),
         ("4", "Flagship case studies"),
         ("2", "Client demos live"),
-        ("1", "Brain refreshing the surface daily"),
     ]
     proof_html = "".join(
         f'<div class="proof-card"><div class="proof-card__number">{_s(number)}</div>'
         f'<div class="proof-card__label">{_s(label)}</div></div>'
         for number, label in proof_cards
-    )
-    freshness_html = (
-        f'<div class="freshness-pill">Last brain refresh: {_s(freshness.get("last_refreshed_at") or "Now")}</div>'
     )
     hero_html = f"""
     <section class="hero-home hero-home--sleek">
@@ -1091,7 +1086,6 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
             <a class="cta" href="/work">See the work</a>
             <a class="cta cta--outline" href="/about">Read the story</a>
           </div>
-          {freshness_html}
         </div>
         <div class="hero-home__photo hero-home__photo--compact">
           {_photo_img(hero_photo, loading="eager", alt=f"{name} portrait")}
@@ -1109,21 +1103,15 @@ def _render_home_fallback(p: dict, name: str, photos: dict, projects: list) -> s
         f'<p>{_s(item.get("summary", ""))}</p></div>'
         for item in open_brain_topics
     )
-    chat_line = (
-        "Captcha is active for abuse control."
-        if public_chat_captcha_enabled()
-        else "Chat is live without captcha because the public clone is running in no-captcha mode."
-    )
     open_brain_html = f"""
     <section class="section container reveal">
       <div class="open-brain-hero open-brain-hero--premium">
         <div>
           <div class="public-kicker">Open Brain</div>
-          <h2 class="display-heading display-heading--section">The site can explain me in my own language.</h2>
-          <p>The public clone knows the approved work history, flagship projects, and current builder arc. It is there to answer fit and product questions quickly, not to restate the whole portfolio.</p>
+          <h2 class="display-heading display-heading--section">Ask, instead of skim.</h2>
+          <p>A chat grounded in my own writing — projects, decisions, what I'm building now. Use it for the question the case studies can't answer in two clicks.</p>
           <div class="link-row mt-2">
-            <a class="cta" href="/brain">Open the brain</a>
-            <a class="inline-link" href="/brain">{_s(chat_line)}</a>
+            <a class="cta" href="/brain">Open the chat</a>
           </div>
         </div>
         <div class="brain-topic-grid">{topic_cards}</div>
@@ -1265,10 +1253,12 @@ async def public_about() -> HTMLResponse:
         used_about_photo_refs.add(ref)
         return photo
 
-    hero_bullets = [
+    # Owner-curated bullets — prefer the seed (about.md frontmatter) when set,
+    # fall back to a baseline if the snapshot hasn't been refreshed yet.
+    hero_bullets = list(p.get("hero_bullets") or []) or [
         "IIT Kharagpur to New York, with Amazon-scale systems and enterprise backend work in between.",
         "The current phase is less about titles and more about ownership, product taste, and building tools that feel worth carrying.",
-        "The person in the system matters too: Annie, Oscar, Jersey City, anime, music, and a bias toward things that feel alive.",
+        "The person in the system matters too: Oscar, Jersey City, anime, music, and a bias toward things that feel alive.",
     ]
     hero_photo = take_about_photo("personality") or take_about_photo("hero") or take_about_photo("work")
     hero_html = f"""
@@ -1403,62 +1393,15 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    life_cards = "".join(
-        f'<div class="life-detail"><strong>{_s(label)}</strong><br />{_s(value)}</div>'
-        for label, value in [
-            ("Home base", personal_signals.get("home_base") or p.get("location") or ""),
-            ("Family", ", ".join(personal_signals.get("family") or [])),
-            ("Languages", ", ".join(personal_signals.get("languages") or [])),
-            ("Current signals", ", ".join((personal_signals.get("cultural_signals") or [])[:4])),
-        ]
-        if value
-    )
-    story_cards = [
-        _photo_story_card(
-            take_about_photo("work"),
-            eyebrow="Builder in New York",
-            title="The city and the work started collapsing into each other.",
-            caption="The builder phase is as much about operating in public and shipping with conviction as it is about the code itself.",
-            cls="photo-story-card--portrait",
-        ),
-        _photo_story_card(
-            take_about_photo("indian_wedding"),
-            eyebrow="Family",
-            title="Life is not separate from the work anymore.",
-            caption="Annie, family, and the move into marriage changed the way ambition feels. It is less abstract now.",
-        ),
-        _photo_story_card(
-            take_about_photo("photo_break"),
-            eyebrow="Jersey City",
-            title="The skyline, the ferry, the in-between hours.",
-            caption="A lot of the product thinking happens while walking near the water or decompressing after a long build day.",
-        ),
-        _photo_story_card(
-            take_about_photo("friends_brooklyn"),
-            eyebrow="People",
-            title="The life around the work matters.",
-            caption="Brooklyn evenings, shared projects, and people who make New York feel a little less transactional.",
-        ),
-        _photo_story_card(
-            take_about_photo("oscar_home"),
-            eyebrow="Home",
-            title="Oscar still appears in most systems eventually.",
-            caption="Which is probably correct. The home context is part of what keeps the ambition human.",
-            cls="photo-story-card--portrait",
-        ),
-    ]
-    life_section = f"""
-    <section class="section container reveal">
-      <div class="public-kicker public-kicker--gold">Life</div>
-      <h2 class="display-heading display-heading--section">Jersey City, Annie, Oscar, Iris, anime, comedy, music.</h2>
-      <div class="life-details">{life_cards}</div>
-      <div class="about-photo-story">{"".join(card for card in story_cards if card)}</div>
-    </section>
-    """
-
+    # The legacy "Life" section was a hardcoded heading + photo-story-card row
+    # built around partner / family / friend-group content that isn't on the
+    # public surface (owner-curated privacy gate). It rendered an empty body
+    # with a heading naming people the rest of the site doesn't, so it's
+    # dropped entirely. If a softer "Currently" surface is wanted later, it
+    # belongs on /connect, not /about.
     interests_html = _render_taste_modules(p)
 
-    content = hero_html + arc_html + resume_overview_html + experience_html + education_section + skills_section + life_section + interests_html
+    content = hero_html + arc_html + resume_overview_html + experience_html + education_section + skills_section + interests_html
     return HTMLResponse(
         render_public_shell(
             page_title=f"About {name}",
@@ -1603,7 +1546,6 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
     proj_p = dict(project.get("payload") or {})
     case_study = dict(proj_p.get("curated_case_study") or proj_p.get("case_study") or {})
     repo_history = dict(proj_p.get("repo_history") or {})
-    freshness = dict(proj_p.get("freshness") or {})
     update_window = dict(proj_p.get("daily_update_window") or {})
     supporting_evidence = list(proj_p.get("supporting_evidence") or case_study.get("supporting_evidence") or [])
     appendix = dict(case_study.get("appendix") or {})
@@ -1623,7 +1565,6 @@ async def _render_project_detail(slug: str) -> HTMLResponse:
           <h1 class="display-heading display-heading--section">{_s(project["title"])}</h1>
           <span class="status-badge">{_s(proj_p.get("status") or "Active")}</span>
           <p class="mt-2">{_s(proj_p.get("tagline") or project.get("summary") or "")}</p>
-          <div class="freshness-pill mt-2">Last curated refresh: {_s(freshness.get("last_refreshed_at") or project.get("refreshed_at") or "Now")}</div>
           <div class="mt-2">{_section_chip_row(case_study_sections, cls="section-chip-row section-chip-row--wrap")}</div>
         </div>
         <aside class="detail-sidebar">
