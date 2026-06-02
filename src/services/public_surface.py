@@ -175,8 +175,11 @@ def build_profile_narrative() -> dict[str, Any]:
                     }
                     for k, v in signals.items()
                 ]
-        if about.get("contact_open_to"):
-            narrative["open_brain_topics"] = list(about["contact_open_to"])
+        # NOTE: don't fall back from `contact_open_to` → `open_brain_topics`.
+        # The renderer expects `open_brain_topics` to be a list of dicts with
+        # `title` and `summary`; `contact_open_to` is a list of strings, and
+        # writing strings there 500'd `/` and `/brain` the first time around.
+        # Each field has its own purpose; keep them shaped to their renderer.
 
     photos = _read_json(seed_root / "photo_map.json")
     if isinstance(photos, dict):

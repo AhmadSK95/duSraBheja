@@ -98,6 +98,15 @@ contact_open_to:
   - "Remote roles at startups or companies building products with a real vision — solving an actual problem in the real world."
   - "Conversations about agentic systems, MCP, retrieval, multi-provider routing — especially with people building product-first."
 contact_lede: "Email is fastest. LinkedIn is fine. Instagram is for Oscar."
+open_brain_topics:
+  - title: "Engineering fit"
+    summary: "Distributed backend, AI orchestration, Amazon-scale ops — what kind of role lines up with what I want to build."
+  - title: "The four projects"
+    summary: "Tradeoffs, decisions, what's live versus what's still in-flight."
+  - title: "Builder phase"
+    summary: "Why I left Amazon, what's worth shipping now, and where my time goes."
+  - title: "Agentic systems"
+    summary: "MCP, retrieval, multi-provider routing, when to stop decomposing."
 ---
 
 # Editing notes
