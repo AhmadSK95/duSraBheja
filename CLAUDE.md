@@ -64,9 +64,9 @@ Collector (src/collector/) → Local file/browser/agent history ingestion
 
 1. **Bot receives message** → enqueues `JOB_PROCESS_INBOX_MESSAGE`
 2. **Ingest task** downloads attachments, extracts text via router → enqueues `JOB_CLASSIFY_ARTIFACT`
-3. **Classify task** calls classifier agent (Haiku) → if confidence ≥ 0.75, enqueues `JOB_GENERATE_EMBEDDINGS`; if below, creates ReviewQueue + clarification question
-4. **Embed task** chunks text (512 tokens, 64 overlap), embeds via OpenAI → enqueues `JOB_PROCESS_LIBRARIAN`
-5. **Librarian task** calls librarian agent (Sonnet) → merges into existing Note or creates new one
+3. **Classify task** calls classifier agent (Llama 3.1 8B via NIM) → if confidence ≥ 0.75, enqueues `JOB_GENERATE_EMBEDDINGS`; if below, creates ReviewQueue + clarification question
+4. **Embed task** chunks text (512 tokens, 64 overlap), embeds via NIM `nv-embedqa-e5-v5` (1024d) → enqueues `JOB_PROCESS_LIBRARIAN`
+5. **Librarian task** calls librarian agent (Llama 3.3 70B via NIM) → merges into existing Note or creates new one
 
 ### Continuous Background Jobs
 
@@ -83,15 +83,15 @@ Boards, digest, voice/persona refresh, knowledge refresh, and the product-improv
 
 | Layer | Location | Role |
 |-------|----------|------|
-| **Agents** | `src/agents/` | Prompt functions wrapping Claude API calls. NOT separate processes. |
-| **Services** | `src/services/` | Business logic (query, digest, boards, knowledge, secrets, etc.) |
-| **Worker Tasks** | `src/worker/tasks/` | ARQ async jobs — bot enqueues, worker processes |
+| **Agents** | `src/agents/` | Prompt functions wrapping NIM LLM calls. NOT separate processes. Only `classifier`, `librarian`, `retriever`, `clarifier` exist (plus `base.py`). |
+| **Services** | `src/services/` | Business logic — `query`, `library`, `cognition`, `identity`, `indexing`, `planner`, `project_state`, `providers`, `public_surface`, `reminders`, `secrets`, `session_bootstrap`, `source_ingest`, `story`, `sync` |
+| **Worker Tasks** | `src/worker/tasks/` | ARQ async jobs — `ingest`, `classify`, `embed`, `librarian`, `clarify`, `cognition`, `public_surface`, `reminders` |
 | **Extractors** | `src/worker/extractors/` | File format handlers (router.py dispatches by MIME) |
 | **API Routes** | `src/api/routes/` | brain.py (private API), dashboard.py (private UI), public.py (public site) |
-| **MCP Tools** | `src/mcp/tools/` | search, ask, capture, context, protocol, story, website |
+| **MCP Tools** | `src/mcp/tools/` | search, ask, capture, context, protocol, story |
 | **Bot Cogs** | `src/bot/cogs/` | inbox.py (capture), commands.py (slash commands), admin.py |
 | **Collector** | `src/collector/` | Local scanning — project files, git, Apple Notes, Chrome, life exports |
-| **Lib** | `src/lib/` | store.py (core data access, vector search), claude.py (LLM wrapper), audit.py, crypto.py, embeddings.py |
+| **Lib** | `src/lib/` | store.py (core data access, vector search), llm.py (NIM wrapper — `claude.py` is a legacy shim), embeddings.py, audit.py, crypto.py, auth.py, provenance.py |
 | **Core modules** | `src/` (top level) | `models.py` (all SQLAlchemy ORM models), `database.py` (async engine + session factory), `config.py` (Pydantic Settings), `constants.py` (canonical categories, sources, query modes) |
 
 ## Code Patterns
@@ -110,11 +110,11 @@ async with async_session() as session:
 
 ### Agent Base Layer
 
-All agents route through `src/agents/base.py` → `agent_call()`, which wraps the Claude SDK call and auto-logs to `AuditLog` (agent name, action, model, tokens, cost, duration, trace_id). Individual agents (`classifier.py`, `librarian.py`, `retriever.py`, `clarifier.py`, `storyteller.py`, `website_builder.py`) are just prompt functions calling `agent_call`.
+All agents route through `src/agents/base.py` → `agent_call()`, which wraps the NIM LLM call (via `src/lib/llm.py`) and auto-logs to `AuditLog` (agent name, action, model, tokens, cost, duration, trace_id). Individual agents (`classifier.py`, `librarian.py`, `retriever.py`, `clarifier.py`) are just prompt functions calling `agent_call`.
 
 ### LLM Calls
 
-`src/lib/claude.py` provides three functions: `call_claude()`, `call_claude_conversation()`, `call_claude_vision()`. All return a dict with `{text, model, input_tokens, output_tokens, cost_usd, duration_ms, trace_id}`. Model selection uses `model_for_role()` from providers config.
+`src/lib/llm.py` provides `call_llm()`, `call_llm_conversation()`, `call_llm_vision()`. All return a dict with `{text, model, input_tokens, output_tokens, cost_usd, duration_ms, trace_id}`. `cost_usd` is always `Decimal("0")` on NIM free-tier. Model selection uses `model_for_role()` from `src/services/providers.py`. `src/lib/claude.py` is a legacy shim that re-exports these under the old `call_claude*` names.
 
 ### Worker Tasks
 
