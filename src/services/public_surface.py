@@ -2256,7 +2256,8 @@ async def run_product_improvement_cycle(
 
 
 async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
-    await refresh_public_snapshots_if_stale(session)
+    # Freshness is owned by the worker cron (`public_surface_refresh`). Reads must never
+    # trigger a rebuild — see prior incident where every cold visitor paid ~30s TTFB.
     result = await session.execute(
         select(PublicProfileSnapshot).where(PublicProfileSnapshot.snapshot_key == "main")
     )
@@ -2280,7 +2281,6 @@ async def get_public_profile(session: AsyncSession) -> dict[str, Any]:
 
 
 async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
-    await refresh_public_snapshots_if_stale(session)
     result = await session.execute(select(PublicProjectSnapshot))
     items = [
         {
@@ -2318,7 +2318,6 @@ async def list_public_projects(session: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any] | None:
-    await refresh_public_snapshots_if_stale(session)
     canonical_slug = canonical_public_project_slug(slug)
     # Exact match first
     result = await session.execute(
@@ -2349,7 +2348,6 @@ async def get_public_project(session: AsyncSession, slug: str) -> dict[str, Any]
 
 
 async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
-    await refresh_public_snapshots_if_stale(session)
     result = await session.execute(
         select(PublicFAQSnapshot).order_by(PublicFAQSnapshot.question.asc())
     )
@@ -2375,7 +2373,6 @@ async def list_public_faq(session: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def get_public_answer_policy(session: AsyncSession) -> dict[str, Any]:
-    await refresh_public_snapshots_if_stale(session)
     result = await session.execute(
         select(PublicAnswerPolicy).where(PublicAnswerPolicy.is_active)
     )
