@@ -1213,11 +1213,13 @@ async def public_about() -> HTMLResponse:
     name = _short_name(p)
     photos = p.get("photos") or {}
     current_arc = p.get("current_arc") or {}
-    roles = list(p.get("roles") or [])
-    education = list(p.get("education") or [])
-    skills = list(p.get("skills") or [])
+    # Snapshot payloads sometimes contain free-form strings where the renderer
+    # expects dicts; drop those so a stray entry can't 500 the whole page.
+    roles = [item for item in (p.get("roles") or []) if isinstance(item, dict)]
+    education = [item for item in (p.get("education") or []) if isinstance(item, dict)]
+    skills = [item for item in (p.get("skills") or []) if isinstance(item, dict)]
     personal_signals = dict(p.get("personal_signals") or {})
-    resume_sections = list(p.get("resume_sections") or [])
+    resume_sections = [item for item in (p.get("resume_sections") or []) if isinstance(item, dict)]
     focus_points = list(current_arc.get("focus") or [])
     used_about_photo_refs: set[str] = set()
 
@@ -1260,7 +1262,7 @@ async def public_about() -> HTMLResponse:
     </section>
     """
 
-    acts = list(current_arc.get("acts") or [])
+    acts = [item for item in (current_arc.get("acts") or []) if isinstance(item, dict)]
     act_cards = "".join(
         f'<div class="act-card"><div class="public-kicker">{_s(act.get("period", ""))}</div>'
         f'<h3>{_s(act.get("label", ""))}</h3><p>{_s(act.get("body", ""))}</p></div>'
